@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::engine::AIDB;
 use crate::error::Result;
 use crate::hlc::HLCTimestamp;
+use crate::types::ScoringRow;
 
 /// An oplog entry for replication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +121,7 @@ pub fn apply_ops(db: &AIDB, ops: &[OplogEntry]) -> Result<SyncStats> {
     let conn = db.conn();
     let mut applied = 0;
     let mut skipped = 0;
+    let mut has_relate_or_record = false;
 
     for op in ops {
         // Check if we already have this op (idempotent)
@@ -137,6 +139,11 @@ pub fn apply_ops(db: &AIDB, ops: &[OplogEntry]) -> Result<SyncStats> {
         // Merge HLC
         if let Some(remote_ts) = HLCTimestamp::from_bytes(&op.hlc) {
             db.merge_hlc(remote_ts);
+        }
+
+        // Track if we need to backfill memory_entities after
+        if op.op_type == "relate" || op.op_type == "record" {
+            has_relate_or_record = true;
         }
 
         // Materialize the operation's side effects
@@ -165,6 +172,12 @@ pub fn apply_ops(db: &AIDB, ops: &[OplogEntry]) -> Result<SyncStats> {
         applied += 1;
     }
 
+    // Backfill memory_entities if any relate/record ops were applied.
+    // This ensures the join table stays current after sync.
+    if has_relate_or_record && applied > 0 {
+        let _ = db.backfill_memory_entities();
+    }
+
     Ok(SyncStats {
         ops_applied: applied,
         ops_skipped: skipped,
@@ -176,7 +189,22 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
     let conn = db.conn();
 
     match op.op_type.as_str() {
-        "record" => materialize_record(conn, &op.payload, db.embedding_dim())?,
+        "record" => {
+            materialize_record(conn, &op.payload, db.embedding_dim())?;
+            // Update scoring cache with new record
+            let rid = op.payload["rid"].as_str().unwrap_or_default();
+            if !rid.is_empty() {
+                db.cache_insert(rid.to_string(), ScoringRow {
+                    created_at: op.payload["created_at"].as_f64().unwrap_or(0.0),
+                    importance: op.payload["importance"].as_f64().unwrap_or(0.5),
+                    half_life: op.payload["half_life"].as_f64().unwrap_or(604800.0),
+                    last_access: op.payload["created_at"].as_f64().unwrap_or(0.0),
+                    valence: op.payload["valence"].as_f64().unwrap_or(0.0),
+                    consolidation_status: "active".to_string(),
+                    memory_type: op.payload["type"].as_str().unwrap_or("episodic").to_string(),
+                });
+            }
+        }
         "relate" => {
             materialize_relate(conn, &op.payload)?;
             // V2: detect edge conflicts during sync
@@ -190,11 +218,72 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
                 );
             }
         }
-        "forget" => materialize_forget(conn, &op.payload)?,
-        "consolidate" => materialize_consolidate(conn, &op.payload, &op.hlc, &op.origin_actor)?,
+        "forget" => {
+            materialize_forget(conn, &op.payload)?;
+            // Remove from scoring cache + vec index
+            let rid = op.payload["rid"].as_str().unwrap_or_default();
+            if !rid.is_empty() {
+                db.cache_remove(rid);
+                db.vec_index.borrow_mut().remove(rid);
+            }
+        }
+        "consolidate" => {
+            materialize_consolidate(conn, &op.payload, &op.hlc, &op.origin_actor)?;
+            // Cache: insert consolidated memory + mark sources
+            let consolidated_rid = op.payload["consolidated_rid"].as_str().unwrap_or_default();
+            let text = op.payload["text"].as_str().unwrap_or("");
+            if !consolidated_rid.is_empty() && !text.is_empty() {
+                db.cache_insert(consolidated_rid.to_string(), ScoringRow {
+                    created_at: op.timestamp,
+                    importance: op.payload["importance"].as_f64().unwrap_or(0.5),
+                    half_life: op.payload["half_life"].as_f64().unwrap_or(604800.0),
+                    last_access: op.timestamp,
+                    valence: op.payload["valence"].as_f64().unwrap_or(0.0),
+                    consolidation_status: "active".to_string(),
+                    memory_type: "semantic".to_string(),
+                });
+            }
+            if let Some(source_rids) = op.payload["source_rids"].as_array() {
+                for rid_val in source_rids {
+                    if let Some(rid) = rid_val.as_str() {
+                        db.cache_mark_consolidated(rid, 0.3);
+                    }
+                }
+            }
+        }
         "conflict_detect" => materialize_conflict_detect(conn, &op.payload, &op.hlc, &op.origin_actor)?,
-        "conflict_resolve" => materialize_conflict_resolve(conn, &op.payload)?,
-        "correct" => materialize_correct(conn, &op.payload)?,
+        "conflict_resolve" => {
+            materialize_conflict_resolve(conn, &op.payload)?;
+            // If keep_a or keep_b, remove the loser from cache + vec index
+            let strategy = op.payload["strategy"].as_str().unwrap_or("");
+            if strategy == "keep_a" || strategy == "keep_b" {
+                if let Some(loser) = op.payload["loser_rid"].as_str() {
+                    db.cache_remove(loser);
+                    db.vec_index.borrow_mut().remove(loser);
+                }
+            }
+        }
+        "correct" => {
+            materialize_correct(conn, &op.payload)?;
+            // Cache: insert new corrected memory, remove original
+            let new_rid = op.payload["new_rid"].as_str().unwrap_or_default();
+            if !new_rid.is_empty() {
+                db.cache_insert(new_rid.to_string(), ScoringRow {
+                    created_at: op.payload["created_at"].as_f64().unwrap_or(0.0),
+                    importance: op.payload["importance"].as_f64().unwrap_or(0.5),
+                    half_life: op.payload["half_life"].as_f64().unwrap_or(604800.0),
+                    last_access: op.payload["created_at"].as_f64().unwrap_or(0.0),
+                    valence: op.payload["valence"].as_f64().unwrap_or(0.0),
+                    consolidation_status: "active".to_string(),
+                    memory_type: op.payload["type"].as_str().unwrap_or("episodic").to_string(),
+                });
+            }
+            let original_rid = op.payload["original_rid"].as_str().unwrap_or_default();
+            if !original_rid.is_empty() {
+                db.cache_remove(original_rid);
+                db.vec_index.borrow_mut().remove(original_rid);
+            }
+        }
         "trigger_fire" => materialize_trigger_fire(conn, &op.payload, &op.hlc, &op.origin_actor)?,
         "trigger_deliver" | "trigger_ack" | "trigger_act" | "trigger_dismiss" => {
             materialize_trigger_lifecycle(conn, &op.payload)?;
@@ -211,7 +300,7 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
     Ok(())
 }
 
-/// Materialize a "record" op: INSERT OR IGNORE into memories + vec_memories.
+/// Materialize a "record" op: INSERT OR IGNORE into memories.
 fn materialize_record(conn: &Connection, payload: &serde_json::Value, _embedding_dim: usize) -> Result<()> {
     let rid = payload["rid"].as_str().unwrap_or_default();
     let mem_type = payload["type"].as_str().unwrap_or("episodic");
@@ -242,11 +331,9 @@ fn materialize_record(conn: &Connection, payload: &serde_json::Value, _embedding
         ],
     )?;
 
-    // Note: we can't insert into vec_memories without the actual embedding data.
-    // The oplog only stores the embedding_hash. The embedding must be available
-    // locally (e.g., both devices generate same embeddings for same text).
-    // For V1, we skip vec_memories insertion for replicated records.
-    // The rebuild_vec_index() function can be used as fallback.
+    // Note: we can't insert into the HNSW vec index without the actual embedding data.
+    // The oplog only stores the embedding_hash. The rebuild_vec_index() function
+    // can be used as fallback to rebuild the index from the memories table.
 
     Ok(())
 }
@@ -301,17 +388,12 @@ fn materialize_forget(conn: &Connection, payload: &serde_json::Value) -> Result<
     }
 
     // Tombstone always wins — even if the memory doesn't exist locally yet
-    let changes = conn.execute(
+    conn.execute(
         "UPDATE memories SET consolidation_status = 'tombstoned', updated_at = ?1 WHERE rid = ?2",
         params![updated_at, rid],
     )?;
 
-    if changes > 0 {
-        conn.execute(
-            "DELETE FROM vec_memories WHERE rid = ?1",
-            params![rid],
-        )?;
-    }
+    // HNSW vec index removal is handled by the materialize_op dispatcher
 
     Ok(())
 }
@@ -469,7 +551,7 @@ fn materialize_conflict_resolve(conn: &Connection, payload: &serde_json::Value) 
                  WHERE rid = ?2 AND consolidation_status = 'active'",
                 params![ts, loser],
             )?;
-            let _ = conn.execute("DELETE FROM vec_memories WHERE rid = ?1", params![loser]);
+            // HNSW vec index removal is handled by the materialize_op dispatcher
         }
     }
 
@@ -513,7 +595,7 @@ fn materialize_correct(conn: &Connection, payload: &serde_json::Value) -> Result
              WHERE rid = ?2",
             params![created_at, original_rid],
         )?;
-        let _ = conn.execute("DELETE FROM vec_memories WHERE rid = ?1", params![original_rid]);
+        // HNSW vec index removal is handled by the materialize_op dispatcher
     }
 
     Ok(())
@@ -563,37 +645,9 @@ pub fn set_peer_watermark(
 }
 
 /// Rebuild the vector index from memories table (disaster recovery).
+/// Delegates to AIDB::rebuild_vec_index which builds a new HnswIndex.
 pub fn rebuild_vec_index(db: &AIDB) -> Result<usize> {
-    let conn = db.conn();
-    let dim = db.embedding_dim();
-
-    // Clear existing vec_memories
-    conn.execute("DELETE FROM vec_memories", [])?;
-
-    // Re-insert all active memories that have embeddings
-    let mut stmt = conn.prepare(
-        "SELECT rid, embedding FROM memories \
-         WHERE consolidation_status IN ('active') AND embedding IS NOT NULL",
-    )?;
-
-    let rows: Vec<(String, Vec<u8>)> = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
-    let mut count = 0;
-    for (rid, emb_blob) in &rows {
-        if emb_blob.len() == dim * 4 {
-            conn.execute(
-                "INSERT INTO vec_memories (rid, embedding) VALUES (?1, ?2)",
-                params![rid, emb_blob],
-            )?;
-            count += 1;
-        }
-    }
-
-    Ok(count)
+    db.rebuild_vec_index()
 }
 
 // ── V3 materializers: triggers and patterns ──

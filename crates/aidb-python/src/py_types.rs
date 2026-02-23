@@ -13,6 +13,7 @@ pub fn memory_to_dict(py: Python<'_>, mem: &aidb_core::Memory) -> PyResult<PyObj
     dict.set_item("half_life", mem.half_life)?;
     dict.set_item("last_access", mem.last_access)?;
     dict.set_item("consolidation_status", &mem.consolidation_status)?;
+    dict.set_item("storage_tier", &mem.storage_tier)?;
     dict.set_item("consolidated_into", &mem.consolidated_into)?;
     dict.set_item("metadata", json_to_py(py, &mem.metadata)?)?;
     Ok(dict.into())
@@ -34,6 +35,7 @@ pub fn recall_result_to_dict(py: Python<'_>, r: &aidb_core::RecallResult) -> PyR
     scores.set_item("decay", r.scores.decay)?;
     scores.set_item("recency", r.scores.recency)?;
     scores.set_item("importance", r.scores.importance)?;
+    scores.set_item("graph_proximity", r.scores.graph_proximity)?;
     dict.set_item("scores", scores)?;
 
     let why: Vec<&str> = r.why_retrieved.iter().map(|s| s.as_str()).collect();
@@ -73,6 +75,7 @@ pub fn stats_to_dict(py: Python<'_>, s: &aidb_core::Stats) -> PyResult<PyObject>
     dict.set_item("active_memories", s.active_memories)?;
     dict.set_item("consolidated_memories", s.consolidated_memories)?;
     dict.set_item("tombstoned_memories", s.tombstoned_memories)?;
+    dict.set_item("archived_memories", s.archived_memories)?;
     dict.set_item("edges", s.edges)?;
     dict.set_item("entities", s.entities)?;
     dict.set_item("operations", s.operations)?;
@@ -80,6 +83,8 @@ pub fn stats_to_dict(py: Python<'_>, s: &aidb_core::Stats) -> PyResult<PyObject>
     dict.set_item("resolved_conflicts", s.resolved_conflicts)?;
     dict.set_item("pending_triggers", s.pending_triggers)?;
     dict.set_item("active_patterns", s.active_patterns)?;
+    dict.set_item("scoring_cache_entries", s.scoring_cache_entries)?;
+    dict.set_item("vec_index_entries", s.vec_index_entries)?;
     Ok(dict.into())
 }
 

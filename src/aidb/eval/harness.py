@@ -97,8 +97,10 @@ def evaluate(db: AIDB, text_to_rid: dict, top_k: int = 10, embedder=None) -> Eva
             query_embedding = vec.tolist() if hasattr(vec, "tolist") else list(vec)
 
         results = db.recall(
+            query=gq["query"],
             query_embedding=query_embedding,
             top_k=top_k,
+            skip_reinforce=True,
         )
 
         retrieved_texts = [r["text"] for r in results]

@@ -1,4 +1,4 @@
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 6;
 
 pub const SCHEMA_SQL: &str = "
 -- Memory records: the source of truth
@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS memories (
     -- Consolidation tracking
     consolidated_into TEXT,              -- rid of the semantic memory this was merged into
     consolidation_status TEXT DEFAULT 'active', -- active | consolidated | tombstoned
+
+    -- Storage tier
+    storage_tier TEXT NOT NULL DEFAULT 'hot', -- hot | cold
 
     -- Metadata
     metadata TEXT DEFAULT '{}'           -- JSON blob for extensibility
@@ -150,6 +153,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
 CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_consolidation ON memories(consolidation_status);
+CREATE INDEX IF NOT EXISTS idx_memories_storage_tier ON memories(storage_tier);
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src);
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_edges_rel ON edges(rel_type);
@@ -173,6 +177,15 @@ CREATE INDEX IF NOT EXISTS idx_trigger_log_urgency ON trigger_log(urgency DESC);
 CREATE INDEX IF NOT EXISTS idx_patterns_type ON patterns(pattern_type);
 CREATE INDEX IF NOT EXISTS idx_patterns_status ON patterns(status);
 CREATE INDEX IF NOT EXISTS idx_patterns_confidence ON patterns(confidence DESC);
+
+-- Memory-entity join table for graph-augmented recall
+CREATE TABLE IF NOT EXISTS memory_entities (
+    memory_rid TEXT NOT NULL,
+    entity_name TEXT NOT NULL,
+    PRIMARY KEY (memory_rid, entity_name)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_entity ON memory_entities(entity_name);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_rid ON memory_entities(memory_rid);
 ";
 
 /// SQL to migrate from schema V1 to V2.
@@ -278,4 +291,21 @@ CREATE INDEX IF NOT EXISTS idx_trigger_log_urgency ON trigger_log(urgency DESC);
 CREATE INDEX IF NOT EXISTS idx_patterns_type ON patterns(pattern_type);
 CREATE INDEX IF NOT EXISTS idx_patterns_status ON patterns(status);
 CREATE INDEX IF NOT EXISTS idx_patterns_confidence ON patterns(confidence DESC);
+";
+
+/// SQL to migrate from schema V4 to V5.
+pub const MIGRATE_V4_TO_V5: &str = "
+CREATE TABLE IF NOT EXISTS memory_entities (
+    memory_rid TEXT NOT NULL,
+    entity_name TEXT NOT NULL,
+    PRIMARY KEY (memory_rid, entity_name)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_entity ON memory_entities(entity_name);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_rid ON memory_entities(memory_rid);
+";
+
+/// SQL to migrate from schema V5 to V6.
+pub const MIGRATE_V5_TO_V6: &str = "
+ALTER TABLE memories ADD COLUMN storage_tier TEXT NOT NULL DEFAULT 'hot';
+CREATE INDEX IF NOT EXISTS idx_memories_storage_tier ON memories(storage_tier);
 ";

@@ -225,7 +225,7 @@ impl PyAIDB {
             .map_err(map_err)
     }
 
-    #[pyo3(signature = (query=None, query_embedding=None, top_k=10, time_window=None, memory_type=None, include_consolidated=false, expand_entities=true))]
+    #[pyo3(signature = (query=None, query_embedding=None, top_k=10, time_window=None, memory_type=None, include_consolidated=false, expand_entities=true, skip_reinforce=false))]
     fn recall(
         &self,
         py: Python<'_>,
@@ -236,8 +236,8 @@ impl PyAIDB {
         memory_type: Option<&str>,
         include_consolidated: bool,
         expand_entities: bool,
+        skip_reinforce: bool,
     ) -> PyResult<Vec<PyObject>> {
-        let _ = expand_entities; // Not used yet
         let db = self.inner.as_ref().ok_or_else(|| {
             PyRuntimeError::new_err("AIDB is closed")
         })?;
@@ -251,7 +251,7 @@ impl PyAIDB {
         };
 
         let results = db
-            .recall(&emb, top_k, time_window, memory_type, include_consolidated)
+            .recall(&emb, top_k, time_window, memory_type, include_consolidated, expand_entities, query, skip_reinforce)
             .map_err(map_err)?;
 
         results
@@ -518,6 +518,91 @@ impl PyAIDB {
         let db = self.get_inner()?;
         let patterns = db.get_patterns(pattern_type, status, limit).map_err(map_err)?;
         patterns.iter().map(|p| pattern_to_dict(py, p)).collect()
+    }
+
+    // ── Memory-Entity Linkage ──
+
+    fn link_memory_entity(&self, memory_rid: &str, entity_name: &str) -> PyResult<()> {
+        let db = self.get_inner()?;
+        db.link_memory_entity(memory_rid, entity_name).map_err(map_err)
+    }
+
+    fn backfill_memory_entities(&self) -> PyResult<usize> {
+        let db = self.get_inner()?;
+        db.backfill_memory_entities().map_err(map_err)
+    }
+
+    // ── Storage tier operations ──
+
+    fn archive(&self, rid: &str) -> PyResult<bool> {
+        let db = self.get_inner()?;
+        db.archive(rid).map_err(map_err)
+    }
+
+    fn hydrate(&self, rid: &str) -> PyResult<bool> {
+        let db = self.get_inner()?;
+        db.hydrate(rid).map_err(map_err)
+    }
+
+    #[pyo3(signature = (max_active,))]
+    fn evict(&self, max_active: usize) -> PyResult<Vec<String>> {
+        let db = self.get_inner()?;
+        db.evict(max_active).map_err(map_err)
+    }
+
+    // ── Batch operations ──
+
+    fn record_batch(&self, py: Python<'_>, inputs: Vec<Bound<'_, PyDict>>) -> PyResult<Vec<String>> {
+        let db = self.get_inner()?;
+
+        let mut record_inputs = Vec::with_capacity(inputs.len());
+        for d in &inputs {
+            let text: String = d.get_item("text")?.ok_or_else(|| {
+                PyValueError::new_err("Each input must have a 'text' key")
+            })?.extract()?;
+
+            let memory_type: String = d.get_item("memory_type")?
+                .map(|v| v.extract::<String>())
+                .transpose()?
+                .unwrap_or_else(|| "episodic".to_string());
+
+            let importance: f64 = d.get_item("importance")?
+                .map(|v| v.extract::<f64>())
+                .transpose()?
+                .unwrap_or(0.5);
+
+            let valence: f64 = d.get_item("valence")?
+                .map(|v| v.extract::<f64>())
+                .transpose()?
+                .unwrap_or(0.0);
+
+            let half_life: f64 = d.get_item("half_life")?
+                .map(|v| v.extract::<f64>())
+                .transpose()?
+                .unwrap_or(604800.0);
+
+            let metadata = d.get_item("metadata")?
+                .map(|v| py_to_json(&v))
+                .transpose()?
+                .unwrap_or(serde_json::json!({}));
+
+            let embedding: Vec<f32> = match d.get_item("embedding")? {
+                Some(v) => v.extract()?,
+                None => self.embed(py, &text)?,
+            };
+
+            record_inputs.push(aidb_core::RecordInput {
+                text,
+                memory_type,
+                importance,
+                valence,
+                half_life,
+                metadata,
+                embedding,
+            });
+        }
+
+        db.record_batch(&record_inputs).map_err(map_err)
     }
 
     fn close(&mut self) -> PyResult<()> {

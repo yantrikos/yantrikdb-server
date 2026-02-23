@@ -140,6 +140,7 @@ pub fn find_consolidation_candidates(
          half_life, last_access, metadata \
          FROM memories \
          WHERE consolidation_status = 'active' \
+         AND storage_tier = 'hot' \
          AND type IN ('episodic', 'semantic')",
     )?;
 
@@ -291,6 +292,8 @@ pub fn consolidate(
                  WHERE rid = ?3",
                 rusqlite::params![consolidated_rid, ts, source_rid],
             )?;
+            // Update scoring cache: mark as consolidated, reduce importance
+            db.cache_mark_consolidated(source_rid, 0.3);
         }
 
         // 7. Log the operation

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::Rng;
@@ -6,9 +7,10 @@ use rusqlite::{params, Connection};
 
 use crate::error::{AidbError, Result};
 use crate::hlc::{HLCTimestamp, HLC};
-use crate::schema::{MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, MIGRATE_V3_TO_V4, SCHEMA_SQL, SCHEMA_VERSION};
+use crate::hnsw::HnswIndex;
+use crate::schema::{MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, MIGRATE_V3_TO_V4, MIGRATE_V4_TO_V5, MIGRATE_V5_TO_V6, SCHEMA_SQL, SCHEMA_VERSION};
 use crate::scoring;
-use crate::serde_helpers::serialize_f32;
+use crate::serde_helpers::{deserialize_f32, serialize_f32};
 use crate::types::*;
 
 /// The AIDB cognitive memory engine.
@@ -17,6 +19,8 @@ pub struct AIDB {
     embedding_dim: usize,
     hlc: RefCell<HLC>,
     actor_id: String,
+    scoring_cache: RefCell<HashMap<String, ScoringRow>>,
+    pub(crate) vec_index: RefCell<HnswIndex>,
 }
 
 fn now() -> f64 {
@@ -44,13 +48,6 @@ impl AIDB {
     }
 
     fn open(db_path: &str, embedding_dim: usize, actor_id: Option<String>) -> Result<Self> {
-        // Register sqlite-vec as auto-extension before opening any connection
-        unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
-        }
-
         let conn = Connection::open(db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
 
@@ -61,20 +58,25 @@ impl AIDB {
             conn.execute_batch(MIGRATE_V1_TO_V2)?;
             conn.execute_batch(MIGRATE_V2_TO_V3)?;
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
+            conn.execute_batch(MIGRATE_V4_TO_V5)?;
+            conn.execute_batch(MIGRATE_V5_TO_V6)?;
         } else if existing_version == Some(2) {
             conn.execute_batch(MIGRATE_V2_TO_V3)?;
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
+            conn.execute_batch(MIGRATE_V4_TO_V5)?;
+            conn.execute_batch(MIGRATE_V5_TO_V6)?;
         } else if existing_version == Some(3) {
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
+            conn.execute_batch(MIGRATE_V4_TO_V5)?;
+            conn.execute_batch(MIGRATE_V5_TO_V6)?;
+        } else if existing_version == Some(4) {
+            conn.execute_batch(MIGRATE_V4_TO_V5)?;
+            conn.execute_batch(MIGRATE_V5_TO_V6)?;
+        } else if existing_version == Some(5) {
+            conn.execute_batch(MIGRATE_V5_TO_V6)?;
         }
 
         conn.execute_batch(SCHEMA_SQL)?;
-
-        // Create virtual table for vector search
-        conn.execute_batch(&format!(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories \
-             USING vec0(rid TEXT PRIMARY KEY, embedding float[{embedding_dim}])"
-        ))?;
 
         // Set schema version
         conn.execute(
@@ -119,12 +121,81 @@ impl AIDB {
             }
         };
 
+        let scoring_cache = Self::load_scoring_cache(&conn)?;
+        let vec_index = Self::build_vec_index(&conn, embedding_dim)?;
+
         Ok(Self {
             conn,
             embedding_dim,
             hlc: RefCell::new(HLC::new(node_id)),
             actor_id,
+            scoring_cache: RefCell::new(scoring_cache),
+            vec_index: RefCell::new(vec_index),
         })
+    }
+
+    /// Load scoring-relevant fields for all non-tombstoned memories into a HashMap.
+    fn load_scoring_cache(conn: &Connection) -> Result<HashMap<String, ScoringRow>> {
+        let mut stmt = conn.prepare(
+            "SELECT rid, created_at, importance, half_life, last_access, \
+             valence, consolidation_status, type \
+             FROM memories \
+             WHERE consolidation_status != 'tombstoned'",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                ScoringRow {
+                    created_at: row.get(1)?,
+                    importance: row.get(2)?,
+                    half_life: row.get(3)?,
+                    last_access: row.get(4)?,
+                    valence: row.get(5)?,
+                    consolidation_status: row.get(6)?,
+                    memory_type: row.get(7)?,
+                },
+            ))
+        })?;
+
+        let mut cache = HashMap::new();
+        for row in rows {
+            let (rid, scoring_row) = row?;
+            cache.insert(rid, scoring_row);
+        }
+        Ok(cache)
+    }
+
+    /// Build the HNSW vector index from active hot-tier embeddings in SQLite.
+    fn build_vec_index(conn: &Connection, embedding_dim: usize) -> Result<HnswIndex> {
+        let mut index = HnswIndex::new(embedding_dim);
+        let mut stmt = conn.prepare(
+            "SELECT rid, embedding FROM memories \
+             WHERE consolidation_status IN ('active', 'consolidated') \
+             AND storage_tier = 'hot' \
+             AND embedding IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let rid: String = row.get(0)?;
+            let emb_blob: Vec<u8> = row.get(1)?;
+            Ok((rid, emb_blob))
+        })?;
+        for row in rows {
+            let (rid, emb_blob) = row?;
+            let embedding = deserialize_f32(&emb_blob);
+            if embedding.len() == embedding_dim {
+                index.insert(&rid, &embedding)?;
+            }
+        }
+        Ok(index)
+    }
+
+    /// Rebuild the HNSW vector index from scratch. Called after replication.
+    pub fn rebuild_vec_index(&self) -> Result<usize> {
+        let new_index = Self::build_vec_index(&self.conn, self.embedding_dim)?;
+        let count = new_index.len();
+        *self.vec_index.borrow_mut() = new_index;
+        Ok(count)
     }
 
     fn get_schema_version(conn: &Connection) -> Option<i32> {
@@ -182,6 +253,27 @@ impl AIDB {
         &mut self.conn
     }
 
+    // ── Scoring cache helpers ──
+
+    /// Insert a scoring row into the in-memory cache.
+    pub fn cache_insert(&self, rid: String, row: ScoringRow) {
+        self.scoring_cache.borrow_mut().insert(rid, row);
+    }
+
+    /// Remove a scoring row from the in-memory cache.
+    pub fn cache_remove(&self, rid: &str) {
+        self.scoring_cache.borrow_mut().remove(rid);
+    }
+
+    /// Mark a memory as consolidated in the cache and reduce its importance.
+    pub fn cache_mark_consolidated(&self, rid: &str, importance_factor: f64) {
+        let mut cache = self.scoring_cache.borrow_mut();
+        if let Some(row) = cache.get_mut(rid) {
+            row.consolidation_status = "consolidated".to_string();
+            row.importance *= importance_factor;
+        }
+    }
+
     // ── record() — store a memory ──
 
     /// Store a new memory and return its RID.
@@ -209,10 +301,18 @@ impl AIDB {
         )?;
 
         // Insert into vector index
-        self.conn.execute(
-            "INSERT INTO vec_memories (rid, embedding) VALUES (?1, ?2)",
-            params![rid, emb_blob],
-        )?;
+        self.vec_index.borrow_mut().insert(&rid, embedding)?;
+
+        // Insert into scoring cache
+        self.cache_insert(rid.clone(), ScoringRow {
+            created_at: ts,
+            importance,
+            half_life,
+            last_access: ts,
+            valence,
+            consolidation_status: "active".to_string(),
+            memory_type: memory_type.to_string(),
+        });
 
         let emb_hash = embedding_hash(embedding);
         self.log_op(
@@ -235,9 +335,11 @@ impl AIDB {
         Ok(rid)
     }
 
-    // ── recall() — multi-signal retrieval ──
+    // ── recall() — multi-signal retrieval with optional graph expansion ──
 
     /// Retrieve memories using multi-signal fusion scoring.
+    /// When `expand_entities` is true, graph edges are followed to pull in
+    /// entity-connected memories that pure vector search would miss.
     pub fn recall(
         &self,
         query_embedding: &[f32],
@@ -245,161 +347,711 @@ impl AIDB {
         time_window: Option<(f64, f64)>,
         memory_type: Option<&str>,
         include_consolidated: bool,
+        expand_entities: bool,
+        query_text: Option<&str>,
+        skip_reinforce: bool,
     ) -> Result<Vec<RecallResult>> {
         let ts = now();
-        let emb_blob = serialize_f32(query_embedding);
 
-        // Step 1: Vector candidate generation
+        // Step 1: Vector candidate generation via HNSW
         let fetch_k = (top_k * 5).min(200);
-        let mut stmt = self.conn.prepare(
-            "SELECT rid, distance FROM vec_memories \
-             WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
-        )?;
-
-        let vec_results: Vec<(String, f64)> = stmt
-            .query_map(params![emb_blob, fetch_k as i64], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let vec_results = self.vec_index.borrow().search(query_embedding, fetch_k)?;
 
         if vec_results.is_empty() {
             return Ok(vec![]);
         }
 
-        let rids: Vec<&str> = vec_results.iter().map(|(r, _)| r.as_str()).collect();
-        let vec_scores: std::collections::HashMap<&str, f64> = vec_results
-            .iter()
-            .map(|(r, d)| (r.as_str(), 1.0 - d))
-            .collect();
-
-        // Step 2: Fetch full memory records with filtering
-        let statuses: Vec<&str> = if include_consolidated {
-            vec!["active", "consolidated"]
-        } else {
-            vec!["active"]
-        };
-
-        let rid_placeholders: String = (0..rids.len()).map(|i| format!("?{}", i + 1)).collect::<Vec<_>>().join(",");
-        let status_offset = rids.len() + 1;
-        let status_placeholders: String = (0..statuses.len())
-            .map(|i| format!("?{}", status_offset + i))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let mut sql = format!(
-            "SELECT * FROM memories WHERE rid IN ({rid_placeholders}) \
-             AND consolidation_status IN ({status_placeholders})"
-        );
-
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        for r in &rids {
-            param_values.push(Box::new(r.to_string()));
-        }
-        for s in &statuses {
-            param_values.push(Box::new(s.to_string()));
-        }
-
-        if let Some((start, end)) = time_window {
-            let n = param_values.len();
-            sql.push_str(&format!(" AND created_at BETWEEN ?{} AND ?{}", n + 1, n + 2));
-            param_values.push(Box::new(start));
-            param_values.push(Box::new(end));
-        }
-
-        if let Some(mt) = memory_type {
-            let n = param_values.len();
-            sql.push_str(&format!(" AND type = ?{}", n + 1));
-            param_values.push(Box::new(mt.to_string()));
-        }
-
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let memories: Vec<_> = stmt
-            .query_map(params_ref.as_slice(), |row| {
-                Ok(MemoryRow {
-                    rid: row.get("rid")?,
-                    memory_type: row.get("type")?,
-                    text: row.get("text")?,
-                    created_at: row.get("created_at")?,
-                    importance: row.get("importance")?,
-                    valence: row.get("valence")?,
-                    half_life: row.get("half_life")?,
-                    last_access: row.get("last_access")?,
-                    metadata: row.get("metadata")?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        // Step 3: Score with multi-signal fusion
+        // Step 2: Score from in-memory cache (replaces fetch_memories_by_rids)
         let mut scored: Vec<RecallResult> = Vec::new();
-        for mem in &memories {
-            let sim_score = *vec_scores.get(mem.rid.as_str()).unwrap_or(&0.0);
+        {
+            let cache = self.scoring_cache.borrow();
+            for (rid, distance) in &vec_results {
+                let Some(row) = cache.get(rid) else { continue };
 
-            let elapsed = ts - mem.last_access;
-            let decay = scoring::decay_score(mem.importance, mem.half_life, elapsed);
+                // Filter: consolidation_status
+                let status_ok = if include_consolidated {
+                    row.consolidation_status == "active" || row.consolidation_status == "consolidated"
+                } else {
+                    row.consolidation_status == "active"
+                };
+                if !status_ok { continue; }
 
-            let age = ts - mem.created_at;
-            let recency = scoring::recency_score(age);
+                // Filter: memory_type
+                if let Some(mt) = memory_type {
+                    if row.memory_type != mt { continue; }
+                }
 
-            let composite = scoring::composite_score(
-                sim_score,
-                decay,
-                recency,
-                mem.importance,
-                mem.valence,
-            );
+                // Filter: time_window
+                if let Some((start, end)) = time_window {
+                    if row.created_at < start || row.created_at > end { continue; }
+                }
 
-            let why = scoring::build_why(sim_score, recency, decay, mem.valence);
+                let sim_score = 1.0 - distance;
+                let elapsed = ts - row.last_access;
+                let decay = scoring::decay_score(row.importance, row.half_life, elapsed);
+                let age = ts - row.created_at;
+                let recency = scoring::recency_score(age);
+                let composite = scoring::composite_score(sim_score, decay, recency, row.importance, row.valence);
+                let why = scoring::build_why(sim_score, recency, decay, row.valence);
 
-            let metadata: serde_json::Value =
-                serde_json::from_str(&mem.metadata).unwrap_or(serde_json::Value::Object(Default::default()));
+                scored.push(RecallResult {
+                    rid: rid.clone(),
+                    memory_type: row.memory_type.clone(),
+                    text: String::new(),  // hydrated after top_k selection
+                    created_at: row.created_at,
+                    importance: row.importance,
+                    valence: row.valence,
+                    score: composite,
+                    scores: ScoreBreakdown {
+                        similarity: sim_score,
+                        decay,
+                        recency,
+                        importance: row.importance,
+                        graph_proximity: 0.0,
+                    },
+                    why_retrieved: why,
+                    metadata: serde_json::Value::Null,  // hydrated after top_k selection
+                });
+            }
+        } // drop cache borrow
 
-            scored.push(RecallResult {
-                rid: mem.rid.clone(),
-                memory_type: mem.memory_type.clone(),
-                text: mem.text.clone(),
-                created_at: mem.created_at,
-                importance: mem.importance,
-                valence: mem.valence,
-                score: composite,
-                scores: ScoreBreakdown {
-                    similarity: sim_score,
-                    decay,
-                    recency,
-                    importance: mem.importance,
-                },
-                why_retrieved: why,
-                metadata,
-            });
+        // Step 3: Graph expansion (when enabled)
+        if expand_entities {
+            let query_entities: Vec<(String, String, i64)> = if let Some(qt) = query_text {
+                let query_tokens = crate::graph::tokenize(qt);
+                let all_entities: Vec<(String, String, i64)> = self.conn
+                    .prepare("SELECT name, entity_type, mention_count FROM entities")?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                all_entities
+                    .into_iter()
+                    .filter(|(name, _, _)| crate::graph::entity_matches_text(name, &query_tokens))
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            let (base_boost, seed_entities, entity_idfs) = if !query_entities.is_empty() {
+                let has_person = query_entities.iter().any(|(_, etype, _)| etype == "person");
+                let factor = if has_person {
+                    0.20
+                } else if query_entities.len() >= 2 {
+                    0.15
+                } else {
+                    0.12
+                };
+                let idfs: std::collections::HashMap<String, f64> = query_entities
+                    .iter()
+                    .map(|(name, _, mc)| {
+                        let idf = 1.0 / (1.0 + (*mc as f64).max(1.0).ln());
+                        (name.to_lowercase(), idf)
+                    })
+                    .collect();
+                let names: Vec<String> = query_entities.into_iter().map(|(n, _, _)| n).collect();
+                (factor, names, idfs)
+            } else if query_text.is_none() {
+                let mut seed_sorted = scored.clone();
+                seed_sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                let seed_count = 3.min(seed_sorted.len());
+                let seed_rids: Vec<&str> = seed_sorted[..seed_count].iter().map(|r| r.rid.as_str()).collect();
+                let seeds = crate::graph::entities_for_memories(&self.conn, &seed_rids)?;
+                (0.05, seeds, std::collections::HashMap::new())
+            } else {
+                (0.0, vec![], std::collections::HashMap::new())
+            };
+
+            const MAX_BOOST_PER_MEMORY: f64 = 0.25;
+            const MAX_GRAPH_FRACTION: f64 = 0.40;
+
+            if !seed_entities.is_empty() && base_boost > 0.0 {
+                let seed_refs: Vec<&str> = seed_entities.iter().map(|s| s.as_str()).collect();
+                let expanded = crate::graph::expand_entities_nhop(&self.conn, &seed_refs, 1, 20)?;
+
+                let expanded_map: std::collections::HashMap<String, (u8, f64)> = expanded
+                    .iter()
+                    .map(|(name, hops, weight)| (name.clone(), (*hops, *weight)))
+                    .collect();
+
+                // (a) IDF-weighted additive boost for existing results
+                for result in &mut scored {
+                    let prox = crate::graph::graph_proximity(&self.conn, &result.rid, &expanded_map)?;
+                    if prox > 0.0 {
+                        let mem_entities: Vec<String> = self.conn
+                            .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
+                            .query_map(params![result.rid], |row| row.get(0))?
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+                        let mut best_idf = 1.0f64;
+                        let mut connecting_entity = String::new();
+                        for entity in &mem_entities {
+                            if expanded_map.contains_key(entity) {
+                                let idf = entity_idfs.get(&entity.to_lowercase()).copied().unwrap_or(1.0);
+                                if connecting_entity.is_empty() || idf > best_idf {
+                                    best_idf = idf;
+                                    connecting_entity = entity.clone();
+                                }
+                            }
+                        }
+
+                        // Consolidation penalty: use consolidation_status as proxy
+                        let cache = self.scoring_cache.borrow();
+                        let consolidation_factor = cache.get(&result.rid)
+                            .map(|r| if r.consolidation_status == "consolidated" { 0.5 } else { 1.0 })
+                            .unwrap_or(1.0);
+                        drop(cache);
+
+                        let boost = (base_boost * prox * best_idf * consolidation_factor)
+                            .min(MAX_BOOST_PER_MEMORY);
+                        result.scores.graph_proximity = prox;
+                        result.score += boost;
+                        if !connecting_entity.is_empty() {
+                            result.why_retrieved.push(format!("graph-connected via {connecting_entity}"));
+                        }
+                    }
+                }
+
+                // (b) Graph-only candidates: score from cache + batch embedding fetch
+                let max_graph_only = ((MAX_GRAPH_FRACTION * top_k as f64).ceil() as usize).max(1);
+                let all_entity_names: Vec<&str> = expanded.iter().map(|(n, _, _)| n.as_str()).collect();
+                let graph_rids = crate::graph::memories_for_entities(&self.conn, &all_entity_names)?;
+
+                let existing_rids: std::collections::HashSet<&str> = scored.iter().map(|r| r.rid.as_str()).collect();
+                let new_rids: Vec<String> = graph_rids
+                    .into_iter()
+                    .filter(|r| !existing_rids.contains(r.as_str()))
+                    .collect();
+
+                // Filter graph-only candidates using cache
+                let filtered_rids: Vec<String> = {
+                    let cache = self.scoring_cache.borrow();
+                    new_rids.into_iter()
+                        .filter(|rid| {
+                            let Some(row) = cache.get(rid) else { return false };
+                            let status_ok = if include_consolidated {
+                                row.consolidation_status == "active" || row.consolidation_status == "consolidated"
+                            } else {
+                                row.consolidation_status == "active"
+                            };
+                            if !status_ok { return false; }
+                            if let Some(mt) = memory_type {
+                                if row.memory_type != mt { return false; }
+                            }
+                            if let Some((start, end)) = time_window {
+                                if row.created_at < start || row.created_at > end { return false; }
+                            }
+                            true
+                        })
+                        .take(max_graph_only)
+                        .collect()
+                };
+
+                if !filtered_rids.is_empty() {
+                    // Batch fetch embeddings for cosine similarity
+                    let rid_refs: Vec<&str> = filtered_rids.iter().map(|r| r.as_str()).collect();
+                    let embeddings = self.fetch_embeddings_by_rids(&rid_refs)?;
+
+                    let cache = self.scoring_cache.borrow();
+                    for rid in &filtered_rids {
+                        let Some(row) = cache.get(rid) else { continue };
+                        let Some(emb_blob_row) = embeddings.get(rid) else { continue };
+
+                        let mem_embedding = crate::serde_helpers::deserialize_f32(emb_blob_row);
+                        let sim_score = crate::consolidate::cosine_similarity(query_embedding, &mem_embedding) as f64;
+
+                        let elapsed = ts - row.last_access;
+                        let decay = scoring::decay_score(row.importance, row.half_life, elapsed);
+                        let age = ts - row.created_at;
+                        let recency = scoring::recency_score(age);
+
+                        let prox = crate::graph::graph_proximity(&self.conn, rid, &expanded_map)?;
+                        let composite = scoring::graph_composite_score(
+                            sim_score, decay, recency, row.importance, row.valence, prox,
+                        );
+
+                        let mut why = scoring::build_why(sim_score, recency, decay, row.valence);
+                        let mem_entities: Vec<String> = self.conn
+                            .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
+                            .query_map(params![rid], |row| row.get(0))?
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        for entity in &mem_entities {
+                            if expanded_map.contains_key(entity) {
+                                why.push(format!("graph-connected via {entity}"));
+                                break;
+                            }
+                        }
+
+                        scored.push(RecallResult {
+                            rid: rid.clone(),
+                            memory_type: row.memory_type.clone(),
+                            text: String::new(),
+                            created_at: row.created_at,
+                            importance: row.importance,
+                            valence: row.valence,
+                            score: composite,
+                            scores: ScoreBreakdown {
+                                similarity: sim_score,
+                                decay,
+                                recency,
+                                importance: row.importance,
+                                graph_proximity: prox,
+                            },
+                            why_retrieved: why,
+                            metadata: serde_json::Value::Null,
+                        });
+                    }
+                    drop(cache);
+                }
+            }
         }
 
-        // Step 4: Sort and return top_k
+        // Step 4: Sort and truncate to top_k
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
 
+        // Step 5: Hydrate final top_k with text + metadata from SQLite
+        let final_rids: Vec<&str> = scored.iter().map(|r| r.rid.as_str()).collect();
+        let text_meta = self.fetch_text_metadata_by_rids(&final_rids)?;
+        for result in &mut scored {
+            if let Some(tm) = text_meta.get(&result.rid) {
+                result.text = tm.text.clone();
+                result.metadata = serde_json::from_str(&tm.metadata)
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+            }
+        }
+
         // Reinforce accessed memories (spaced repetition)
-        for r in &scored {
-            self.reinforce(&r.rid)?;
+        if !skip_reinforce {
+            for r in &scored {
+                self.reinforce(&r.rid)?;
+            }
         }
 
         Ok(scored)
     }
 
+    /// Profiled version of recall() that returns per-phase timing breakdown.
+    /// Only available when the `profiling` feature is enabled.
+    #[cfg(feature = "profiling")]
+    pub fn recall_profiled(
+        &self,
+        query_embedding: &[f32],
+        top_k: usize,
+        time_window: Option<(f64, f64)>,
+        memory_type: Option<&str>,
+        include_consolidated: bool,
+        expand_entities: bool,
+        query_text: Option<&str>,
+        skip_reinforce: bool,
+    ) -> Result<RecallProfiledResult> {
+        use std::time::Instant;
+        let t_start = Instant::now();
+
+        // ── Phase 1: Vector search (HNSW) ──
+        let t_vec = Instant::now();
+        let ts = now();
+        let fetch_k = (top_k * 5).min(200);
+        let vec_results = self.vec_index.borrow().search(query_embedding, fetch_k)?;
+        let vec_search_ms = t_vec.elapsed().as_secs_f64() * 1000.0;
+        let candidate_count = vec_results.len();
+
+        if vec_results.is_empty() {
+            return Ok(RecallProfiledResult {
+                results: vec![],
+                timings: RecallTimings {
+                    vec_search_ms,
+                    cache_score_ms: 0.0,
+                    fetch_ms: 0.0,
+                    scoring_ms: 0.0,
+                    graph_ms: 0.0,
+                    reinforce_ms: 0.0,
+                    sort_truncate_ms: 0.0,
+                    total_ms: t_start.elapsed().as_secs_f64() * 1000.0,
+                    candidate_count: 0,
+                    graph_expansion_count: 0,
+                },
+            });
+        }
+
+        // ── Phase 2: Score from in-memory cache ──
+        let t_cache_score = Instant::now();
+        let mut scored: Vec<RecallResult> = Vec::new();
+        {
+            let cache = self.scoring_cache.borrow();
+            for (rid, distance) in &vec_results {
+                let sim_score = 1.0 - distance;
+                if let Some(row) = cache.get(rid.as_str()) {
+                    // Filter by consolidation_status
+                    if row.consolidation_status == "tombstoned" {
+                        continue;
+                    }
+                    if !include_consolidated && row.consolidation_status == "consolidated" {
+                        continue;
+                    }
+                    // Filter by memory_type
+                    if let Some(mt) = memory_type {
+                        if row.memory_type != mt {
+                            continue;
+                        }
+                    }
+                    // Filter by time_window
+                    if let Some((start, end)) = time_window {
+                        if row.created_at < start || row.created_at > end {
+                            continue;
+                        }
+                    }
+
+                    let elapsed = ts - row.last_access;
+                    let decay = scoring::decay_score(row.importance, row.half_life, elapsed);
+                    let age = ts - row.created_at;
+                    let recency = scoring::recency_score(age);
+                    let composite = scoring::composite_score(sim_score, decay, recency, row.importance, row.valence);
+                    let why = scoring::build_why(sim_score, recency, decay, row.valence);
+
+                    scored.push(RecallResult {
+                        rid: rid.clone(),
+                        memory_type: row.memory_type.clone(),
+                        text: String::new(), // hydrated later
+                        created_at: row.created_at,
+                        importance: row.importance,
+                        valence: row.valence,
+                        score: composite,
+                        scores: ScoreBreakdown {
+                            similarity: sim_score,
+                            decay,
+                            recency,
+                            importance: row.importance,
+                            graph_proximity: 0.0,
+                        },
+                        why_retrieved: why,
+                        metadata: serde_json::Value::Object(Default::default()),
+                    });
+                }
+            }
+        }
+        let cache_score_ms = t_cache_score.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Phase 3: Graph expansion ──
+        let t_graph = Instant::now();
+        let mut graph_expansion_count = 0usize;
+        if expand_entities {
+            let query_entities: Vec<(String, String, i64)> = if let Some(qt) = query_text {
+                let query_tokens = crate::graph::tokenize(qt);
+                let all_entities: Vec<(String, String, i64)> = self.conn
+                    .prepare("SELECT name, entity_type, mention_count FROM entities")?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                all_entities
+                    .into_iter()
+                    .filter(|(name, _, _)| crate::graph::entity_matches_text(name, &query_tokens))
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            let (base_boost, seed_entities, entity_idfs) = if !query_entities.is_empty() {
+                let has_person = query_entities.iter().any(|(_, etype, _)| etype == "person");
+                let factor = if has_person { 0.20 } else if query_entities.len() >= 2 { 0.15 } else { 0.12 };
+                let idfs: std::collections::HashMap<String, f64> = query_entities
+                    .iter()
+                    .map(|(name, _, mc)| {
+                        let idf = 1.0 / (1.0 + (*mc as f64).max(1.0).ln());
+                        (name.to_lowercase(), idf)
+                    })
+                    .collect();
+                let names: Vec<String> = query_entities.into_iter().map(|(n, _, _)| n).collect();
+                (factor, names, idfs)
+            } else if query_text.is_none() {
+                let mut seed_sorted = scored.clone();
+                seed_sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                let seed_count = 3.min(seed_sorted.len());
+                let seed_rids: Vec<&str> = seed_sorted[..seed_count].iter().map(|r| r.rid.as_str()).collect();
+                let seeds = crate::graph::entities_for_memories(&self.conn, &seed_rids)?;
+                (0.05, seeds, std::collections::HashMap::new())
+            } else {
+                (0.0, vec![], std::collections::HashMap::new())
+            };
+
+            const MAX_BOOST_PER_MEMORY: f64 = 0.25;
+            const MAX_GRAPH_FRACTION: f64 = 0.40;
+
+            if !seed_entities.is_empty() && base_boost > 0.0 {
+                let seed_refs: Vec<&str> = seed_entities.iter().map(|s| s.as_str()).collect();
+                let expanded = crate::graph::expand_entities_nhop(&self.conn, &seed_refs, 1, 20)?;
+                let expanded_map: std::collections::HashMap<String, (u8, f64)> = expanded
+                    .iter()
+                    .map(|(name, hops, weight)| (name.clone(), (*hops, *weight)))
+                    .collect();
+
+                // Phase (a): Boost existing scored results
+                for result in &mut scored {
+                    let prox = crate::graph::graph_proximity(&self.conn, &result.rid, &expanded_map)?;
+                    if prox > 0.0 {
+                        let mem_entities: Vec<String> = self.conn
+                            .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
+                            .query_map(params![result.rid], |row| row.get(0))?
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        let mut best_idf = 1.0f64;
+                        let mut connecting_entity = String::new();
+                        for entity in &mem_entities {
+                            if expanded_map.contains_key(entity) {
+                                let idf = entity_idfs.get(&entity.to_lowercase()).copied().unwrap_or(1.0);
+                                if connecting_entity.is_empty() || idf > best_idf {
+                                    best_idf = idf;
+                                    connecting_entity = entity.clone();
+                                }
+                            }
+                        }
+                        let consolidation_factor = {
+                            let cache = self.scoring_cache.borrow();
+                            if let Some(row) = cache.get(&result.rid) {
+                                if row.consolidation_status == "consolidated" { 0.5 } else { 1.0 }
+                            } else { 1.0 }
+                        };
+                        let boost = (base_boost * prox * best_idf * consolidation_factor).min(MAX_BOOST_PER_MEMORY);
+                        result.scores.graph_proximity = prox;
+                        result.score += boost;
+                        if !connecting_entity.is_empty() {
+                            result.why_retrieved.push(format!("graph-connected via {connecting_entity}"));
+                        }
+                    }
+                }
+
+                // Phase (b): Graph-only candidates
+                let max_graph_only = ((MAX_GRAPH_FRACTION * top_k as f64).ceil() as usize).max(1);
+                let all_entity_names: Vec<&str> = expanded.iter().map(|(n, _, _)| n.as_str()).collect();
+                let graph_rids = crate::graph::memories_for_entities(&self.conn, &all_entity_names)?;
+                let existing_rids: std::collections::HashSet<&str> = scored.iter().map(|r| r.rid.as_str()).collect();
+
+                // Filter from cache, collect eligible rids
+                let new_rids: Vec<String> = {
+                    let cache = self.scoring_cache.borrow();
+                    graph_rids
+                        .into_iter()
+                        .filter(|r| {
+                            if existing_rids.contains(r.as_str()) { return false; }
+                            if let Some(row) = cache.get(r.as_str()) {
+                                if row.consolidation_status == "tombstoned" { return false; }
+                                if !include_consolidated && row.consolidation_status == "consolidated" { return false; }
+                                if let Some(mt) = memory_type {
+                                    if row.memory_type != mt { return false; }
+                                }
+                                if let Some((start, end)) = time_window {
+                                    if row.created_at < start || row.created_at > end { return false; }
+                                }
+                                true
+                            } else { false }
+                        })
+                        .take(max_graph_only)
+                        .collect()
+                };
+                graph_expansion_count = new_rids.len();
+
+                if !new_rids.is_empty() {
+                    // Batch-fetch embeddings for cosine similarity
+                    let new_rid_refs: Vec<&str> = new_rids.iter().map(|r| r.as_str()).collect();
+                    let emb_map = self.fetch_embeddings_by_rids(&new_rid_refs)?;
+
+                    let cache = self.scoring_cache.borrow();
+                    for rid in &new_rids {
+                        if let (Some(row), Some(emb_blob)) = (cache.get(rid.as_str()), emb_map.get(rid.as_str())) {
+                            let mem_embedding = crate::serde_helpers::deserialize_f32(emb_blob);
+                            let sim_score = crate::consolidate::cosine_similarity(query_embedding, &mem_embedding) as f64;
+                            let elapsed = ts - row.last_access;
+                            let decay = scoring::decay_score(row.importance, row.half_life, elapsed);
+                            let age = ts - row.created_at;
+                            let recency = scoring::recency_score(age);
+                            let prox = crate::graph::graph_proximity(&self.conn, rid, &expanded_map)?;
+                            let composite = scoring::graph_composite_score(sim_score, decay, recency, row.importance, row.valence, prox);
+                            let mut why = scoring::build_why(sim_score, recency, decay, row.valence);
+
+                            let mem_entities: Vec<String> = self.conn
+                                .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
+                                .query_map(params![rid], |row| row.get(0))?
+                                .collect::<std::result::Result<Vec<_>, _>>()?;
+                            for entity in &mem_entities {
+                                if expanded_map.contains_key(entity) {
+                                    why.push(format!("graph-connected via {entity}"));
+                                    break;
+                                }
+                            }
+
+                            scored.push(RecallResult {
+                                rid: rid.clone(),
+                                memory_type: row.memory_type.clone(),
+                                text: String::new(),
+                                created_at: row.created_at,
+                                importance: row.importance,
+                                valence: row.valence,
+                                score: composite,
+                                scores: ScoreBreakdown {
+                                    similarity: sim_score,
+                                    decay,
+                                    recency,
+                                    importance: row.importance,
+                                    graph_proximity: prox,
+                                },
+                                why_retrieved: why,
+                                metadata: serde_json::Value::Object(Default::default()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        let graph_ms = t_graph.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Phase 4: Sort + truncate ──
+        let t_sort = Instant::now();
+        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+        let sort_truncate_ms = t_sort.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Phase 5: Hydrate final top_k with text + metadata ──
+        let t_fetch = Instant::now();
+        {
+            let final_rids: Vec<&str> = scored.iter().map(|r| r.rid.as_str()).collect();
+            let text_map = self.fetch_text_metadata_by_rids(&final_rids)?;
+            for result in &mut scored {
+                if let Some(tm) = text_map.get(result.rid.as_str()) {
+                    result.text = tm.text.clone();
+                    result.metadata = serde_json::from_str(&tm.metadata)
+                        .unwrap_or(serde_json::Value::Object(Default::default()));
+                }
+            }
+        }
+        let fetch_ms = t_fetch.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Phase 6: Reinforce ──
+        let t_reinforce = Instant::now();
+        if !skip_reinforce {
+            for r in &scored {
+                self.reinforce(&r.rid)?;
+            }
+        }
+        let reinforce_ms = t_reinforce.elapsed().as_secs_f64() * 1000.0;
+
+        let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+        Ok(RecallProfiledResult {
+            results: scored,
+            timings: RecallTimings {
+                vec_search_ms,
+                cache_score_ms,
+                fetch_ms,
+                scoring_ms: 0.0, // Kept for backward compat — scoring now in cache_score_ms
+                graph_ms,
+                reinforce_ms,
+                sort_truncate_ms,
+                total_ms,
+                candidate_count,
+                graph_expansion_count,
+            },
+        })
+    }
+
+    /// Fetch only text and metadata for a set of RIDs (post-scoring hydration).
+    fn fetch_text_metadata_by_rids(
+        &self,
+        rids: &[&str],
+    ) -> Result<HashMap<String, TextMetadataRow>> {
+        if rids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders: String = (0..rids.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT rid, type, text, metadata FROM memories WHERE rid IN ({placeholders})"
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        for r in rids {
+            param_values.push(Box::new(r.to_string()));
+        }
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok(TextMetadataRow {
+                    rid: row.get("rid")?,
+                    text: row.get("text")?,
+                    metadata: row.get("metadata")?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut map = HashMap::new();
+        for row in rows {
+            map.insert(row.rid.clone(), row);
+        }
+        Ok(map)
+    }
+
+    /// Batch-fetch embeddings for a set of RIDs (for graph-only candidate scoring).
+    fn fetch_embeddings_by_rids(
+        &self,
+        rids: &[&str],
+    ) -> Result<HashMap<String, Vec<u8>>> {
+        if rids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders: String = (0..rids.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT rid, embedding FROM memories WHERE rid IN ({placeholders})"
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        for r in rids {
+            param_values.push(Box::new(r.to_string()));
+        }
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut map = HashMap::new();
+        for (rid, emb) in rows {
+            map.insert(rid, emb);
+        }
+        Ok(map)
+    }
+
     /// Reinforce a memory on access — increase half_life and update last_access.
     fn reinforce(&self, rid: &str) -> Result<()> {
         let ts = now();
-        let new_half_life: f64 = self.conn.query_row(
-            "SELECT MIN(half_life * 1.2, 31536000.0) FROM memories WHERE rid = ?1",
-            params![rid],
-            |row| row.get(0),
-        ).unwrap_or(604800.0);
+
+        // Read half_life from cache (eliminates SELECT query)
+        let current_half_life = {
+            let cache = self.scoring_cache.borrow();
+            cache.get(rid).map(|r| r.half_life)
+        };
+        let new_half_life = match current_half_life {
+            Some(hl) => (hl * 1.2_f64).min(31536000.0),
+            None => 604800.0, // fallback if not in cache
+        };
 
         self.conn.execute(
-            "UPDATE memories SET last_access = ?1, half_life = MIN(half_life * 1.2, 31536000.0) WHERE rid = ?2",
-            params![ts, rid],
+            "UPDATE memories SET last_access = ?1, half_life = ?2 WHERE rid = ?3",
+            params![ts, new_half_life, rid],
         )?;
+
+        // Update cache with new values
+        {
+            let mut cache = self.scoring_cache.borrow_mut();
+            if let Some(row) = cache.get_mut(rid) {
+                row.last_access = ts;
+                row.half_life = new_half_life;
+            }
+        }
 
         self.log_op(
             "reinforce",
@@ -436,13 +1088,15 @@ impl AIDB {
             params![edge_id, src, dst, rel_type, weight, ts],
         )?;
 
-        // Ensure entities exist
+        // Ensure entities exist with classified entity_type
         for entity in [src, dst] {
+            let etype = crate::graph::classify_entity_type(entity);
             self.conn.execute(
-                "INSERT INTO entities (name, first_seen, last_seen) \
-                 VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(name) DO UPDATE SET last_seen = ?3, mention_count = mention_count + 1",
-                params![entity, ts, ts],
+                "INSERT INTO entities (name, entity_type, first_seen, last_seen) \
+                 VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT(name) DO UPDATE SET last_seen = ?4, mention_count = mention_count + 1, \
+                 entity_type = CASE WHEN entities.entity_type = 'unknown' THEN ?2 ELSE entities.entity_type END",
+                params![entity, etype, ts, ts],
             )?;
         }
 
@@ -515,10 +1169,9 @@ impl AIDB {
         )?;
 
         if changes > 0 {
-            self.conn.execute(
-                "DELETE FROM vec_memories WHERE rid = ?1",
-                params![rid],
-            )?;
+            self.vec_index.borrow_mut().remove(rid);
+            // Remove from scoring cache (tombstoned memories excluded)
+            self.cache_remove(rid);
             self.log_op(
                 "forget",
                 Some(rid),
@@ -557,6 +1210,7 @@ impl AIDB {
                 half_life: row.get("half_life")?,
                 last_access: row.get("last_access")?,
                 consolidation_status: row.get("consolidation_status")?,
+                storage_tier: row.get("storage_tier")?,
                 consolidated_into: row.get("consolidated_into")?,
                 metadata,
             })
@@ -590,6 +1244,252 @@ impl AIDB {
         Ok(edges)
     }
 
+    // ── Memory-Entity Linkage ──
+
+    /// Link a memory to an entity for graph-augmented recall.
+    pub fn link_memory_entity(&self, memory_rid: &str, entity_name: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
+            params![memory_rid, entity_name],
+        )?;
+        Ok(())
+    }
+
+    /// Backfill the memory_entities table by scanning memory text for known entity names.
+    /// Uses word-boundary matching to avoid false positives.
+    /// Returns the number of links created. Idempotent (uses INSERT OR IGNORE).
+    pub fn backfill_memory_entities(&self) -> Result<usize> {
+        let entities: Vec<String> = self.conn.prepare(
+            "SELECT name FROM entities",
+        )?.query_map([], |row| row.get(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
+
+        if entities.is_empty() {
+            return Ok(0);
+        }
+
+        let memories: Vec<(String, String)> = self.conn.prepare(
+            "SELECT rid, text FROM memories WHERE consolidation_status = 'active'",
+        )?.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut count = 0usize;
+        for (rid, text) in &memories {
+            let text_tokens = crate::graph::tokenize(text);
+            for entity in &entities {
+                if crate::graph::entity_matches_text(entity, &text_tokens) {
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
+                        params![rid, entity],
+                    )?;
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    // ── Storage tier operations ──
+
+    /// Archive a hot memory to cold storage (compress embedding, remove from vec index).
+    /// Returns true if the memory was archived, false if not found or already cold.
+    pub fn archive(&self, rid: &str) -> Result<bool> {
+        let row = self.conn.query_row(
+            "SELECT embedding FROM memories WHERE rid = ?1 AND storage_tier = 'hot' AND consolidation_status = 'active'",
+            params![rid],
+            |row| row.get::<_, Vec<u8>>(0),
+        );
+
+        let raw_blob = match row {
+            Ok(blob) => blob,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+
+        let embedding = crate::serde_helpers::deserialize_f32(&raw_blob);
+        let compressed = crate::compression::compress_embedding(&embedding);
+        let ts = now();
+
+        self.conn.execute(
+            "UPDATE memories SET storage_tier = 'cold', embedding = ?1, updated_at = ?2 WHERE rid = ?3",
+            params![compressed, ts, rid],
+        )?;
+
+        self.vec_index.borrow_mut().remove(rid);
+
+        self.log_op(
+            "archive",
+            Some(rid),
+            &serde_json::json!({
+                "rid": rid,
+                "updated_at": ts,
+            }),
+            None,
+        )?;
+
+        Ok(true)
+    }
+
+    /// Hydrate a cold memory back to hot storage (decompress embedding, re-insert into vec index).
+    /// Returns true if the memory was hydrated, false if not found or already hot.
+    pub fn hydrate(&self, rid: &str) -> Result<bool> {
+        let row = self.conn.query_row(
+            "SELECT embedding FROM memories WHERE rid = ?1 AND storage_tier = 'cold'",
+            params![rid],
+            |row| row.get::<_, Vec<u8>>(0),
+        );
+
+        let compressed_blob = match row {
+            Ok(blob) => blob,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+
+        let embedding = crate::compression::decompress_embedding(&compressed_blob);
+        let raw_blob = serialize_f32(&embedding);
+        let ts = now();
+
+        self.conn.execute(
+            "UPDATE memories SET storage_tier = 'hot', embedding = ?1, updated_at = ?2 WHERE rid = ?3",
+            params![raw_blob, ts, rid],
+        )?;
+
+        self.vec_index.borrow_mut().insert(rid, &embedding)?;
+
+        self.log_op(
+            "hydrate",
+            Some(rid),
+            &serde_json::json!({
+                "rid": rid,
+                "updated_at": ts,
+            }),
+            None,
+        )?;
+
+        Ok(true)
+    }
+
+    // ── Batch operations ──
+
+    /// Record multiple memories in a single transaction.
+    /// Uses SAVEPOINT for atomicity while keeping `&self` (no `&mut self`).
+    pub fn record_batch(&self, inputs: &[RecordInput]) -> Result<Vec<String>> {
+        if inputs.is_empty() {
+            return Ok(vec![]);
+        }
+
+        self.conn.execute_batch("SAVEPOINT batch_record")?;
+
+        let mut rids = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let rid = uuid7::uuid7().to_string();
+            let ts = now();
+            let emb_blob = serialize_f32(&input.embedding);
+            let meta_str = serde_json::to_string(&input.metadata)?;
+
+            let result = self.conn.execute(
+                "INSERT INTO memories \
+                 (rid, type, text, embedding, created_at, updated_at, importance, \
+                  half_life, last_access, valence, metadata) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![rid, input.memory_type, input.text, emb_blob, ts, ts,
+                        input.importance, input.half_life, ts, input.valence, meta_str],
+            );
+
+            if let Err(e) = result {
+                self.conn.execute_batch("ROLLBACK TO batch_record")?;
+                return Err(e.into());
+            }
+
+            rids.push(rid);
+        }
+
+        self.conn.execute_batch("RELEASE batch_record")?;
+
+        // Insert into HNSW vec index + scoring cache after SQL commit
+        {
+            let mut vi = self.vec_index.borrow_mut();
+            let mut cache = self.scoring_cache.borrow_mut();
+            for (rid, input) in rids.iter().zip(inputs.iter()) {
+                let ts = now();
+                vi.insert(rid, &input.embedding)?;
+                cache.insert(rid.clone(), ScoringRow {
+                    created_at: ts,
+                    importance: input.importance,
+                    half_life: input.half_life,
+                    last_access: ts,
+                    valence: input.valence,
+                    consolidation_status: "active".to_string(),
+                    memory_type: input.memory_type.clone(),
+                });
+            }
+        }
+
+        // Log a single batch op
+        self.log_op(
+            "record_batch",
+            None,
+            &serde_json::json!({
+                "count": rids.len(),
+                "rids": rids,
+            }),
+            None,
+        )?;
+
+        Ok(rids)
+    }
+
+    // ── Eviction ──
+
+    /// Evict memories to cold storage based on decay scores.
+    /// Archives the lowest-scoring memories until at most `max_active` hot memories remain.
+    /// Returns the list of archived RIDs.
+    pub fn evict(&self, max_active: usize) -> Result<Vec<String>> {
+        let hot_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE consolidation_status = 'active' AND storage_tier = 'hot'",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if hot_count as usize <= max_active {
+            return Ok(vec![]);
+        }
+
+        let to_evict = hot_count as usize - max_active;
+        let ts = now();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT rid, importance, half_life, last_access, created_at FROM memories \
+             WHERE consolidation_status = 'active' AND storage_tier = 'hot'",
+        )?;
+
+        let mut scored: Vec<(String, f64)> = stmt
+            .query_map([], |row| {
+                let rid: String = row.get("rid")?;
+                let importance: f64 = row.get("importance")?;
+                let half_life: f64 = row.get("half_life")?;
+                let last_access: f64 = row.get("last_access")?;
+                let created_at: f64 = row.get("created_at")?;
+                let elapsed = ts - last_access;
+                let decay = crate::scoring::decay_score(importance, half_life, elapsed);
+                let age = ts - created_at;
+                let recency = crate::scoring::recency_score(age);
+                let score = crate::scoring::eviction_score(decay, recency);
+                Ok((rid, score))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // Sort ascending — lowest score = most evictable
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut archived_rids = Vec::new();
+        for (rid, _) in scored.into_iter().take(to_evict) {
+            if self.archive(&rid)? {
+                archived_rids.push(rid);
+            }
+        }
+
+        Ok(archived_rids)
+    }
+
     /// Get engine statistics.
     pub fn stats(&self) -> Result<Stats> {
         let active = self.conn.query_row(
@@ -602,6 +1502,10 @@ impl AIDB {
         )?;
         let tombstoned = self.conn.query_row(
             "SELECT COUNT(*) FROM memories WHERE consolidation_status = 'tombstoned'",
+            [], |row| row.get(0),
+        )?;
+        let archived = self.conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE storage_tier = 'cold'",
             [], |row| row.get(0),
         )?;
         let edges = self.conn.query_row(
@@ -637,6 +1541,7 @@ impl AIDB {
             active_memories: active,
             consolidated_memories: consolidated,
             tombstoned_memories: tombstoned,
+            archived_memories: archived,
             edges,
             entities,
             operations,
@@ -644,6 +1549,8 @@ impl AIDB {
             resolved_conflicts,
             pending_triggers,
             active_patterns,
+            scoring_cache_entries: self.scoring_cache.borrow().len(),
+            vec_index_entries: self.vec_index.borrow().len(),
         })
     }
 
@@ -1294,16 +2201,10 @@ impl AIDB {
     }
 }
 
-/// Internal row struct for recall query results.
-struct MemoryRow {
+/// Lightweight struct for fetching only text and metadata (post-scoring hydration).
+struct TextMetadataRow {
     rid: String,
-    memory_type: String,
     text: String,
-    created_at: f64,
-    importance: f64,
-    valence: f64,
-    half_life: f64,
-    last_access: f64,
     metadata: String,
 }
 
@@ -1370,14 +2271,14 @@ mod tests {
         db.record("dogs are loyal friends", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(5.0, 8)).unwrap();
         db.record("cats love warm places", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.1, 8)).unwrap();
 
-        let results = db.recall(&vec_seed(1.0, 8), 2, None, None, false).unwrap();
+        let results = db.recall(&vec_seed(1.0, 8), 2, None, None, false, false, None, false).unwrap();
         assert_eq!(results.len(), 2);
     }
 
     #[test]
     fn test_recall_empty() {
         let db = AIDB::new(":memory:", 8).unwrap();
-        let results = db.recall(&vec_seed(1.0, 8), 5, None, None, false).unwrap();
+        let results = db.recall(&vec_seed(1.0, 8), 5, None, None, false, false, None, false).unwrap();
         assert!(results.is_empty());
     }
 
@@ -1710,5 +2611,340 @@ mod tests {
         let s = db.stats().unwrap();
         assert_eq!(s.pending_triggers, 0);
         assert_eq!(s.active_patterns, 0);
+    }
+
+    // ── Graph-augmented recall: invariant & regression tests ──
+
+    #[test]
+    fn test_entity_type_stored_on_relate() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        db.relate("Sarah", "data pipeline", "leads", 1.0).unwrap();
+        db.relate("FAISS", "recommendation engine", "used_in", 1.0).unwrap();
+        db.relate("Mike", "ONNX", "built_with", 1.0).unwrap();
+
+        // Sarah → person, FAISS → tech, data pipeline → unknown, Mike → person, ONNX → tech
+        let etype: String = db.conn.query_row(
+            "SELECT entity_type FROM entities WHERE name = 'Sarah'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(etype, "person");
+
+        let etype: String = db.conn.query_row(
+            "SELECT entity_type FROM entities WHERE name = 'FAISS'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(etype, "tech");
+
+        let etype: String = db.conn.query_row(
+            "SELECT entity_type FROM entities WHERE name = 'data pipeline'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(etype, "unknown");
+
+        let etype: String = db.conn.query_row(
+            "SELECT entity_type FROM entities WHERE name = 'Mike'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(etype, "person");
+    }
+
+    #[test]
+    fn test_recall_deterministic_with_skip_reinforce() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        for i in 0..10 {
+            db.record(&format!("memory {i}"), "episodic", 0.5, 0.0, 604800.0,
+                &empty_meta(), &vec_seed(i as f32, 8)).unwrap();
+        }
+        let query = vec_seed(3.0, 8);
+
+        let r1 = db.recall(&query, 5, None, None, false, false, None, true).unwrap();
+        let r2 = db.recall(&query, 5, None, None, false, false, None, true).unwrap();
+        let r3 = db.recall(&query, 5, None, None, false, false, None, true).unwrap();
+
+        // Same RIDs in same order every time
+        let rids1: Vec<&str> = r1.iter().map(|r| r.rid.as_str()).collect();
+        let rids2: Vec<&str> = r2.iter().map(|r| r.rid.as_str()).collect();
+        let rids3: Vec<&str> = r3.iter().map(|r| r.rid.as_str()).collect();
+        assert_eq!(rids1, rids2);
+        assert_eq!(rids2, rids3);
+
+        // Scores very close (tiny drift from wall-clock recency between calls)
+        for i in 0..5 {
+            assert!((r1[i].score - r2[i].score).abs() < 1e-4,
+                "score drift too large between calls: {} vs {}", r1[i].score, r2[i].score);
+        }
+    }
+
+    #[test]
+    fn test_reinforce_mutates_but_skip_does_not() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let rid = db.record("test", "episodic", 0.5, 0.0, 1000.0,
+            &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        let original_hl = db.get(&rid).unwrap().unwrap().half_life;
+
+        // skip_reinforce=true should NOT change half_life
+        db.recall(&vec_seed(1.0, 8), 1, None, None, false, false, None, true).unwrap();
+        let after_skip = db.get(&rid).unwrap().unwrap().half_life;
+        assert!((original_hl - after_skip).abs() < 1e-10);
+
+        // skip_reinforce=false SHOULD change half_life
+        db.recall(&vec_seed(1.0, 8), 1, None, None, false, false, None, false).unwrap();
+        let after_reinforce = db.get(&rid).unwrap().unwrap().half_life;
+        assert!(after_reinforce > original_hl);
+    }
+
+    #[test]
+    fn test_graph_expansion_off_no_graph_results() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let r1 = db.record("Alice discussed plan", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        let r2 = db.record("Bob reviewed code", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(5.0, 8)).unwrap();
+        db.relate("Alice", "Bob", "knows", 1.0).unwrap();
+        db.link_memory_entity(&r1, "Alice").unwrap();
+        db.link_memory_entity(&r2, "Bob").unwrap();
+
+        // expand_entities=false: no graph_proximity should be set
+        let results = db.recall(&vec_seed(1.0, 8), 10, None, None, false, false,
+            Some("Alice"), false).unwrap();
+        for r in &results {
+            assert!((r.scores.graph_proximity - 0.0).abs() < 1e-10,
+                "graph_proximity should be 0.0 when expansion is disabled");
+        }
+    }
+
+    #[test]
+    fn test_graph_expansion_on_boosts_connected_memory() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let r1 = db.record("Alice discussed the project plan", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        let r2 = db.record("Bob reviewed the code", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(5.0, 8)).unwrap();
+        db.relate("Alice", "Bob", "knows", 1.0).unwrap();
+        db.link_memory_entity(&r1, "Alice").unwrap();
+        db.link_memory_entity(&r2, "Bob").unwrap();
+
+        // expand_entities=true with query mentioning "Alice"
+        let results = db.recall(&vec_seed(1.0, 8), 10, None, None, false, true,
+            Some("What is Alice working on?"), true).unwrap();
+
+        // The Alice memory should have graph_proximity > 0
+        let alice_result = results.iter().find(|r| r.rid == r1).unwrap();
+        assert!(alice_result.scores.graph_proximity > 0.0,
+            "Alice memory should have graph proximity when expansion is on");
+    }
+
+    #[test]
+    fn test_backfill_uses_word_boundaries() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        // Create an entity "data"
+        db.relate("data", "pipeline", "part_of", 1.0).unwrap();
+
+        // Create memories: one with "data" as a word, one with "database" (contains "data")
+        let r1 = db.record("the data is clean", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        let r2 = db.record("the database is fast", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(2.0, 8)).unwrap();
+
+        let count = db.backfill_memory_entities().unwrap();
+
+        // Check: r1 should be linked to "data", r2 should NOT
+        let linked_to_data: Vec<String> = db.conn.prepare(
+            "SELECT memory_rid FROM memory_entities WHERE entity_name = 'data'"
+        ).unwrap().query_map([], |row| row.get(0)).unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>().unwrap();
+
+        assert!(linked_to_data.contains(&r1), "memory with 'data' as word should be linked");
+        assert!(!linked_to_data.contains(&r2), "memory with 'database' should NOT be linked (word boundary)");
+    }
+
+    #[test]
+    fn test_recall_scores_bounded() {
+        // All recall scores should be non-negative and reasonably bounded
+        let db = AIDB::new(":memory:", 8).unwrap();
+        for i in 0..10 {
+            db.record(&format!("memory {i}"), "episodic",
+                (i as f64) * 0.1, // importance 0..0.9
+                ((i as f64) - 5.0) * 0.2, // valence -1.0..0.8
+                604800.0, &empty_meta(), &vec_seed(i as f32, 8)).unwrap();
+        }
+
+        let results = db.recall(&vec_seed(5.0, 8), 10, None, None, false, false, None, true).unwrap();
+        for r in &results {
+            assert!(r.score >= 0.0, "score should be non-negative, got {}", r.score);
+            assert!(r.score < 5.0, "score should be reasonably bounded, got {}", r.score);
+            assert!(r.scores.similarity >= -1.0 && r.scores.similarity <= 1.0);
+            assert!(r.scores.decay >= 0.0 && r.scores.decay <= 1.0);
+            assert!(r.scores.recency >= 0.0 && r.scores.recency <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_link_memory_entity_idempotent() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let rid = db.record("test", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        db.relate("Alice", "Bob", "knows", 1.0).unwrap();
+
+        // Link twice — should not error or create duplicates
+        db.link_memory_entity(&rid, "Alice").unwrap();
+        db.link_memory_entity(&rid, "Alice").unwrap();
+
+        let count: i64 = db.conn.query_row(
+            "SELECT COUNT(*) FROM memory_entities WHERE memory_rid = ?1 AND entity_name = 'Alice'",
+            params![rid], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_schema_v5_has_memory_entities() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let count: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_entities'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_recall_top_k_respected_with_graph_expansion() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        // Create a web of interconnected memories
+        for i in 0..20 {
+            let rid = db.record(&format!("memory about topic {i}"), "episodic",
+                0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(i as f32, 8)).unwrap();
+            let entity = format!("Entity{i}");
+            db.relate(&entity, &format!("Entity{}", (i + 1) % 20), "related_to", 1.0).unwrap();
+            db.link_memory_entity(&rid, &entity).unwrap();
+        }
+
+        let results = db.recall(&vec_seed(0.0, 8), 5, None, None, false, true,
+            Some("Entity0 topic"), true).unwrap();
+
+        // top_k=5 must be respected even with graph expansion
+        assert!(results.len() <= 5, "results should not exceed top_k=5, got {}", results.len());
+    }
+
+    // ── V4: Storage & Performance tests ──
+
+    #[test]
+    fn test_schema_v6_has_storage_tier() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let rid = db.record("tier test", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        let mem = db.get(&rid).unwrap().unwrap();
+        assert_eq!(mem.storage_tier, "hot");
+    }
+
+    #[test]
+    fn test_archive_memory() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let rid = db.record("to archive", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+
+        // Archive
+        assert!(db.archive(&rid).unwrap());
+        let mem = db.get(&rid).unwrap().unwrap();
+        assert_eq!(mem.storage_tier, "cold");
+
+        // Verify removed from vec_memories (recall should not find it)
+        let results = db.recall(&vec_seed(1.0, 8), 10, None, None, false, false, None, true).unwrap();
+        assert!(results.iter().all(|r| r.rid != rid), "archived memory should not appear in recall");
+
+        // Stats should show archived
+        assert_eq!(db.stats().unwrap().archived_memories, 1);
+    }
+
+    #[test]
+    fn test_hydrate_memory() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let emb = vec_seed(2.0, 8);
+        let rid = db.record("to hydrate", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &emb).unwrap();
+
+        // Archive then hydrate
+        db.archive(&rid).unwrap();
+        assert!(db.hydrate(&rid).unwrap());
+        let mem = db.get(&rid).unwrap().unwrap();
+        assert_eq!(mem.storage_tier, "hot");
+
+        // Should be back in recall
+        let results = db.recall(&emb, 10, None, None, false, false, None, true).unwrap();
+        assert!(results.iter().any(|r| r.rid == rid), "hydrated memory should appear in recall");
+
+        // Stats
+        assert_eq!(db.stats().unwrap().archived_memories, 0);
+    }
+
+    #[test]
+    fn test_archive_idempotent() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let rid = db.record("idempotent", "episodic", 0.5, 0.0, 604800.0,
+            &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+
+        assert!(db.archive(&rid).unwrap());
+        assert!(!db.archive(&rid).unwrap()); // Already cold
+    }
+
+    #[test]
+    fn test_record_batch() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let inputs: Vec<RecordInput> = (0..10).map(|i| RecordInput {
+            text: format!("batch memory {i}"),
+            memory_type: "episodic".to_string(),
+            importance: 0.5,
+            valence: 0.0,
+            half_life: 604800.0,
+            metadata: serde_json::json!({}),
+            embedding: vec_seed(i as f32, 8),
+        }).collect();
+
+        let rids = db.record_batch(&inputs).unwrap();
+        assert_eq!(rids.len(), 10);
+
+        // All retrievable
+        for rid in &rids {
+            assert!(db.get(rid).unwrap().is_some());
+        }
+        assert_eq!(db.stats().unwrap().active_memories, 10);
+    }
+
+    #[test]
+    fn test_record_batch_empty() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let rids = db.record_batch(&[]).unwrap();
+        assert!(rids.is_empty());
+    }
+
+    #[test]
+    fn test_evict() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        // Seed 20 memories
+        for i in 0..20 {
+            db.record(&format!("evict mem {i}"), "episodic", 0.5, 0.0, 604800.0,
+                &empty_meta(), &vec_seed(i as f32, 8)).unwrap();
+        }
+        assert_eq!(db.stats().unwrap().active_memories, 20);
+
+        // Evict to keep 10
+        let archived = db.evict(10).unwrap();
+        assert_eq!(archived.len(), 10);
+
+        let stats = db.stats().unwrap();
+        assert_eq!(stats.archived_memories, 10);
+
+        // Recall should only find hot memories
+        let results = db.recall(&vec_seed(0.0, 8), 20, None, None, false, false, None, true).unwrap();
+        for r in &results {
+            assert!(!archived.contains(&r.rid), "evicted memory should not be in recall");
+        }
+    }
+
+    #[test]
+    fn test_evict_no_action_when_under_limit() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        for i in 0..5 {
+            db.record(&format!("small db {i}"), "episodic", 0.5, 0.0, 604800.0,
+                &empty_meta(), &vec_seed(i as f32, 8)).unwrap();
+        }
+        let archived = db.evict(10).unwrap();
+        assert!(archived.is_empty());
     }
 }

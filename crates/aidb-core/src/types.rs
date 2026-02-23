@@ -13,6 +13,7 @@ pub struct Memory {
     pub half_life: f64,
     pub last_access: f64,
     pub consolidation_status: String,
+    pub storage_tier: String,
     pub consolidated_into: Option<String>,
     pub metadata: serde_json::Value,
 }
@@ -24,6 +25,7 @@ pub struct ScoreBreakdown {
     pub decay: f64,
     pub recency: f64,
     pub importance: f64,
+    pub graph_proximity: f64,
 }
 
 /// A recall result with scoring information.
@@ -57,6 +59,7 @@ pub struct Stats {
     pub active_memories: i64,
     pub consolidated_memories: i64,
     pub tombstoned_memories: i64,
+    pub archived_memories: i64,
     pub edges: i64,
     pub entities: i64,
     pub operations: i64,
@@ -64,6 +67,8 @@ pub struct Stats {
     pub resolved_conflicts: i64,
     pub pending_triggers: i64,
     pub active_patterns: i64,
+    pub scoring_cache_entries: usize,
+    pub vec_index_entries: usize,
 }
 
 /// A proactive trigger.
@@ -121,6 +126,31 @@ pub struct DecayedMemory {
     pub original_importance: f64,
     pub current_score: f64,
     pub days_since_access: f64,
+}
+
+/// Lightweight scoring fields cached in memory for fast recall scoring.
+/// These are the only fields needed to compute composite_score() during recall.
+#[derive(Debug, Clone)]
+pub struct ScoringRow {
+    pub created_at: f64,
+    pub importance: f64,
+    pub half_life: f64,
+    pub last_access: f64,
+    pub valence: f64,
+    pub consolidation_status: String,
+    pub memory_type: String,
+}
+
+/// Input for batch record operations.
+#[derive(Debug, Clone)]
+pub struct RecordInput {
+    pub text: String,
+    pub memory_type: String,
+    pub importance: f64,
+    pub valence: f64,
+    pub half_life: f64,
+    pub metadata: serde_json::Value,
+    pub embedding: Vec<f32>,
 }
 
 // ── Conflict types (V2) ──
@@ -372,6 +402,32 @@ pub struct PatternConfig {
     pub topic_cluster_time_window_days: f64,
     pub entity_hub_min_degree: usize,
     pub max_patterns: usize,
+}
+
+// ── Profiling types (feature-gated) ──
+
+/// Timing breakdown for a single recall() invocation.
+#[cfg(feature = "profiling")]
+#[derive(Debug, Clone)]
+pub struct RecallTimings {
+    pub vec_search_ms: f64,
+    pub cache_score_ms: f64,
+    pub fetch_ms: f64,
+    pub scoring_ms: f64,
+    pub graph_ms: f64,
+    pub reinforce_ms: f64,
+    pub sort_truncate_ms: f64,
+    pub total_ms: f64,
+    pub candidate_count: usize,
+    pub graph_expansion_count: usize,
+}
+
+/// Result of recall_profiled() — recall results plus timing breakdown.
+#[cfg(feature = "profiling")]
+#[derive(Debug, Clone)]
+pub struct RecallProfiledResult {
+    pub results: Vec<RecallResult>,
+    pub timings: RecallTimings,
 }
 
 impl Default for PatternConfig {

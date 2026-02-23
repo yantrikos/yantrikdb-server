@@ -312,7 +312,7 @@ mod tests {
         sync_bidirectional(&a, &b).unwrap();
 
         // A can recall (has vec_memories entries)
-        let a_results = a.recall(&emb1, 2, None, None, false).unwrap();
+        let a_results = a.recall(&emb1, 2, None, None, false, false, None, false).unwrap();
         assert!(!a_results.is_empty());
 
         // B won't have vec_memories (embeddings aren't in oplog)

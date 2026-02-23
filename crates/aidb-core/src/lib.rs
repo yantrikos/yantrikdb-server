@@ -11,6 +11,10 @@ pub mod replication;
 pub mod sync;
 pub mod conflict;
 pub mod patterns;
+pub mod graph;
+pub mod compression;
+pub mod hnsw;
+pub mod bench_utils;
 
 pub use engine::AIDB;
 pub use error::AidbError;

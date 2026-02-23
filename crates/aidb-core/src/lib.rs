@@ -12,6 +12,7 @@ pub mod sync;
 pub mod conflict;
 pub mod patterns;
 pub mod graph;
+pub mod graph_index;
 pub mod compression;
 pub mod hnsw;
 pub mod bench_utils;

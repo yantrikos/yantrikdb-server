@@ -85,6 +85,8 @@ pub fn stats_to_dict(py: Python<'_>, s: &aidb_core::Stats) -> PyResult<PyObject>
     dict.set_item("active_patterns", s.active_patterns)?;
     dict.set_item("scoring_cache_entries", s.scoring_cache_entries)?;
     dict.set_item("vec_index_entries", s.vec_index_entries)?;
+    dict.set_item("graph_index_entities", s.graph_index_entities)?;
+    dict.set_item("graph_index_edges", s.graph_index_edges)?;
     Ok(dict.into())
 }
 

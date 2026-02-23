@@ -436,6 +436,20 @@ fn upsert_pattern(db: &AIDB, raw: &RawPattern, ts: f64) -> Result<bool> {
             ],
         )?;
 
+        // Dual-write to join tables
+        for rid in &raw.evidence_rids {
+            conn.execute(
+                "INSERT OR IGNORE INTO pattern_evidence (pattern_id, rid) VALUES (?1, ?2)",
+                params![pattern_id, rid],
+            )?;
+        }
+        for entity_name in &raw.entity_names {
+            conn.execute(
+                "INSERT OR IGNORE INTO pattern_entities (pattern_id, entity_name) VALUES (?1, ?2)",
+                params![pattern_id, entity_name],
+            )?;
+        }
+
         // Log to oplog for replication
         db.log_op(
             "pattern_upsert",

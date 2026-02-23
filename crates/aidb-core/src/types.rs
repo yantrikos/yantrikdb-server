@@ -69,6 +69,8 @@ pub struct Stats {
     pub active_patterns: i64,
     pub scoring_cache_entries: usize,
     pub vec_index_entries: usize,
+    pub graph_index_entities: usize,
+    pub graph_index_edges: usize,
 }
 
 /// A proactive trigger.

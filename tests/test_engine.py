@@ -243,6 +243,7 @@ class TestStats:
             "open_conflicts", "resolved_conflicts",
             "pending_triggers", "active_patterns",
             "scoring_cache_entries", "vec_index_entries",
+            "graph_index_entities", "graph_index_edges",
         }
         assert set(s.keys()) == expected_keys
 

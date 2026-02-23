@@ -1,4 +1,4 @@
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 pub const SCHEMA_SQL: &str = "
 -- Memory records: the source of truth
@@ -186,6 +186,43 @@ CREATE TABLE IF NOT EXISTS memory_entities (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_entities_entity ON memory_entities(entity_name);
 CREATE INDEX IF NOT EXISTS idx_memory_entities_rid ON memory_entities(memory_rid);
+
+-- FTS5 for full-text search on memories
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content=memories, content_rowid=rowid);
+
+-- Auto-sync triggers for FTS5
+CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_fts_delete BEFORE DELETE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_fts_update AFTER UPDATE OF text ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+    INSERT INTO memories_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+
+-- Normalized join tables for trigger/pattern JSON arrays
+CREATE TABLE IF NOT EXISTS trigger_source_rids (
+    trigger_id TEXT NOT NULL,
+    rid TEXT NOT NULL,
+    PRIMARY KEY (trigger_id, rid)
+);
+CREATE INDEX IF NOT EXISTS idx_trigger_source_rids_rid ON trigger_source_rids(rid);
+
+CREATE TABLE IF NOT EXISTS pattern_evidence (
+    pattern_id TEXT NOT NULL,
+    rid TEXT NOT NULL,
+    PRIMARY KEY (pattern_id, rid)
+);
+CREATE INDEX IF NOT EXISTS idx_pattern_evidence_rid ON pattern_evidence(rid);
+
+CREATE TABLE IF NOT EXISTS pattern_entities (
+    pattern_id TEXT NOT NULL,
+    entity_name TEXT NOT NULL,
+    PRIMARY KEY (pattern_id, entity_name)
+);
+CREATE INDEX IF NOT EXISTS idx_pattern_entities_entity ON pattern_entities(entity_name);
 ";
 
 /// SQL to migrate from schema V1 to V2.
@@ -308,4 +345,60 @@ CREATE INDEX IF NOT EXISTS idx_memory_entities_rid ON memory_entities(memory_rid
 pub const MIGRATE_V5_TO_V6: &str = "
 ALTER TABLE memories ADD COLUMN storage_tier TEXT NOT NULL DEFAULT 'hot';
 CREATE INDEX IF NOT EXISTS idx_memories_storage_tier ON memories(storage_tier);
+";
+
+/// SQL to migrate from schema V6 to V7.
+pub const MIGRATE_V6_TO_V7: &str = "
+-- FTS5 for full-text search on memories
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content=memories, content_rowid=rowid);
+
+-- Populate FTS5 from existing data
+INSERT INTO memories_fts(memories_fts) VALUES('rebuild');
+
+-- Auto-sync triggers for FTS5
+CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_fts_delete BEFORE DELETE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_fts_update AFTER UPDATE OF text ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+    INSERT INTO memories_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+
+-- Normalized join tables
+CREATE TABLE IF NOT EXISTS trigger_source_rids (
+    trigger_id TEXT NOT NULL,
+    rid TEXT NOT NULL,
+    PRIMARY KEY (trigger_id, rid)
+);
+CREATE INDEX IF NOT EXISTS idx_trigger_source_rids_rid ON trigger_source_rids(rid);
+
+CREATE TABLE IF NOT EXISTS pattern_evidence (
+    pattern_id TEXT NOT NULL,
+    rid TEXT NOT NULL,
+    PRIMARY KEY (pattern_id, rid)
+);
+CREATE INDEX IF NOT EXISTS idx_pattern_evidence_rid ON pattern_evidence(rid);
+
+CREATE TABLE IF NOT EXISTS pattern_entities (
+    pattern_id TEXT NOT NULL,
+    entity_name TEXT NOT NULL,
+    PRIMARY KEY (pattern_id, entity_name)
+);
+CREATE INDEX IF NOT EXISTS idx_pattern_entities_entity ON pattern_entities(entity_name);
+
+-- Backfill join tables from JSON columns
+INSERT OR IGNORE INTO trigger_source_rids (trigger_id, rid)
+    SELECT trigger_id, json_each.value FROM trigger_log, json_each(source_rids)
+    WHERE source_rids IS NOT NULL AND source_rids != '[]';
+
+INSERT OR IGNORE INTO pattern_evidence (pattern_id, rid)
+    SELECT pattern_id, json_each.value FROM patterns, json_each(evidence_rids)
+    WHERE evidence_rids IS NOT NULL AND evidence_rids != '[]';
+
+INSERT OR IGNORE INTO pattern_entities (pattern_id, entity_name)
+    SELECT pattern_id, json_each.value FROM patterns, json_each(entity_names)
+    WHERE entity_names IS NOT NULL AND entity_names != '[]';
 ";

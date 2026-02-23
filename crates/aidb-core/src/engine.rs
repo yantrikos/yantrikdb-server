@@ -6,9 +6,10 @@ use rand::Rng;
 use rusqlite::{params, Connection};
 
 use crate::error::{AidbError, Result};
+use crate::graph_index::GraphIndex;
 use crate::hlc::{HLCTimestamp, HLC};
 use crate::hnsw::HnswIndex;
-use crate::schema::{MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, MIGRATE_V3_TO_V4, MIGRATE_V4_TO_V5, MIGRATE_V5_TO_V6, SCHEMA_SQL, SCHEMA_VERSION};
+use crate::schema::{MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, MIGRATE_V3_TO_V4, MIGRATE_V4_TO_V5, MIGRATE_V5_TO_V6, MIGRATE_V6_TO_V7, SCHEMA_SQL, SCHEMA_VERSION};
 use crate::scoring;
 use crate::serde_helpers::{deserialize_f32, serialize_f32};
 use crate::types::*;
@@ -21,6 +22,7 @@ pub struct AIDB {
     actor_id: String,
     scoring_cache: RefCell<HashMap<String, ScoringRow>>,
     pub(crate) vec_index: RefCell<HnswIndex>,
+    pub(crate) graph_index: RefCell<GraphIndex>,
 }
 
 fn now() -> f64 {
@@ -60,20 +62,27 @@ impl AIDB {
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
             conn.execute_batch(MIGRATE_V4_TO_V5)?;
             conn.execute_batch(MIGRATE_V5_TO_V6)?;
+            conn.execute_batch(MIGRATE_V6_TO_V7)?;
         } else if existing_version == Some(2) {
             conn.execute_batch(MIGRATE_V2_TO_V3)?;
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
             conn.execute_batch(MIGRATE_V4_TO_V5)?;
             conn.execute_batch(MIGRATE_V5_TO_V6)?;
+            conn.execute_batch(MIGRATE_V6_TO_V7)?;
         } else if existing_version == Some(3) {
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
             conn.execute_batch(MIGRATE_V4_TO_V5)?;
             conn.execute_batch(MIGRATE_V5_TO_V6)?;
+            conn.execute_batch(MIGRATE_V6_TO_V7)?;
         } else if existing_version == Some(4) {
             conn.execute_batch(MIGRATE_V4_TO_V5)?;
             conn.execute_batch(MIGRATE_V5_TO_V6)?;
+            conn.execute_batch(MIGRATE_V6_TO_V7)?;
         } else if existing_version == Some(5) {
             conn.execute_batch(MIGRATE_V5_TO_V6)?;
+            conn.execute_batch(MIGRATE_V6_TO_V7)?;
+        } else if existing_version == Some(6) {
+            conn.execute_batch(MIGRATE_V6_TO_V7)?;
         }
 
         conn.execute_batch(SCHEMA_SQL)?;
@@ -123,6 +132,7 @@ impl AIDB {
 
         let scoring_cache = Self::load_scoring_cache(&conn)?;
         let vec_index = Self::build_vec_index(&conn, embedding_dim)?;
+        let graph_index = GraphIndex::build_from_db(&conn)?;
 
         Ok(Self {
             conn,
@@ -131,6 +141,7 @@ impl AIDB {
             actor_id,
             scoring_cache: RefCell::new(scoring_cache),
             vec_index: RefCell::new(vec_index),
+            graph_index: RefCell::new(graph_index),
         })
     }
 
@@ -195,6 +206,13 @@ impl AIDB {
         let new_index = Self::build_vec_index(&self.conn, self.embedding_dim)?;
         let count = new_index.len();
         *self.vec_index.borrow_mut() = new_index;
+        Ok(count)
+    }
+
+    pub fn rebuild_graph_index(&self) -> Result<usize> {
+        let new_index = crate::graph_index::GraphIndex::build_from_db(&self.conn)?;
+        let count = new_index.entity_count();
+        *self.graph_index.borrow_mut() = new_index;
         Ok(count)
     }
 
@@ -417,16 +435,10 @@ impl AIDB {
 
         // Step 3: Graph expansion (when enabled)
         if expand_entities {
-            let query_entities: Vec<(String, String, i64)> = if let Some(qt) = query_text {
+            let gi = self.graph_index.borrow();
+            let query_entities: Vec<(String, String, u32)> = if let Some(qt) = query_text {
                 let query_tokens = crate::graph::tokenize(qt);
-                let all_entities: Vec<(String, String, i64)> = self.conn
-                    .prepare("SELECT name, entity_type, mention_count FROM entities")?
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                all_entities
-                    .into_iter()
-                    .filter(|(name, _, _)| crate::graph::entity_matches_text(name, &query_tokens))
-                    .collect()
+                gi.entity_matches_query(&query_tokens)
             } else {
                 vec![]
             };
@@ -454,7 +466,7 @@ impl AIDB {
                 seed_sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
                 let seed_count = 3.min(seed_sorted.len());
                 let seed_rids: Vec<&str> = seed_sorted[..seed_count].iter().map(|r| r.rid.as_str()).collect();
-                let seeds = crate::graph::entities_for_memories(&self.conn, &seed_rids)?;
+                let seeds = gi.entities_for_memories(&seed_rids);
                 (0.05, seeds, std::collections::HashMap::new())
             } else {
                 (0.0, vec![], std::collections::HashMap::new())
@@ -465,7 +477,7 @@ impl AIDB {
 
             if !seed_entities.is_empty() && base_boost > 0.0 {
                 let seed_refs: Vec<&str> = seed_entities.iter().map(|s| s.as_str()).collect();
-                let expanded = crate::graph::expand_entities_nhop(&self.conn, &seed_refs, 1, 20)?;
+                let expanded = gi.expand_bfs(&seed_refs, 1, 20);
 
                 let expanded_map: std::collections::HashMap<String, (u8, f64)> = expanded
                     .iter()
@@ -474,12 +486,9 @@ impl AIDB {
 
                 // (a) IDF-weighted additive boost for existing results
                 for result in &mut scored {
-                    let prox = crate::graph::graph_proximity(&self.conn, &result.rid, &expanded_map)?;
+                    let prox = gi.graph_proximity(&result.rid, &expanded_map);
                     if prox > 0.0 {
-                        let mem_entities: Vec<String> = self.conn
-                            .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
-                            .query_map(params![result.rid], |row| row.get(0))?
-                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        let mem_entities: Vec<String> = gi.entities_for_memory(&result.rid).into_iter().map(|s| s.to_string()).collect();
 
                         let mut best_idf = 1.0f64;
                         let mut connecting_entity = String::new();
@@ -513,7 +522,7 @@ impl AIDB {
                 // (b) Graph-only candidates: score from cache + batch embedding fetch
                 let max_graph_only = ((MAX_GRAPH_FRACTION * top_k as f64).ceil() as usize).max(1);
                 let all_entity_names: Vec<&str> = expanded.iter().map(|(n, _, _)| n.as_str()).collect();
-                let graph_rids = crate::graph::memories_for_entities(&self.conn, &all_entity_names)?;
+                let graph_rids = gi.memories_for_entities(&all_entity_names);
 
                 let existing_rids: std::collections::HashSet<&str> = scored.iter().map(|r| r.rid.as_str()).collect();
                 let new_rids: Vec<String> = graph_rids
@@ -563,16 +572,13 @@ impl AIDB {
                         let age = ts - row.created_at;
                         let recency = scoring::recency_score(age);
 
-                        let prox = crate::graph::graph_proximity(&self.conn, rid, &expanded_map)?;
+                        let prox = gi.graph_proximity(rid, &expanded_map);
                         let composite = scoring::graph_composite_score(
                             sim_score, decay, recency, row.importance, row.valence, prox,
                         );
 
                         let mut why = scoring::build_why(sim_score, recency, decay, row.valence);
-                        let mem_entities: Vec<String> = self.conn
-                            .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
-                            .query_map(params![rid], |row| row.get(0))?
-                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        let mem_entities: Vec<String> = gi.entities_for_memory(rid).into_iter().map(|s| s.to_string()).collect();
                         for entity in &mem_entities {
                             if expanded_map.contains_key(entity) {
                                 why.push(format!("graph-connected via {entity}"));
@@ -734,16 +740,10 @@ impl AIDB {
         let t_graph = Instant::now();
         let mut graph_expansion_count = 0usize;
         if expand_entities {
-            let query_entities: Vec<(String, String, i64)> = if let Some(qt) = query_text {
+            let gi = self.graph_index.borrow();
+            let query_entities: Vec<(String, String, u32)> = if let Some(qt) = query_text {
                 let query_tokens = crate::graph::tokenize(qt);
-                let all_entities: Vec<(String, String, i64)> = self.conn
-                    .prepare("SELECT name, entity_type, mention_count FROM entities")?
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                all_entities
-                    .into_iter()
-                    .filter(|(name, _, _)| crate::graph::entity_matches_text(name, &query_tokens))
-                    .collect()
+                gi.entity_matches_query(&query_tokens)
             } else {
                 vec![]
             };
@@ -765,7 +765,7 @@ impl AIDB {
                 seed_sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
                 let seed_count = 3.min(seed_sorted.len());
                 let seed_rids: Vec<&str> = seed_sorted[..seed_count].iter().map(|r| r.rid.as_str()).collect();
-                let seeds = crate::graph::entities_for_memories(&self.conn, &seed_rids)?;
+                let seeds = gi.entities_for_memories(&seed_rids);
                 (0.05, seeds, std::collections::HashMap::new())
             } else {
                 (0.0, vec![], std::collections::HashMap::new())
@@ -776,7 +776,7 @@ impl AIDB {
 
             if !seed_entities.is_empty() && base_boost > 0.0 {
                 let seed_refs: Vec<&str> = seed_entities.iter().map(|s| s.as_str()).collect();
-                let expanded = crate::graph::expand_entities_nhop(&self.conn, &seed_refs, 1, 20)?;
+                let expanded = gi.expand_bfs(&seed_refs, 1, 20);
                 let expanded_map: std::collections::HashMap<String, (u8, f64)> = expanded
                     .iter()
                     .map(|(name, hops, weight)| (name.clone(), (*hops, *weight)))
@@ -784,12 +784,9 @@ impl AIDB {
 
                 // Phase (a): Boost existing scored results
                 for result in &mut scored {
-                    let prox = crate::graph::graph_proximity(&self.conn, &result.rid, &expanded_map)?;
+                    let prox = gi.graph_proximity(&result.rid, &expanded_map);
                     if prox > 0.0 {
-                        let mem_entities: Vec<String> = self.conn
-                            .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
-                            .query_map(params![result.rid], |row| row.get(0))?
-                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        let mem_entities: Vec<String> = gi.entities_for_memory(&result.rid).into_iter().map(|s| s.to_string()).collect();
                         let mut best_idf = 1.0f64;
                         let mut connecting_entity = String::new();
                         for entity in &mem_entities {
@@ -819,7 +816,7 @@ impl AIDB {
                 // Phase (b): Graph-only candidates
                 let max_graph_only = ((MAX_GRAPH_FRACTION * top_k as f64).ceil() as usize).max(1);
                 let all_entity_names: Vec<&str> = expanded.iter().map(|(n, _, _)| n.as_str()).collect();
-                let graph_rids = crate::graph::memories_for_entities(&self.conn, &all_entity_names)?;
+                let graph_rids = gi.memories_for_entities(&all_entity_names);
                 let existing_rids: std::collections::HashSet<&str> = scored.iter().map(|r| r.rid.as_str()).collect();
 
                 // Filter from cache, collect eligible rids
@@ -860,14 +857,11 @@ impl AIDB {
                             let decay = scoring::decay_score(row.importance, row.half_life, elapsed);
                             let age = ts - row.created_at;
                             let recency = scoring::recency_score(age);
-                            let prox = crate::graph::graph_proximity(&self.conn, rid, &expanded_map)?;
+                            let prox = gi.graph_proximity(rid, &expanded_map);
                             let composite = scoring::graph_composite_score(sim_score, decay, recency, row.importance, row.valence, prox);
                             let mut why = scoring::build_why(sim_score, recency, decay, row.valence);
 
-                            let mem_entities: Vec<String> = self.conn
-                                .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
-                                .query_map(params![rid], |row| row.get(0))?
-                                .collect::<std::result::Result<Vec<_>, _>>()?;
+                            let mem_entities: Vec<String> = gi.entities_for_memory(rid).into_iter().map(|s| s.to_string()).collect();
                             for entity in &mem_entities {
                                 if expanded_map.contains_key(entity) {
                                     why.push(format!("graph-connected via {entity}"));
@@ -1100,6 +1094,16 @@ impl AIDB {
             )?;
         }
 
+        // Update in-memory graph index
+        {
+            let mut gi = self.graph_index.borrow_mut();
+            let src_type = crate::graph::classify_entity_type(src);
+            let dst_type = crate::graph::classify_entity_type(dst);
+            gi.add_entity(src, src_type);
+            gi.add_entity(dst, dst_type);
+            gi.add_edge(src, dst, weight as f32);
+        }
+
         self.log_op(
             "relate",
             Some(&edge_id),
@@ -1170,6 +1174,7 @@ impl AIDB {
 
         if changes > 0 {
             self.vec_index.borrow_mut().remove(rid);
+            self.graph_index.borrow_mut().unlink_memory(rid);
             // Remove from scoring cache (tombstoned memories excluded)
             self.cache_remove(rid);
             self.log_op(
@@ -1252,6 +1257,7 @@ impl AIDB {
             "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
             params![memory_rid, entity_name],
         )?;
+        self.graph_index.borrow_mut().link_memory(memory_rid, entity_name);
         Ok(())
     }
 
@@ -1272,6 +1278,7 @@ impl AIDB {
         )?.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
 
         let mut count = 0usize;
+        let mut gi = self.graph_index.borrow_mut();
         for (rid, text) in &memories {
             let text_tokens = crate::graph::tokenize(text);
             for entity in &entities {
@@ -1280,6 +1287,7 @@ impl AIDB {
                         "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
                         params![rid, entity],
                     )?;
+                    gi.link_memory(rid, entity);
                     count += 1;
                 }
             }
@@ -1551,6 +1559,8 @@ impl AIDB {
             active_patterns,
             scoring_cache_entries: self.scoring_cache.borrow().len(),
             vec_index_entries: self.vec_index.borrow().len(),
+            graph_index_entities: self.graph_index.borrow().entity_count(),
+            graph_index_edges: self.graph_index.borrow().edge_count(),
         })
     }
 
@@ -2831,6 +2841,73 @@ mod tests {
             &empty_meta(), &vec_seed(1.0, 8)).unwrap();
         let mem = db.get(&rid).unwrap().unwrap();
         assert_eq!(mem.storage_tier, "hot");
+    }
+
+    #[test]
+    fn test_schema_v7_has_fts5_and_join_tables() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let conn = db.conn();
+
+        // FTS5 virtual table exists — insert then search
+        let _rid = db.record("The quick brown fox jumps over the lazy dog", "episodic",
+            0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH 'quick brown'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 1, "FTS5 should index inserted memory");
+
+        // Join tables exist
+        let _: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM trigger_source_rids", [], |row| row.get(0),
+        ).unwrap();
+        let _: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pattern_evidence", [], |row| row.get(0),
+        ).unwrap();
+        let _: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pattern_entities", [], |row| row.get(0),
+        ).unwrap();
+
+        // Schema version is 7
+        let ver: String = conn.query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(ver, "7");
+    }
+
+    #[test]
+    fn test_fts5_search_multiple_memories() {
+        let db = AIDB::new(":memory:", 8).unwrap();
+        let conn = db.conn();
+
+        db.record("Alice loves Rust programming", "semantic",
+            0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        db.record("Bob prefers Python scripting", "semantic",
+            0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(0.5, 8)).unwrap();
+        db.record("Alice and Bob work on Rust projects", "episodic",
+            0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(0.3, 8)).unwrap();
+
+        // Search for "Rust" should match 2 memories
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH 'rust'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 2, "FTS5 should find 2 memories containing 'rust'");
+
+        // Search for "Alice" should match 2 memories
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH 'alice'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 2, "FTS5 should find 2 memories containing 'alice'");
+
+        // Search for "Python" should match 1
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH 'python'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

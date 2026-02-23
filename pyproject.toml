@@ -23,11 +23,24 @@ dev = [
     "pytest>=8.0.0",
     "pytest-benchmark>=4.0.0",
 ]
+sync = [
+    "websockets>=12.0",
+]
+langchain = [
+    "langchain-core>=0.2.0",
+]
+openai = [
+    "openai>=1.0.0",
+]
+crewai = [
+    "crewai>=0.40.0",
+]
 
 [project.scripts]
 aidb = "aidb.cli:main"
 aidb-mcp = "aidb.mcp:main"
 aidb-server = "aidb.api:main"
+aidb-sync = "aidb.sync.transport:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

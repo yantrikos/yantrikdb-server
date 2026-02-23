@@ -207,12 +207,20 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
         }
         "relate" => {
             materialize_relate(conn, &op.payload)?;
-            // V2: detect edge conflicts during sync
+            // Update graph index
             let src = op.payload["src"].as_str().unwrap_or_default();
             let dst = op.payload["dst"].as_str().unwrap_or_default();
             let rel_type = op.payload["rel_type"].as_str().unwrap_or_default();
+            let weight = op.payload["weight"].as_f64().unwrap_or(1.0);
             if !src.is_empty() && !dst.is_empty() {
-                // Detection errors are non-fatal
+                let mut gi = db.graph_index.borrow_mut();
+                let src_type = crate::graph::classify_entity_type(src);
+                let dst_type = crate::graph::classify_entity_type(dst);
+                gi.add_entity(src, src_type);
+                gi.add_entity(dst, dst_type);
+                gi.add_edge(src, dst, weight as f32);
+                drop(gi);
+                // V2: detect edge conflicts during sync
                 let _ = crate::conflict::detect_edge_conflicts(
                     db, src, dst, rel_type, op.target_rid.as_deref(),
                 );
@@ -220,11 +228,12 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
         }
         "forget" => {
             materialize_forget(conn, &op.payload)?;
-            // Remove from scoring cache + vec index
+            // Remove from scoring cache + vec index + graph index
             let rid = op.payload["rid"].as_str().unwrap_or_default();
             if !rid.is_empty() {
                 db.cache_remove(rid);
                 db.vec_index.borrow_mut().remove(rid);
+                db.graph_index.borrow_mut().unlink_memory(rid);
             }
         }
         "consolidate" => {
@@ -684,6 +693,19 @@ fn materialize_trigger_fire(
             origin_actor,
         ],
     )?;
+
+    // Dual-write to join table
+    if let Some(rids) = payload.get("source_rids").and_then(|v| v.as_array()) {
+        for rid_val in rids {
+            if let Some(rid) = rid_val.as_str() {
+                conn.execute(
+                    "INSERT OR IGNORE INTO trigger_source_rids (trigger_id, rid) VALUES (?1, ?2)",
+                    params![trigger_id, rid],
+                )?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -767,6 +789,29 @@ fn materialize_pattern(
             origin_actor,
         ],
     )?;
+
+    // Dual-write to join tables
+    if let Some(rids) = payload.get("evidence_rids").and_then(|v| v.as_array()) {
+        for rid_val in rids {
+            if let Some(rid) = rid_val.as_str() {
+                conn.execute(
+                    "INSERT OR IGNORE INTO pattern_evidence (pattern_id, rid) VALUES (?1, ?2)",
+                    params![pattern_id, rid],
+                )?;
+            }
+        }
+    }
+    if let Some(names) = payload.get("entity_names").and_then(|v| v.as_array()) {
+        for name_val in names {
+            if let Some(name) = name_val.as_str() {
+                conn.execute(
+                    "INSERT OR IGNORE INTO pattern_entities (pattern_id, entity_name) VALUES (?1, ?2)",
+                    params![pattern_id, name],
+                )?;
+            }
+        }
+    }
+
     Ok(())
 }
 

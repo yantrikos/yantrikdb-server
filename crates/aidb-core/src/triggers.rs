@@ -531,6 +531,14 @@ pub fn persist_trigger(db: &AIDB, trigger: &Trigger, ts: f64) -> Result<Option<S
         ],
     )?;
 
+    // Dual-write to join table
+    for rid in &trigger.source_rids {
+        conn.execute(
+            "INSERT OR IGNORE INTO trigger_source_rids (trigger_id, rid) VALUES (?1, ?2)",
+            params![trigger_id, rid],
+        )?;
+    }
+
     db.log_op(
         "trigger_fire",
         Some(&trigger_id),

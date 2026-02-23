@@ -240,6 +240,7 @@ class TestStats:
         expected_keys = {
             "active_memories", "consolidated_memories", "tombstoned_memories",
             "edges", "entities", "operations",
+            "open_conflicts", "resolved_conflicts",
         }
         assert set(s.keys()) == expected_keys
 

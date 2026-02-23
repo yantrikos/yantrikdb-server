@@ -76,6 +76,30 @@ pub fn stats_to_dict(py: Python<'_>, s: &aidb_core::Stats) -> PyResult<PyObject>
     dict.set_item("edges", s.edges)?;
     dict.set_item("entities", s.entities)?;
     dict.set_item("operations", s.operations)?;
+    dict.set_item("open_conflicts", s.open_conflicts)?;
+    dict.set_item("resolved_conflicts", s.resolved_conflicts)?;
+    Ok(dict.into())
+}
+
+/// Convert an aidb-core Conflict to a Python dict.
+pub fn conflict_to_dict(py: Python<'_>, c: &aidb_core::Conflict) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("conflict_id", &c.conflict_id)?;
+    dict.set_item("conflict_type", &c.conflict_type)?;
+    dict.set_item("priority", &c.priority)?;
+    dict.set_item("status", &c.status)?;
+    dict.set_item("memory_a", &c.memory_a)?;
+    dict.set_item("memory_b", &c.memory_b)?;
+    dict.set_item("entity", &c.entity)?;
+    dict.set_item("rel_type", &c.rel_type)?;
+    dict.set_item("detected_at", c.detected_at)?;
+    dict.set_item("detected_by", &c.detected_by)?;
+    dict.set_item("detection_reason", &c.detection_reason)?;
+    dict.set_item("resolved_at", c.resolved_at)?;
+    dict.set_item("resolved_by", &c.resolved_by)?;
+    dict.set_item("strategy", &c.strategy)?;
+    dict.set_item("winner_rid", &c.winner_rid)?;
+    dict.set_item("resolution_note", &c.resolution_note)?;
     Ok(dict.into())
 }
 

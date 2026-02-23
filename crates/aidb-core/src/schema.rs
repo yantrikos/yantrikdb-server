@@ -1,4 +1,4 @@
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 3;
 
 pub const SCHEMA_SQL: &str = "
 -- Memory records: the source of truth
@@ -49,20 +49,63 @@ CREATE TABLE IF NOT EXISTS entities (
     metadata TEXT DEFAULT '{}'
 );
 
--- Append-only operation log (future CRDT replication)
+-- Append-only operation log (CRDT replication)
 CREATE TABLE IF NOT EXISTS oplog (
     op_id TEXT PRIMARY KEY,              -- UUIDv7
     op_type TEXT NOT NULL,               -- record | relate | consolidate | decay | forget | update
     timestamp REAL NOT NULL,             -- when the operation occurred
     target_rid TEXT,                     -- primary memory affected
     payload TEXT NOT NULL DEFAULT '{}',  -- JSON: full operation details
-    actor_id TEXT DEFAULT 'local'        -- device/agent identifier
+    actor_id TEXT DEFAULT 'local',       -- device/agent identifier
+    hlc BLOB,                           -- hybrid logical clock timestamp (16 bytes)
+    embedding_hash BLOB,                -- BLAKE3 hash of embedding (if applicable)
+    origin_actor TEXT NOT NULL DEFAULT 'local', -- which device originally created this op
+    applied INTEGER NOT NULL DEFAULT 1  -- 1 = materialized locally, 0 = pending
 );
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- Peer tracking for delta sync
+CREATE TABLE IF NOT EXISTS sync_peers (
+    peer_actor TEXT PRIMARY KEY,
+    last_synced_hlc BLOB NOT NULL,
+    last_synced_op_id TEXT NOT NULL,
+    last_sync_time REAL NOT NULL
+);
+
+-- Consolidation membership (set-union CRDT)
+CREATE TABLE IF NOT EXISTS consolidation_members (
+    consolidation_rid TEXT NOT NULL,     -- the consolidated memory
+    source_rid TEXT NOT NULL,            -- original memory
+    hlc BLOB NOT NULL,                  -- when this consolidation happened
+    actor_id TEXT NOT NULL,             -- which device did it
+    PRIMARY KEY (consolidation_rid, source_rid)
+);
+
+-- Conflict tracking (first-class data)
+CREATE TABLE IF NOT EXISTS conflicts (
+    conflict_id TEXT PRIMARY KEY,           -- UUIDv7
+    conflict_type TEXT NOT NULL,            -- identity_fact | preference | temporal | consolidation | minor
+    priority TEXT NOT NULL DEFAULT 'medium',-- low | medium | high | critical
+    status TEXT NOT NULL DEFAULT 'open',    -- open | resolved | dismissed
+    memory_a TEXT NOT NULL,                 -- rid of first conflicting memory
+    memory_b TEXT NOT NULL,                 -- rid of second conflicting memory
+    entity TEXT,                            -- entity name (nullable)
+    rel_type TEXT,                          -- relationship type in conflict (nullable)
+    detected_at REAL NOT NULL,
+    detected_by TEXT NOT NULL,              -- actor_id that detected it
+    detection_reason TEXT NOT NULL,
+    resolved_at REAL,
+    resolved_by TEXT,
+    strategy TEXT,                          -- keep_a | keep_b | keep_both | merge | correct
+    winner_rid TEXT,
+    resolution_note TEXT,
+    hlc BLOB NOT NULL,
+    origin_actor TEXT NOT NULL
 );
 
 -- Indexes for common query patterns
@@ -75,5 +118,72 @@ CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_edges_rel ON edges(rel_type);
 CREATE INDEX IF NOT EXISTS idx_oplog_timestamp ON oplog(timestamp);
 CREATE INDEX IF NOT EXISTS idx_oplog_target ON oplog(target_rid);
+CREATE INDEX IF NOT EXISTS idx_oplog_hlc ON oplog(hlc);
+CREATE INDEX IF NOT EXISTS idx_oplog_actor ON oplog(origin_actor);
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
+CREATE INDEX IF NOT EXISTS idx_consolidation_source ON consolidation_members(source_rid);
+CREATE INDEX IF NOT EXISTS idx_conflicts_status ON conflicts(status);
+CREATE INDEX IF NOT EXISTS idx_conflicts_type ON conflicts(conflict_type);
+CREATE INDEX IF NOT EXISTS idx_conflicts_priority ON conflicts(priority);
+CREATE INDEX IF NOT EXISTS idx_conflicts_entity ON conflicts(entity);
+CREATE INDEX IF NOT EXISTS idx_conflicts_memory_a ON conflicts(memory_a);
+CREATE INDEX IF NOT EXISTS idx_conflicts_memory_b ON conflicts(memory_b);
+";
+
+/// SQL to migrate from schema V1 to V2.
+pub const MIGRATE_V1_TO_V2: &str = "
+ALTER TABLE oplog ADD COLUMN hlc BLOB;
+ALTER TABLE oplog ADD COLUMN embedding_hash BLOB;
+ALTER TABLE oplog ADD COLUMN origin_actor TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE oplog ADD COLUMN applied INTEGER NOT NULL DEFAULT 1;
+
+CREATE INDEX IF NOT EXISTS idx_oplog_hlc ON oplog(hlc);
+CREATE INDEX IF NOT EXISTS idx_oplog_actor ON oplog(origin_actor);
+
+CREATE TABLE IF NOT EXISTS sync_peers (
+    peer_actor TEXT PRIMARY KEY,
+    last_synced_hlc BLOB NOT NULL,
+    last_synced_op_id TEXT NOT NULL,
+    last_sync_time REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS consolidation_members (
+    consolidation_rid TEXT NOT NULL,
+    source_rid TEXT NOT NULL,
+    hlc BLOB NOT NULL,
+    actor_id TEXT NOT NULL,
+    PRIMARY KEY (consolidation_rid, source_rid)
+);
+CREATE INDEX IF NOT EXISTS idx_consolidation_source ON consolidation_members(source_rid);
+";
+
+/// SQL to migrate from schema V2 to V3.
+pub const MIGRATE_V2_TO_V3: &str = "
+CREATE TABLE IF NOT EXISTS conflicts (
+    conflict_id TEXT PRIMARY KEY,
+    conflict_type TEXT NOT NULL,
+    priority TEXT NOT NULL DEFAULT 'medium',
+    status TEXT NOT NULL DEFAULT 'open',
+    memory_a TEXT NOT NULL,
+    memory_b TEXT NOT NULL,
+    entity TEXT,
+    rel_type TEXT,
+    detected_at REAL NOT NULL,
+    detected_by TEXT NOT NULL,
+    detection_reason TEXT NOT NULL,
+    resolved_at REAL,
+    resolved_by TEXT,
+    strategy TEXT,
+    winner_rid TEXT,
+    resolution_note TEXT,
+    hlc BLOB NOT NULL,
+    origin_actor TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conflicts_status ON conflicts(status);
+CREATE INDEX IF NOT EXISTS idx_conflicts_type ON conflicts(conflict_type);
+CREATE INDEX IF NOT EXISTS idx_conflicts_priority ON conflicts(priority);
+CREATE INDEX IF NOT EXISTS idx_conflicts_entity ON conflicts(entity);
+CREATE INDEX IF NOT EXISTS idx_conflicts_memory_a ON conflicts(memory_a);
+CREATE INDEX IF NOT EXISTS idx_conflicts_memory_b ON conflicts(memory_b);
 ";

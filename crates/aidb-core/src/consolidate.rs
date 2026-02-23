@@ -1,6 +1,6 @@
 use crate::engine::AIDB;
 use crate::error::Result;
-use crate::serde_helpers::deserialize_f32;
+use crate::serde_helpers::{deserialize_f32, serialize_f32};
 use crate::types::*;
 
 /// Compute cosine similarity between two vectors.
@@ -268,9 +268,20 @@ pub fn consolidate(
             }
         }
 
-        // 6. Mark source memories as consolidated
+        // 6. Insert consolidation_members (set-union CRDT) and mark sources
         let conn = db.conn();
+        let hlc_ts = db.tick_hlc();
+        let hlc_bytes = hlc_ts.to_bytes().to_vec();
+        let actor_id = db.actor_id().to_string();
+
         for source_rid in &source_rids {
+            conn.execute(
+                "INSERT OR IGNORE INTO consolidation_members \
+                 (consolidation_rid, source_rid, hlc, actor_id) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![consolidated_rid, source_rid, hlc_bytes, actor_id],
+            )?;
+
             conn.execute(
                 "UPDATE memories \
                  SET consolidation_status = 'consolidated', \
@@ -283,14 +294,22 @@ pub fn consolidate(
         }
 
         // 7. Log the operation
+        let emb_hash = blake3::hash(&serialize_f32(&mean_emb)).as_bytes().to_vec();
         db.log_op(
             "consolidate",
             Some(&consolidated_rid),
             &serde_json::json!({
+                "consolidated_rid": consolidated_rid,
                 "source_rids": source_rids,
                 "cluster_size": cluster.len(),
+                "text": summary_text,
+                "importance": consolidated_importance,
+                "valence": mean_valence,
+                "half_life": consolidated_half_life,
+                "metadata": meta,
                 "summary_preview": &summary_text[..summary_text.len().min(200)],
             }),
+            Some(&emb_hash),
         )?;
 
         results.push(serde_json::json!({

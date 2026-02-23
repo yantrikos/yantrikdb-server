@@ -60,6 +60,8 @@ pub struct Stats {
     pub edges: i64,
     pub entities: i64,
     pub operations: i64,
+    pub open_conflicts: i64,
+    pub resolved_conflicts: i64,
 }
 
 /// A proactive trigger.
@@ -117,4 +119,87 @@ pub struct DecayedMemory {
     pub original_importance: f64,
     pub current_score: f64,
     pub days_since_access: f64,
+}
+
+// ── Conflict types (V2) ──
+
+/// The type of semantic conflict between two memories.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConflictType {
+    IdentityFact,
+    Preference,
+    Temporal,
+    Consolidation,
+    Minor,
+}
+
+impl ConflictType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConflictType::IdentityFact => "identity_fact",
+            ConflictType::Preference => "preference",
+            ConflictType::Temporal => "temporal",
+            ConflictType::Consolidation => "consolidation",
+            ConflictType::Minor => "minor",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "identity_fact" => ConflictType::IdentityFact,
+            "preference" => ConflictType::Preference,
+            "temporal" => ConflictType::Temporal,
+            "consolidation" => ConflictType::Consolidation,
+            _ => ConflictType::Minor,
+        }
+    }
+
+    pub fn default_priority(&self) -> &'static str {
+        match self {
+            ConflictType::IdentityFact => "critical",
+            ConflictType::Preference => "high",
+            ConflictType::Temporal => "high",
+            ConflictType::Consolidation => "medium",
+            ConflictType::Minor => "low",
+        }
+    }
+}
+
+/// A conflict between two memories.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Conflict {
+    pub conflict_id: String,
+    pub conflict_type: String,
+    pub priority: String,
+    pub status: String,
+    pub memory_a: String,
+    pub memory_b: String,
+    pub entity: Option<String>,
+    pub rel_type: Option<String>,
+    pub detected_at: f64,
+    pub detected_by: String,
+    pub detection_reason: String,
+    pub resolved_at: Option<f64>,
+    pub resolved_by: Option<String>,
+    pub strategy: Option<String>,
+    pub winner_rid: Option<String>,
+    pub resolution_note: Option<String>,
+}
+
+/// Result of a conflict resolution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictResolutionResult {
+    pub conflict_id: String,
+    pub strategy: String,
+    pub winner_rid: Option<String>,
+    pub loser_tombstoned: bool,
+    pub new_memory_rid: Option<String>,
+}
+
+/// Result of a user-initiated correction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrectionResult {
+    pub original_rid: String,
+    pub corrected_rid: String,
+    pub original_tombstoned: bool,
 }

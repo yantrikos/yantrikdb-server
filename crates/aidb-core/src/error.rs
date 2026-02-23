@@ -16,6 +16,12 @@ pub enum AidbError {
 
     #[error("memory not found: {0}")]
     NotFound(String),
+
+    #[error("sync error: {0}")]
+    SyncError(String),
+
+    #[error("invalid HLC timestamp: {0}")]
+    HlcParseError(String),
 }
 
 pub type Result<T> = std::result::Result<T, AidbError>;

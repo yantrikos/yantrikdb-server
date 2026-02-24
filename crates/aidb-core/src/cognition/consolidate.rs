@@ -335,7 +335,7 @@ pub fn consolidate(
                 "valence": mean_valence,
                 "half_life": consolidated_half_life,
                 "metadata": meta,
-                "summary_preview": &summary_text[..summary_text.len().min(200)],
+                "summary_preview": &summary_text[..summary_text.floor_char_boundary(200)],
             }),
             Some(&emb_hash),
         )?;

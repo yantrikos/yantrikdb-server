@@ -45,6 +45,8 @@ const TECH_BLOCKLIST: &[&str] = &[
 ];
 
 /// Classify an entity name into a type: "person", "tech", or "unknown".
+/// This is a name-only heuristic — prefer `classify_with_relationship()` when
+/// relationship context is available.
 pub fn classify_entity_type(name: &str) -> &'static str {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -62,15 +64,73 @@ pub fn classify_entity_type(name: &str) -> &'static str {
         return "tech";
     }
 
-    // Single word, title-case, not in tech blocklist → person
-    if !trimmed.contains(' ')
-        && trimmed.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-        && trimmed.chars().skip(1).all(|c| c.is_lowercase() || !c.is_alphabetic())
-    {
-        return "person";
+    // Multi-word title-case (e.g., "Priya Sharma", "Sarah Chen") → likely person
+    if trimmed.contains(' ') {
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        if words.len() == 2
+            && words
+                .iter()
+                .all(|w| w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+        {
+            return "person";
+        }
     }
 
+    // Single-word classification is unreliable (Bangalore, Flipkart, Arjun all
+    // look the same). Return "unknown" and let relationship context decide.
     "unknown"
+}
+
+/// Relationship types that imply both src and dst are persons.
+const PERSON_PERSON_RELS: &[&str] = &[
+    "married_to", "mother_of", "father_of", "daughter_of", "son_of",
+    "sister_of", "brother_of", "sibling_of", "parent_of", "child_of",
+    "knows", "friends_with", "met", "dating", "engaged_to",
+    "mentors", "mentored_by", "reports_to", "manages",
+    "colleagues", "roommate", "neighbor",
+    "called", "texted", "messaged", "date_night",
+];
+
+/// Relationship types where dst is a place.
+const PLACE_DST_RELS: &[&str] = &[
+    "lives_in", "born_in", "grew_up_in", "located_in", "based_in",
+    "visited", "moved_to", "traveled_to", "from",
+];
+
+/// Relationship types where dst is an organization / institution.
+const ORG_DST_RELS: &[&str] = &[
+    "works_at", "works_for", "employed_at", "employed_by",
+    "studied_at", "attended", "enrolled_in", "graduated_from",
+    "member_of", "belongs_to", "founded",
+];
+
+/// Classify entity types using relationship semantics.
+/// Returns (src_type, dst_type) — either may be "unknown" if not inferable.
+pub fn classify_with_relationship(
+    src: &str,
+    dst: &str,
+    rel_type: &str,
+) -> (&'static str, &'static str) {
+    let rel_lower = rel_type.to_lowercase();
+    let rel = rel_lower.as_str();
+
+    // Person-person relationships
+    if PERSON_PERSON_RELS.contains(&rel) {
+        return ("person", "person");
+    }
+
+    // Person → Place relationships
+    if PLACE_DST_RELS.contains(&rel) {
+        return ("person", "place");
+    }
+
+    // Person → Organization relationships
+    if ORG_DST_RELS.contains(&rel) {
+        return ("person", "organization");
+    }
+
+    // Fall back to name-based heuristics
+    (classify_entity_type(src), classify_entity_type(dst))
 }
 
 /// Given a set of memory RIDs, find all entities those memories are linked to.
@@ -352,10 +412,18 @@ mod tests {
     // ── Entity type classification tests ──
 
     #[test]
-    fn test_classify_person() {
-        assert_eq!(classify_entity_type("Sarah"), "person");
-        assert_eq!(classify_entity_type("Mike"), "person");
-        assert_eq!(classify_entity_type("Tom"), "person");
+    fn test_classify_name_only_ambiguous() {
+        // Single-word title-case is now "unknown" without relationship context
+        assert_eq!(classify_entity_type("Sarah"), "unknown");
+        assert_eq!(classify_entity_type("Bangalore"), "unknown");
+        assert_eq!(classify_entity_type("Flipkart"), "unknown");
+    }
+
+    #[test]
+    fn test_classify_name_multi_word_person() {
+        // Multi-word title-case full names are still "person"
+        assert_eq!(classify_entity_type("Sarah Chen"), "person");
+        assert_eq!(classify_entity_type("Priya Sharma"), "person");
     }
 
     #[test]
@@ -377,5 +445,36 @@ mod tests {
         assert_eq!(classify_entity_type("recommendation engine"), "unknown");
         assert_eq!(classify_entity_type("data pipeline"), "unknown");
         assert_eq!(classify_entity_type("sleep patterns"), "unknown");
+    }
+
+    // ── Relationship-based classification tests ──
+
+    #[test]
+    fn test_classify_with_rel_person_person() {
+        let (s, d) = classify_with_relationship("Arjun", "Priya", "married_to");
+        assert_eq!(s, "person");
+        assert_eq!(d, "person");
+    }
+
+    #[test]
+    fn test_classify_with_rel_person_place() {
+        let (s, d) = classify_with_relationship("Priya", "Bangalore", "lives_in");
+        assert_eq!(s, "person");
+        assert_eq!(d, "place");
+    }
+
+    #[test]
+    fn test_classify_with_rel_person_org() {
+        let (s, d) = classify_with_relationship("Priya", "Flipkart", "works_at");
+        assert_eq!(s, "person");
+        assert_eq!(d, "organization");
+    }
+
+    #[test]
+    fn test_classify_with_rel_fallback() {
+        // Unknown relationship → falls back to name heuristics
+        let (s, d) = classify_with_relationship("FAISS", "data pipeline", "uses");
+        assert_eq!(s, "tech");
+        assert_eq!(d, "unknown");
     }
 }

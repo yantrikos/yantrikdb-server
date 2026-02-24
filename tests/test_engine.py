@@ -14,9 +14,16 @@ DIM = 8  # tiny embeddings for fast tests
 
 
 def _vec(seed: float) -> list[float]:
-    """Generate a deterministic unit-ish vector from a seed."""
-    raw = [(seed + i) * 0.1 for i in range(DIM)]
+    """Generate a deterministic unit vector with good angular diversity.
+
+    Uses a hash-like scramble so that _vec(0), _vec(1), ... are spread
+    across the unit sphere rather than nearly parallel.
+    """
+    raw = [math.sin(seed * 1.7 + i * 2.3) + math.cos(seed * 0.3 + i * 3.1) for i in range(DIM)]
     norm = math.sqrt(sum(x * x for x in raw))
+    if norm < 1e-9:
+        raw[0] = 1.0
+        norm = 1.0
     return [x / norm for x in raw]
 
 

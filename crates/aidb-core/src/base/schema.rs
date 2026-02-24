@@ -1,4 +1,4 @@
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 pub const SCHEMA_SQL: &str = "
 -- Memory records: the source of truth
@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS memories (
     importance REAL NOT NULL DEFAULT 0.5,  -- base importance I0 [0, 1]
     half_life REAL NOT NULL DEFAULT 604800.0, -- seconds (default: 7 days)
     last_access REAL NOT NULL,            -- unix timestamp of last recall/reinforce
+    access_count INTEGER NOT NULL DEFAULT 0, -- number of times retrieved via recall
     valence REAL NOT NULL DEFAULT 0.0,    -- emotional weight [-1, 1]
 
     -- Consolidation tracking
@@ -158,6 +159,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_consolidation ON memories(consolidation_status);
 CREATE INDEX IF NOT EXISTS idx_memories_storage_tier ON memories(storage_tier);
 CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);
+CREATE INDEX IF NOT EXISTS idx_memories_access_count ON memories(access_count);
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src);
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_edges_rel ON edges(rel_type);
@@ -411,4 +413,10 @@ INSERT OR IGNORE INTO pattern_entities (pattern_id, entity_name)
 pub const MIGRATE_V7_TO_V8: &str = "
 ALTER TABLE memories ADD COLUMN namespace TEXT NOT NULL DEFAULT 'default';
 CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);
+";
+
+/// SQL to migrate from schema V8 to V9.
+pub const MIGRATE_V8_TO_V9: &str = "
+ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_memories_access_count ON memories(access_count);
 ";

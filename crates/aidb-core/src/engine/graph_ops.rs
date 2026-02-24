@@ -25,9 +25,12 @@ impl AIDB {
             params![edge_id, src, dst, rel_type, weight, ts],
         )?;
 
+        // Classify entity types using relationship semantics
+        let (src_type, dst_type) =
+            crate::graph::classify_with_relationship(src, dst, rel_type);
+
         // Ensure entities exist with classified entity_type
-        for entity in [src, dst] {
-            let etype = crate::graph::classify_entity_type(entity);
+        for (entity, etype) in [(src, src_type), (dst, dst_type)] {
             self.conn.execute(
                 "INSERT INTO entities (name, entity_type, first_seen, last_seen) \
                  VALUES (?1, ?2, ?3, ?4) \
@@ -40,8 +43,6 @@ impl AIDB {
         // Update in-memory graph index
         {
             let mut gi = self.graph_index.borrow_mut();
-            let src_type = crate::graph::classify_entity_type(src);
-            let dst_type = crate::graph::classify_entity_type(dst);
             gi.add_entity(src, src_type);
             gi.add_entity(dst, dst_type);
             gi.add_edge(src, dst, weight as f32);

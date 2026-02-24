@@ -199,6 +199,7 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
                     importance: op.payload["importance"].as_f64().unwrap_or(0.5),
                     half_life: op.payload["half_life"].as_f64().unwrap_or(604800.0),
                     last_access: op.payload["created_at"].as_f64().unwrap_or(0.0),
+                    access_count: 0,
                     valence: op.payload["valence"].as_f64().unwrap_or(0.0),
                     consolidation_status: "active".to_string(),
                     memory_type: op.payload["type"].as_str().unwrap_or("episodic").to_string(),
@@ -215,8 +216,8 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
             let weight = op.payload["weight"].as_f64().unwrap_or(1.0);
             if !src.is_empty() && !dst.is_empty() {
                 let mut gi = db.graph_index.borrow_mut();
-                let src_type = crate::graph::classify_entity_type(src);
-                let dst_type = crate::graph::classify_entity_type(dst);
+                let (src_type, dst_type) =
+                    crate::graph::classify_with_relationship(src, dst, rel_type);
                 gi.add_entity(src, src_type);
                 gi.add_entity(dst, dst_type);
                 gi.add_edge(src, dst, weight as f32);
@@ -248,6 +249,7 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
                     importance: op.payload["importance"].as_f64().unwrap_or(0.5),
                     half_life: op.payload["half_life"].as_f64().unwrap_or(604800.0),
                     last_access: op.timestamp,
+                    access_count: 0,
                     valence: op.payload["valence"].as_f64().unwrap_or(0.0),
                     consolidation_status: "active".to_string(),
                     memory_type: "semantic".to_string(),
@@ -284,6 +286,7 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
                     importance: op.payload["importance"].as_f64().unwrap_or(0.5),
                     half_life: op.payload["half_life"].as_f64().unwrap_or(604800.0),
                     last_access: op.payload["created_at"].as_f64().unwrap_or(0.0),
+                    access_count: 0,
                     valence: op.payload["valence"].as_f64().unwrap_or(0.0),
                     consolidation_status: "active".to_string(),
                     memory_type: op.payload["type"].as_str().unwrap_or("episodic").to_string(),

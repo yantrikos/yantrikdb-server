@@ -27,7 +27,8 @@ use crate::hlc::{HLCTimestamp, HLC};
 use crate::hnsw::HnswIndex;
 use crate::schema::{
     MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, MIGRATE_V3_TO_V4, MIGRATE_V4_TO_V5,
-    MIGRATE_V5_TO_V6, MIGRATE_V6_TO_V7, SCHEMA_SQL, SCHEMA_VERSION,
+    MIGRATE_V5_TO_V6, MIGRATE_V6_TO_V7, MIGRATE_V7_TO_V8, MIGRATE_V8_TO_V9,
+    SCHEMA_SQL, SCHEMA_VERSION,
 };
 use crate::types::*;
 
@@ -95,33 +96,23 @@ impl AIDB {
         // Check existing schema version for migration
         let existing_version = Self::get_schema_version(&conn);
 
-        if existing_version == Some(1) {
-            conn.execute_batch(MIGRATE_V1_TO_V2)?;
-            conn.execute_batch(MIGRATE_V2_TO_V3)?;
-            conn.execute_batch(MIGRATE_V3_TO_V4)?;
-            conn.execute_batch(MIGRATE_V4_TO_V5)?;
-            conn.execute_batch(MIGRATE_V5_TO_V6)?;
-            conn.execute_batch(MIGRATE_V6_TO_V7)?;
-        } else if existing_version == Some(2) {
-            conn.execute_batch(MIGRATE_V2_TO_V3)?;
-            conn.execute_batch(MIGRATE_V3_TO_V4)?;
-            conn.execute_batch(MIGRATE_V4_TO_V5)?;
-            conn.execute_batch(MIGRATE_V5_TO_V6)?;
-            conn.execute_batch(MIGRATE_V6_TO_V7)?;
-        } else if existing_version == Some(3) {
-            conn.execute_batch(MIGRATE_V3_TO_V4)?;
-            conn.execute_batch(MIGRATE_V4_TO_V5)?;
-            conn.execute_batch(MIGRATE_V5_TO_V6)?;
-            conn.execute_batch(MIGRATE_V6_TO_V7)?;
-        } else if existing_version == Some(4) {
-            conn.execute_batch(MIGRATE_V4_TO_V5)?;
-            conn.execute_batch(MIGRATE_V5_TO_V6)?;
-            conn.execute_batch(MIGRATE_V6_TO_V7)?;
-        } else if existing_version == Some(5) {
-            conn.execute_batch(MIGRATE_V5_TO_V6)?;
-            conn.execute_batch(MIGRATE_V6_TO_V7)?;
-        } else if existing_version == Some(6) {
-            conn.execute_batch(MIGRATE_V6_TO_V7)?;
+        // Sequential migration chain — each version cascades.
+        let migrations: &[(i32, &str)] = &[
+            (1, MIGRATE_V1_TO_V2),
+            (2, MIGRATE_V2_TO_V3),
+            (3, MIGRATE_V3_TO_V4),
+            (4, MIGRATE_V4_TO_V5),
+            (5, MIGRATE_V5_TO_V6),
+            (6, MIGRATE_V6_TO_V7),
+            (7, MIGRATE_V7_TO_V8),
+            (8, MIGRATE_V8_TO_V9),
+        ];
+        if let Some(v) = existing_version {
+            for &(from_v, sql) in migrations {
+                if v <= from_v {
+                    conn.execute_batch(sql)?;
+                }
+            }
         }
 
         conn.execute_batch(SCHEMA_SQL)?;

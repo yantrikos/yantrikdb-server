@@ -24,6 +24,7 @@ impl AIDB {
                 row.get::<_, f64>("valence")?,
                 row.get::<_, f64>("half_life")?,
                 row.get::<_, f64>("last_access")?,
+                row.get::<_, i64>("access_count")?,
                 row.get::<_, String>("consolidation_status")?,
                 row.get::<_, String>("storage_tier")?,
                 row.get::<_, Option<String>>("consolidated_into")?,
@@ -35,7 +36,7 @@ impl AIDB {
         match result {
             Ok(row) => {
                 let text = self.decrypt_text(&row.2)?;
-                let meta_str = self.decrypt_text(&row.11)?;
+                let meta_str = self.decrypt_text(&row.12)?;
                 let metadata: serde_json::Value = serde_json::from_str(&meta_str)
                     .unwrap_or(serde_json::Value::Object(Default::default()));
                 Ok(Some(Memory {
@@ -47,11 +48,12 @@ impl AIDB {
                     valence: row.5,
                     half_life: row.6,
                     last_access: row.7,
-                    consolidation_status: row.8,
-                    storage_tier: row.9,
-                    consolidated_into: row.10,
+                    access_count: row.8 as u32,
+                    consolidation_status: row.9,
+                    storage_tier: row.10,
+                    consolidated_into: row.11,
                     metadata,
-                    namespace: row.12,
+                    namespace: row.13,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),

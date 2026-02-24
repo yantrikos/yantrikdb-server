@@ -236,7 +236,10 @@ impl GraphIndex {
         for &eid in entity_ids {
             let name = &self.id_to_entity[eid as usize];
             if let Some(&(hops, weight)) = expanded_entities.get(name) {
-                let prox = weight / f64::powf(2.0, hops as f64);
+                // Sharper decay: 4^hops so 1-hop connections contribute much less
+                // than direct (0-hop) connections. Prevents graph over-expansion
+                // where high-importance memories leak in through distant neighbors.
+                let prox = weight / f64::powf(4.0, hops as f64);
                 if prox > max_prox {
                     max_prox = prox;
                 }
@@ -293,6 +296,23 @@ impl GraphIndex {
             }
         }
         matches
+    }
+
+    /// Get the type of a single entity by name. O(1).
+    pub fn entity_type(&self, name: &str) -> Option<&str> {
+        self.entity_to_id
+            .get(name)
+            .map(|&id| self.entity_types[id as usize].as_str())
+    }
+
+    /// Get all entity names of a given type (e.g., "person", "tech").
+    pub fn entities_by_type(&self, entity_type: &str) -> Vec<String> {
+        self.entity_types
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.as_str() == entity_type)
+            .map(|(i, _)| self.id_to_entity[i].clone())
+            .collect()
     }
 
     /// Number of entities in the index.
@@ -526,6 +546,28 @@ mod tests {
         assert_eq!(idx.link_count(), 0);
         assert!(idx.entities_for_memory("mem1").is_empty());
         assert!(idx.memories_for_entities(&["Alice"]).is_empty());
+    }
+
+    #[test]
+    fn test_entities_by_type() {
+        // Test with manually typed entities (deterministic)
+        let mut idx = GraphIndex::new();
+        idx.add_entity("Alice", "person");
+        idx.add_entity("Bob", "person");
+        idx.add_entity("FAISS", "tech");
+        idx.add_entity("ProjectX", "project");
+
+        let persons = idx.entities_by_type("person");
+        assert_eq!(persons.len(), 2);
+        assert!(persons.contains(&"Alice".to_string()));
+        assert!(persons.contains(&"Bob".to_string()));
+
+        let techs = idx.entities_by_type("tech");
+        assert_eq!(techs.len(), 1);
+        assert!(techs.contains(&"FAISS".to_string()));
+
+        let empty = idx.entities_by_type("nonexistent");
+        assert!(empty.is_empty());
     }
 
     #[test]

@@ -122,8 +122,10 @@ pub struct HnswIndex {
 
 impl HnswIndex {
     /// Create a new HNSW index with default parameters.
+    ///
+    /// ef_search=200 ensures good recall quality for indices up to ~100K entries.
     pub fn new(dim: usize) -> Self {
-        Self::with_params(dim, 16, 200, 50)
+        Self::with_params(dim, 16, 200, 200)
     }
 
     /// Create a new HNSW index with custom parameters.
@@ -308,7 +310,9 @@ impl HnswIndex {
         }
 
         // Phase 2: Search layer 0 with ef_search candidates
-        let nearest = self.search_layer(query, &[current_ep], self.ef_search, 0, None);
+        // Ensure ef >= k so we can return enough results; also respect configured ef_search.
+        let ef = self.ef_search.max(k * 2);
+        let nearest = self.search_layer(query, &[current_ep], ef, 0, None);
 
         // Return top-k non-tombstoned results
         let mut results: Vec<(String, f64)> = Vec::with_capacity(k);

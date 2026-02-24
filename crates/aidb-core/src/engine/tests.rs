@@ -411,15 +411,34 @@ fn test_stats_include_triggers_and_patterns() {
 #[test]
 fn test_entity_type_stored_on_relate() {
     let db = AIDB::new(":memory:", 8).unwrap();
-    db.relate("Sarah", "data pipeline", "leads", 1.0).unwrap();
+    // "knows" is a person-person relationship
+    db.relate("Sarah", "Mike", "knows", 1.0).unwrap();
+    // "works_at" → src=person, dst=organization
+    db.relate("Sarah", "Flipkart", "works_at", 1.0).unwrap();
+    // "lives_in" → src=person, dst=place
+    db.relate("Sarah", "Bangalore", "lives_in", 1.0).unwrap();
+    // Tech blocklist still works
     db.relate("FAISS", "recommendation engine", "used_in", 1.0).unwrap();
-    db.relate("Mike", "ONNX", "built_with", 1.0).unwrap();
 
-    // Sarah → person, FAISS → tech, data pipeline → unknown, Mike → person, ONNX → tech
     let etype: String = db.conn.query_row(
         "SELECT entity_type FROM entities WHERE name = 'Sarah'", [], |r| r.get(0),
     ).unwrap();
     assert_eq!(etype, "person");
+
+    let etype: String = db.conn.query_row(
+        "SELECT entity_type FROM entities WHERE name = 'Mike'", [], |r| r.get(0),
+    ).unwrap();
+    assert_eq!(etype, "person");
+
+    let etype: String = db.conn.query_row(
+        "SELECT entity_type FROM entities WHERE name = 'Flipkart'", [], |r| r.get(0),
+    ).unwrap();
+    assert_eq!(etype, "organization");
+
+    let etype: String = db.conn.query_row(
+        "SELECT entity_type FROM entities WHERE name = 'Bangalore'", [], |r| r.get(0),
+    ).unwrap();
+    assert_eq!(etype, "place");
 
     let etype: String = db.conn.query_row(
         "SELECT entity_type FROM entities WHERE name = 'FAISS'", [], |r| r.get(0),
@@ -427,14 +446,9 @@ fn test_entity_type_stored_on_relate() {
     assert_eq!(etype, "tech");
 
     let etype: String = db.conn.query_row(
-        "SELECT entity_type FROM entities WHERE name = 'data pipeline'", [], |r| r.get(0),
+        "SELECT entity_type FROM entities WHERE name = 'recommendation engine'", [], |r| r.get(0),
     ).unwrap();
     assert_eq!(etype, "unknown");
-
-    let etype: String = db.conn.query_row(
-        "SELECT entity_type FROM entities WHERE name = 'Mike'", [], |r| r.get(0),
-    ).unwrap();
-    assert_eq!(etype, "person");
 }
 
 #[test]
@@ -652,11 +666,11 @@ fn test_schema_v7_has_fts5_and_join_tables() {
         "SELECT COUNT(*) FROM pattern_entities", [], |row| row.get(0),
     ).unwrap();
 
-    // Schema version is 8
+    // Schema version is 9
     let ver: String = conn.query_row(
         "SELECT value FROM meta WHERE key = 'schema_version'", [], |row| row.get(0),
     ).unwrap();
-    assert_eq!(ver, "8");
+    assert_eq!(ver, "9");
 }
 
 #[test]

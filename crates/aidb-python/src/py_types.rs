@@ -12,6 +12,7 @@ pub fn memory_to_dict(py: Python<'_>, mem: &aidb_core::Memory) -> PyResult<PyObj
     dict.set_item("valence", mem.valence)?;
     dict.set_item("half_life", mem.half_life)?;
     dict.set_item("last_access", mem.last_access)?;
+    dict.set_item("access_count", mem.access_count)?;
     dict.set_item("consolidation_status", &mem.consolidation_status)?;
     dict.set_item("storage_tier", &mem.storage_tier)?;
     dict.set_item("consolidated_into", &mem.consolidated_into)?;

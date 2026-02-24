@@ -12,7 +12,7 @@ impl AIDB {
     ) -> Result<HashMap<String, ScoringRow>> {
         let mut stmt = conn.prepare(
             "SELECT rid, created_at, importance, half_life, last_access, \
-             valence, consolidation_status, type, namespace \
+             valence, consolidation_status, type, namespace, access_count \
              FROM memories \
              WHERE consolidation_status != 'tombstoned'",
         )?;
@@ -29,6 +29,7 @@ impl AIDB {
                     consolidation_status: row.get(6)?,
                     memory_type: row.get(7)?,
                     namespace: row.get(8)?,
+                    access_count: row.get::<_, i64>(9)? as u32,
                 },
             ))
         })?;

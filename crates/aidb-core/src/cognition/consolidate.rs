@@ -137,7 +137,7 @@ pub fn find_consolidation_candidates(
     let conn = db.conn();
     let mut stmt = conn.prepare(
         "SELECT rid, type, text, embedding, created_at, importance, valence, \
-         half_life, last_access, metadata \
+         half_life, last_access, metadata, namespace \
          FROM memories \
          WHERE consolidation_status = 'active' \
          AND storage_tier = 'hot' \
@@ -160,22 +160,31 @@ pub fn find_consolidation_candidates(
                 last_access: row.get("last_access")?,
                 metadata: serde_json::from_str(&meta_str)
                     .unwrap_or(serde_json::Value::Object(Default::default())),
+                namespace: row.get("namespace")?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let cluster_indices = find_clusters(
-        &memories,
-        sim_threshold,
-        time_window_days,
-        min_cluster_size,
-        10,
-    );
+    // Group memories by namespace to prevent cross-namespace consolidation
+    let mut by_namespace: std::collections::HashMap<String, Vec<MemoryWithEmbedding>> =
+        std::collections::HashMap::new();
+    for mem in memories {
+        by_namespace.entry(mem.namespace.clone()).or_default().push(mem);
+    }
 
-    let result = cluster_indices
-        .into_iter()
-        .map(|indices| indices.into_iter().map(|i| memories[i].clone()).collect())
-        .collect();
+    let mut result: Vec<Vec<MemoryWithEmbedding>> = Vec::new();
+    for (_ns, ns_memories) in by_namespace {
+        let cluster_indices = find_clusters(
+            &ns_memories,
+            sim_threshold,
+            time_window_days,
+            min_cluster_size,
+            10,
+        );
+        for indices in cluster_indices {
+            result.push(indices.into_iter().map(|i| ns_memories[i].clone()).collect());
+        }
+    }
 
     Ok(result)
 }
@@ -244,6 +253,7 @@ pub fn consolidate(
             "consolidation_time": ts,
         });
 
+        let cluster_namespace = cluster.first().map(|m| m.namespace.as_str()).unwrap_or("default");
         let consolidated_rid = db.record(
             &summary_text,
             "semantic",
@@ -252,6 +262,7 @@ pub fn consolidate(
             consolidated_half_life,
             &meta,
             &mean_emb,
+            cluster_namespace,
         )?;
 
         // 5. Transfer entity relationships
@@ -344,6 +355,7 @@ mod tests {
             half_life: 604800.0,
             last_access: created_at,
             metadata: serde_json::json!({}),
+            namespace: "default".to_string(),
         }
     }
 

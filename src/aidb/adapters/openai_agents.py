@@ -49,6 +49,10 @@ def get_tools() -> list[dict]:
                             "type": "object",
                             "description": "Optional key-value metadata.",
                         },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Memory namespace for isolation. Default: default.",
+                        },
                     },
                     "required": ["text"],
                 },
@@ -73,6 +77,10 @@ def get_tools() -> list[dict]:
                         "memory_type": {
                             "type": "string",
                             "description": "Filter by type.",
+                        },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Filter by namespace. Omit for all.",
                         },
                     },
                     "required": ["query"],
@@ -147,7 +155,15 @@ def get_tools() -> list[dict]:
             "function": {
                 "name": "memory_stats",
                 "description": "Get memory engine statistics.",
-                "parameters": {"type": "object", "properties": {}},
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "namespace": {
+                            "type": "string",
+                            "description": "Filter stats to a namespace. Omit for global.",
+                        },
+                    },
+                },
             },
         },
     ]
@@ -171,6 +187,7 @@ def handle_tool_call(db: Any, name: str, arguments: dict) -> Any:
             importance=arguments.get("importance", 0.5),
             valence=arguments.get("valence", 0.0),
             metadata=arguments.get("metadata"),
+            namespace=arguments.get("namespace", "default"),
         )
         return {"rid": rid}
 
@@ -179,6 +196,7 @@ def handle_tool_call(db: Any, name: str, arguments: dict) -> Any:
             query=arguments["query"],
             top_k=arguments.get("top_k", 10),
             memory_type=arguments.get("memory_type"),
+            namespace=arguments.get("namespace"),
         )
         return {"memories": results}
 
@@ -200,7 +218,7 @@ def handle_tool_call(db: Any, name: str, arguments: dict) -> Any:
         return {"edges": edges}
 
     elif name == "memory_stats":
-        return db.stats()
+        return db.stats(namespace=arguments.get("namespace"))
 
     else:
         raise ValueError(f"Unknown tool: {name}")

@@ -9,6 +9,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 aidb-core = { path = "../aidb-core" }
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.23", features = ["extension-module", "multiple-pymethods"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"

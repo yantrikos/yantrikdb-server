@@ -494,3 +494,80 @@ class TestStorageTier:
             mem = db.get(rid)
             assert mem is not None
             assert mem["storage_tier"] == "hot"
+
+
+# ── Namespace Tests ──────────────────────────────────────
+
+class TestNamespace:
+    def test_default_namespace(self, db):
+        """Records without explicit namespace go to 'default'."""
+        rid = db.record("default ns", embedding=_vec(1.0))
+        mem = db.get(rid)
+        assert mem["namespace"] == "default"
+
+    def test_explicit_namespace(self, db):
+        """Records with explicit namespace are stored correctly."""
+        rid = db.record("agent-1 mem", embedding=_vec(1.0), namespace="agent-1")
+        mem = db.get(rid)
+        assert mem["namespace"] == "agent-1"
+
+    def test_recall_isolation(self, db):
+        """Recall with namespace filter only returns memories from that namespace."""
+        db.record("shared fact", embedding=_vec(1.0), namespace="ns-a")
+        db.record("private fact", embedding=_vec(1.1), namespace="ns-b")
+        db.record("another a", embedding=_vec(1.2), namespace="ns-a")
+
+        results_a = db.recall(query_embedding=_vec(1.0), top_k=10, namespace="ns-a", skip_reinforce=True)
+        assert len(results_a) == 2
+        assert all(r["namespace"] == "ns-a" for r in results_a)
+
+        results_b = db.recall(query_embedding=_vec(1.0), top_k=10, namespace="ns-b", skip_reinforce=True)
+        assert len(results_b) == 1
+        assert results_b[0]["namespace"] == "ns-b"
+
+    def test_recall_no_namespace_returns_all(self, db):
+        """Recall without namespace filter returns memories from all namespaces."""
+        db.record("ns-a mem", embedding=_vec(1.0), namespace="ns-a")
+        db.record("ns-b mem", embedding=_vec(1.1), namespace="ns-b")
+        db.record("default mem", embedding=_vec(1.2))
+
+        results = db.recall(query_embedding=_vec(1.0), top_k=10, skip_reinforce=True)
+        assert len(results) == 3
+        namespaces = {r["namespace"] for r in results}
+        assert namespaces == {"ns-a", "ns-b", "default"}
+
+    def test_stats_filtered_by_namespace(self, db):
+        """Stats with namespace filter only count memories in that namespace."""
+        db.record("a1", embedding=_vec(1.0), namespace="ns-a")
+        db.record("a2", embedding=_vec(2.0), namespace="ns-a")
+        db.record("b1", embedding=_vec(3.0), namespace="ns-b")
+
+        all_stats = db.stats()
+        assert all_stats["active_memories"] == 3
+
+        a_stats = db.stats(namespace="ns-a")
+        assert a_stats["active_memories"] == 2
+
+        b_stats = db.stats(namespace="ns-b")
+        assert b_stats["active_memories"] == 1
+
+    def test_batch_with_mixed_namespaces(self, db):
+        """Batch record respects per-entry namespace."""
+        inputs = [
+            {"text": "batch-a", "embedding": _vec(1.0), "namespace": "ns-a"},
+            {"text": "batch-b", "embedding": _vec(2.0), "namespace": "ns-b"},
+            {"text": "batch-default", "embedding": _vec(3.0)},
+        ]
+        rids = db.record_batch(inputs)
+        assert len(rids) == 3
+
+        assert db.get(rids[0])["namespace"] == "ns-a"
+        assert db.get(rids[1])["namespace"] == "ns-b"
+        assert db.get(rids[2])["namespace"] == "default"
+
+    def test_namespace_preserved_on_correct(self, db):
+        """Correcting a memory preserves its namespace."""
+        rid = db.record("original", embedding=_vec(1.0), namespace="my-ns")
+        result = db.correct(rid, new_text="corrected", embedding=_vec(1.1))
+        corrected = db.get(result["corrected_rid"])
+        assert corrected["namespace"] == "my-ns"

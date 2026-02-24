@@ -237,7 +237,7 @@ fn mine_topic_clusters(db: &AIDB, config: &PatternConfig) -> Result<Vec<RawPatte
     let conn = db.conn();
     let mut stmt = conn.prepare(
         "SELECT rid, type, text, embedding, created_at, importance, valence, \
-         half_life, last_access, metadata \
+         half_life, last_access, metadata, namespace \
          FROM memories \
          WHERE consolidation_status = 'active' \
          AND embedding IS NOT NULL \
@@ -261,6 +261,7 @@ fn mine_topic_clusters(db: &AIDB, config: &PatternConfig) -> Result<Vec<RawPatte
                 last_access: row.get("last_access")?,
                 metadata: serde_json::from_str(&meta_str)
                     .unwrap_or(serde_json::Value::Object(Default::default())),
+                namespace: row.get("namespace")?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -704,6 +705,7 @@ mod tests {
                     "episodic", 0.5, 0.0, 604800.0,
                     &serde_json::json!({}),
                     &vec_seed(i as f32, 8),
+                    "default",
                 )
                 .unwrap();
             let age = 86400.0 * (14.0 + i as f64); // 14-24 days ago
@@ -723,6 +725,7 @@ mod tests {
                     "episodic", 0.5, -0.8, 604800.0,
                     &serde_json::json!({}),
                     &vec_seed(100.0 + i as f32, 8),
+                    "default",
                 )
                 .unwrap();
             let age = 86400.0 * (1.0 + i as f64); // 1-5 days ago

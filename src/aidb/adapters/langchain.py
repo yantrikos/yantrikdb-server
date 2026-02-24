@@ -33,11 +33,13 @@ class AidbChatMemory:
         memory_key: str = "history",
         top_k: int = 5,
         importance: float = 0.4,
+        namespace: str = "default",
     ):
         self.db = db
         self.memory_key = memory_key
         self.top_k = top_k
         self.importance = importance
+        self.namespace = namespace
 
     @property
     def memory_variables(self) -> list[str]:
@@ -49,7 +51,7 @@ class AidbChatMemory:
         if not query:
             return {self.memory_key: ""}
 
-        results = self.db.recall(query=query, top_k=self.top_k)
+        results = self.db.recall(query=query, top_k=self.top_k, namespace=self.namespace)
 
         if self.return_messages:
             # Return as LangChain message objects
@@ -83,12 +85,14 @@ class AidbChatMemory:
                 text=f"Human: {human_input}",
                 memory_type="episodic",
                 importance=self.importance,
+                namespace=self.namespace,
             )
         if ai_output:
             self.db.record(
                 text=f"AI: {ai_output}",
                 memory_type="episodic",
                 importance=self.importance,
+                namespace=self.namespace,
             )
 
     def clear(self) -> None:

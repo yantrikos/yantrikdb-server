@@ -98,7 +98,7 @@ pub fn check_consolidation_triggers(
     db: &AIDB,
     min_active_memories: i64,
 ) -> Result<Vec<Trigger>> {
-    let stats = db.stats()?;
+    let stats = db.stats(None)?;
     let mut triggers = Vec::new();
 
     if stats.active_memories >= min_active_memories {
@@ -697,7 +697,7 @@ mod tests {
     #[test]
     fn test_no_trigger_for_fresh() {
         let db = AIDB::new(":memory:", 8).unwrap();
-        db.record("fresh", "episodic", 0.9, 0.0, 604800.0, &serde_json::json!({}), &vec_seed(1.0, 8)).unwrap();
+        db.record("fresh", "episodic", 0.9, 0.0, 604800.0, &serde_json::json!({}), &vec_seed(1.0, 8), "default").unwrap();
         let triggers = check_decay_triggers(&db, 0.5, 0.1, 5).unwrap();
         assert!(triggers.is_empty());
     }
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn test_decay_trigger_fires() {
         let db = AIDB::new(":memory:", 8).unwrap();
-        let rid = db.record("important deadline", "episodic", 0.9, 0.0, 100.0, &serde_json::json!({}), &vec_seed(1.0, 8)).unwrap();
+        let rid = db.record("important deadline", "episodic", 0.9, 0.0, 100.0, &serde_json::json!({}), &vec_seed(1.0, 8), "default").unwrap();
 
         db.conn().execute(
             "UPDATE memories SET last_access = ?1 WHERE rid = ?2",
@@ -727,6 +727,7 @@ mod tests {
                 "episodic", 0.5, 0.0, 604800.0,
                 &serde_json::json!({}),
                 &vec_seed(i as f32, 8),
+                "default",
             ).unwrap();
         }
 
@@ -779,7 +780,7 @@ mod tests {
     #[test]
     fn test_temporal_drift_fires() {
         let db = AIDB::new(":memory:", 8).unwrap();
-        let rid = db.record("works at Google", "semantic", 0.8, 0.0, 604800.0, &serde_json::json!({}), &vec_seed(1.0, 8)).unwrap();
+        let rid = db.record("works at Google", "semantic", 0.8, 0.0, 604800.0, &serde_json::json!({}), &vec_seed(1.0, 8), "default").unwrap();
 
         // Backdate to 120 days ago
         let old_ts = now() - 86400.0 * 120.0;
@@ -796,7 +797,7 @@ mod tests {
     #[test]
     fn test_temporal_drift_skips_recent() {
         let db = AIDB::new(":memory:", 8).unwrap();
-        db.record("works at Google", "semantic", 0.8, 0.0, 604800.0, &serde_json::json!({}), &vec_seed(1.0, 8)).unwrap();
+        db.record("works at Google", "semantic", 0.8, 0.0, 604800.0, &serde_json::json!({}), &vec_seed(1.0, 8), "default").unwrap();
 
         let triggers = check_temporal_drift(&db).unwrap();
         assert!(triggers.is_empty());

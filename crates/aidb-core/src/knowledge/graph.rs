@@ -214,9 +214,9 @@ mod tests {
 
         // Record memories and link to entities
         let emb = vec![1.0f32, 0.0, 0.0, 0.0];
-        let r1 = db.record("Alice discussed the plan", "episodic", 0.5, 0.0, 604800.0, &serde_json::json!({}), &emb).unwrap();
-        let r2 = db.record("Bob reviewed the code", "episodic", 0.5, 0.0, 604800.0, &serde_json::json!({}), &emb).unwrap();
-        let r3 = db.record("Charlie deployed to production", "episodic", 0.5, 0.0, 604800.0, &serde_json::json!({}), &emb).unwrap();
+        let r1 = db.record("Alice discussed the plan", "episodic", 0.5, 0.0, 604800.0, &serde_json::json!({}), &emb, "default").unwrap();
+        let r2 = db.record("Bob reviewed the code", "episodic", 0.5, 0.0, 604800.0, &serde_json::json!({}), &emb, "default").unwrap();
+        let r3 = db.record("Charlie deployed to production", "episodic", 0.5, 0.0, 604800.0, &serde_json::json!({}), &emb, "default").unwrap();
 
         db.link_memory_entity(&r1, "Alice").unwrap();
         db.link_memory_entity(&r1, "ProjectX").unwrap();

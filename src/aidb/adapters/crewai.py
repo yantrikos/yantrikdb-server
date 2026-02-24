@@ -21,9 +21,10 @@ from typing import Any
 class AidbShortTermMemory:
     """CrewAI short-term memory backed by AIDB episodic memories."""
 
-    def __init__(self, db: Any, top_k: int = 5):
+    def __init__(self, db: Any, top_k: int = 5, namespace: str = "default"):
         self.db = db
         self.top_k = top_k
+        self.namespace = namespace
 
     def save(self, value: str, metadata: dict | None = None, agent: str | None = None) -> None:
         """Store a short-term memory (episodic)."""
@@ -35,6 +36,7 @@ class AidbShortTermMemory:
             memory_type="episodic",
             importance=0.4,
             metadata=meta,
+            namespace=self.namespace,
         )
 
     def search(self, query: str, limit: int | None = None) -> list[dict]:
@@ -44,6 +46,7 @@ class AidbShortTermMemory:
             query=query,
             top_k=k,
             memory_type="episodic",
+            namespace=self.namespace,
         )
         return [{"context": r["text"], "score": r["score"]} for r in results]
 
@@ -55,9 +58,10 @@ class AidbShortTermMemory:
 class AidbLongTermMemory:
     """CrewAI long-term memory backed by AIDB semantic memories."""
 
-    def __init__(self, db: Any, top_k: int = 5):
+    def __init__(self, db: Any, top_k: int = 5, namespace: str = "default"):
         self.db = db
         self.top_k = top_k
+        self.namespace = namespace
 
     def save(self, value: str, metadata: dict | None = None, agent: str | None = None) -> None:
         """Store a long-term memory (semantic)."""
@@ -69,6 +73,7 @@ class AidbLongTermMemory:
             memory_type="semantic",
             importance=0.7,
             metadata=meta,
+            namespace=self.namespace,
         )
 
     def search(self, query: str, limit: int | None = None) -> list[dict]:
@@ -78,6 +83,7 @@ class AidbLongTermMemory:
             query=query,
             top_k=k,
             memory_type="semantic",
+            namespace=self.namespace,
         )
         return [{"context": r["text"], "score": r["score"]} for r in results]
 
@@ -89,9 +95,10 @@ class AidbLongTermMemory:
 class AidbEntityMemory:
     """CrewAI entity memory backed by AIDB knowledge graph."""
 
-    def __init__(self, db: Any, top_k: int = 5):
+    def __init__(self, db: Any, top_k: int = 5, namespace: str = "default"):
         self.db = db
         self.top_k = top_k
+        self.namespace = namespace
 
     def save(self, value: str, metadata: dict | None = None, agent: str | None = None) -> None:
         """Store an entity observation.
@@ -108,6 +115,7 @@ class AidbEntityMemory:
             memory_type="semantic",
             importance=0.6,
             metadata=meta,
+            namespace=self.namespace,
         )
 
         # Auto-link entities if provided
@@ -127,6 +135,7 @@ class AidbEntityMemory:
             query=query,
             top_k=k,
             expand_entities=True,
+            namespace=self.namespace,
         )
         return [{"context": r["text"], "score": r["score"]} for r in results]
 

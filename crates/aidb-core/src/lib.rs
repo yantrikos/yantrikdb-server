@@ -1,22 +1,19 @@
-pub mod error;
-pub mod types;
-pub mod schema;
-pub mod serde_helpers;
-pub mod scoring;
-pub mod hlc;
+// ── Directory modules ──
+mod base;
 pub mod engine;
-pub mod consolidate;
-pub mod triggers;
-pub mod replication;
-pub mod sync;
-pub mod conflict;
-pub mod patterns;
-pub mod graph;
-pub mod graph_index;
-pub mod compression;
-pub mod hnsw;
-pub mod bench_utils;
+mod cognition;
+mod distributed;
+mod knowledge;
+mod vector;
 
+// ── Re-exports at original crate paths ──
+pub use base::{bench_utils, compression, error, hlc, schema, scoring, serde_helpers, types};
+pub use cognition::{consolidate, patterns, triggers};
+pub use distributed::{conflict, replication, sync};
+pub use knowledge::{graph, graph_index};
+pub use vector::hnsw;
+
+// ── Convenience re-exports ──
 pub use engine::AIDB;
 pub use error::AidbError;
 pub use types::*;

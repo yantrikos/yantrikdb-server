@@ -360,6 +360,7 @@ mod tests {
                 604800.0,
                 &empty_meta(),
                 &vec_seed(1.0, 8),
+                "default",
             )
             .unwrap();
         let rid_b = db
@@ -371,6 +372,7 @@ mod tests {
                 604800.0,
                 &empty_meta(),
                 &vec_seed(2.0, 8),
+                "default",
             )
             .unwrap();
 
@@ -396,10 +398,10 @@ mod tests {
     fn test_conflict_dedup() {
         let db = AIDB::new(":memory:", 8).unwrap();
         let rid_a = db
-            .record("a", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8))
+            .record("a", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default")
             .unwrap();
         let rid_b = db
-            .record("b", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(2.0, 8))
+            .record("b", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(2.0, 8), "default")
             .unwrap();
 
         assert!(!conflict_exists(&db, &rid_a, &rid_b).unwrap());

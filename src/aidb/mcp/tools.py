@@ -23,6 +23,7 @@ def memory_record(
     importance: float = 0.5,
     valence: float = 0.0,
     metadata: dict | None = None,
+    namespace: str = "default",
     ctx: Context = None,
 ) -> str:
     """Store a new memory in the cognitive memory engine.
@@ -33,6 +34,7 @@ def memory_record(
         importance: How important this memory is (0.0 to 1.0). Higher = decays slower.
         valence: Emotional tone (-1.0 negative to 1.0 positive). 0.0 is neutral.
         metadata: Optional key-value metadata (e.g. {"source": "conversation", "topic": "work"}).
+        namespace: Memory namespace for isolation (default: "default").
 
     Returns the memory ID (rid) of the stored memory.
     """
@@ -44,6 +46,7 @@ def memory_record(
             importance=importance,
             valence=valence,
             metadata=metadata or {},
+            namespace=namespace,
         )
     return json.dumps({"rid": rid, "status": "recorded"})
 
@@ -55,6 +58,7 @@ def memory_recall(
     memory_type: str | None = None,
     include_consolidated: bool = False,
     expand_entities: bool = True,
+    namespace: str | None = None,
     ctx: Context = None,
 ) -> str:
     """Search memories by semantic similarity to a natural language query.
@@ -68,6 +72,7 @@ def memory_recall(
         memory_type: Filter by type ('episodic', 'semantic', 'procedural'). None for all.
         include_consolidated: Whether to include consolidated (merged) memories.
         expand_entities: Whether to use knowledge graph to find related memories.
+        namespace: Filter by namespace. None returns all namespaces.
 
     Returns matching memories ranked by relevance with score breakdowns.
     """
@@ -79,6 +84,7 @@ def memory_recall(
             memory_type=memory_type,
             include_consolidated=include_consolidated,
             expand_entities=expand_entities,
+            namespace=namespace,
         )
     # Convert PyO3 dicts to plain dicts for JSON serialization
     items = []
@@ -405,8 +411,11 @@ def trigger_list(limit: int = 10, ctx: Context = None) -> str:
 
 
 @mcp.tool()
-def memory_stats(ctx: Context = None) -> str:
+def memory_stats(namespace: str | None = None, ctx: Context = None) -> str:
     """Get current memory engine statistics.
+
+    Args:
+        namespace: Filter stats to a specific namespace. None for global stats.
 
     Returns counts of active, consolidated, tombstoned, and archived memories,
     entity and edge counts, open conflicts, pending triggers, active patterns,
@@ -414,5 +423,5 @@ def memory_stats(ctx: Context = None) -> str:
     """
     db, lock = _get_db(ctx)
     with lock:
-        stats = db.stats()
+        stats = db.stats(namespace=namespace)
     return json.dumps(stats)

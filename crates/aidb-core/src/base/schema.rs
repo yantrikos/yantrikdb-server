@@ -1,4 +1,4 @@
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 pub const SCHEMA_SQL: &str = "
 -- Memory records: the source of truth
@@ -26,7 +26,10 @@ CREATE TABLE IF NOT EXISTS memories (
     storage_tier TEXT NOT NULL DEFAULT 'hot', -- hot | cold
 
     -- Metadata
-    metadata TEXT DEFAULT '{}'           -- JSON blob for extensibility
+    metadata TEXT DEFAULT '{}',          -- JSON blob for extensibility
+
+    -- Namespace for memory isolation
+    namespace TEXT NOT NULL DEFAULT 'default'
 );
 
 -- Entity relationship graph
@@ -154,6 +157,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
 CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_consolidation ON memories(consolidation_status);
 CREATE INDEX IF NOT EXISTS idx_memories_storage_tier ON memories(storage_tier);
+CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src);
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_edges_rel ON edges(rel_type);
@@ -401,4 +405,10 @@ INSERT OR IGNORE INTO pattern_evidence (pattern_id, rid)
 INSERT OR IGNORE INTO pattern_entities (pattern_id, entity_name)
     SELECT pattern_id, json_each.value FROM patterns, json_each(entity_names)
     WHERE entity_names IS NOT NULL AND entity_names != '[]';
+";
+
+/// SQL to migrate from schema V7 to V8.
+pub const MIGRATE_V7_TO_V8: &str = "
+ALTER TABLE memories ADD COLUMN namespace TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);
 ";

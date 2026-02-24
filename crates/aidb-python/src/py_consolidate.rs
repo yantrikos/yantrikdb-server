@@ -145,6 +145,7 @@ fn dict_to_mem_with_embedding(d: &Bound<'_, PyDict>) -> PyResult<MemoryWithEmbed
         half_life,
         last_access,
         metadata,
+        namespace: "default".to_string(),
     })
 }
 

@@ -109,12 +109,12 @@ mod tests {
         let b = AIDB::new_with_actor(":memory:", 8, "device-B").unwrap();
 
         // A writes independently
-        a.record("from A - memory 1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
-        a.record("from A - memory 2", "episodic", 0.7, 0.1, 604800.0, &empty_meta(), &vec_seed(2.0, 8)).unwrap();
+        a.record("from A - memory 1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
+        a.record("from A - memory 2", "episodic", 0.7, 0.1, 604800.0, &empty_meta(), &vec_seed(2.0, 8), "default").unwrap();
         a.relate("Alice", "Bob", "knows", 1.0).unwrap();
 
         // B writes independently
-        b.record("from B - memory 3", "semantic", 0.6, 0.0, 604800.0, &empty_meta(), &vec_seed(3.0, 8)).unwrap();
+        b.record("from B - memory 3", "semantic", 0.6, 0.0, 604800.0, &empty_meta(), &vec_seed(3.0, 8), "default").unwrap();
         b.relate("Charlie", "Dave", "works_with", 0.8).unwrap();
 
         // Sync
@@ -124,8 +124,8 @@ mod tests {
 
         // Both should have the same stats (except operations count may differ
         // due to reinforce ops being local-only)
-        let a_stats = a.stats().unwrap();
-        let b_stats = b.stats().unwrap();
+        let a_stats = a.stats(None).unwrap();
+        let b_stats = b.stats(None).unwrap();
         assert_eq!(a_stats.active_memories, b_stats.active_memories);
         assert_eq!(a_stats.edges, b_stats.edges);
         assert_eq!(a_stats.entities, b_stats.entities);
@@ -137,7 +137,7 @@ mod tests {
         let b = AIDB::new_with_actor(":memory:", 8, "B").unwrap();
 
         // A records and B gets it via sync
-        let rid = a.record("will be forgotten", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        let rid = a.record("will be forgotten", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
         sync_bidirectional(&a, &b).unwrap();
 
         // Verify B has it
@@ -182,7 +182,7 @@ mod tests {
         let a = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
         let b = AIDB::new_with_actor(":memory:", 8, "B").unwrap();
 
-        a.record("test", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        a.record("test", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
 
         // First sync
         let r1 = sync_bidirectional(&a, &b).unwrap();
@@ -200,8 +200,8 @@ mod tests {
         let b = AIDB::new_with_actor(":memory:", 8, "B").unwrap();
 
         // A creates memories and consolidates
-        a.record("mem1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
-        a.record("mem2", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.1, 8)).unwrap();
+        a.record("mem1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
+        a.record("mem2", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.1, 8), "default").unwrap();
 
         let consolidated = crate::consolidate::consolidate(&a, 0.0, 365.0, 2, false).unwrap();
         assert!(!consolidated.is_empty());
@@ -218,7 +218,7 @@ mod tests {
         assert!(cm_count >= 2);
 
         // B should have the consolidated memory
-        let b_stats = b.stats().unwrap();
+        let b_stats = b.stats(None).unwrap();
         assert!(b_stats.active_memories >= 1); // The consolidated memory
     }
 
@@ -228,14 +228,14 @@ mod tests {
         let b = AIDB::new_with_actor(":memory:", 8, "B").unwrap();
 
         // Create shared memories on both via sync
-        let r1 = a.record("shared1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
-        let r2 = a.record("shared2", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.1, 8)).unwrap();
-        let r3 = a.record("shared3", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.2, 8)).unwrap();
+        let r1 = a.record("shared1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
+        let r2 = a.record("shared2", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.1, 8), "default").unwrap();
+        let r3 = a.record("shared3", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.2, 8), "default").unwrap();
         sync_bidirectional(&a, &b).unwrap();
 
         // A consolidates {shared1, shared2} — manually create the consolidated
         // memory + consolidation_members + oplog entry so it replicates
-        let a_consolidated = a.record("A consolidated", "semantic", 0.6, 0.0, 604800.0, &serde_json::json!({"consolidated_from": [&r1, &r2]}), &vec_seed(1.05, 8)).unwrap();
+        let a_consolidated = a.record("A consolidated", "semantic", 0.6, 0.0, 604800.0, &serde_json::json!({"consolidated_from": [&r1, &r2]}), &vec_seed(1.05, 8), "default").unwrap();
         let hlc_a = a.tick_hlc();
         let hlc_a_bytes = hlc_a.to_bytes().to_vec();
         a.conn().execute(
@@ -257,7 +257,7 @@ mod tests {
         }), None).unwrap();
 
         // B consolidates {shared2, shared3}
-        let b_consolidated = b.record("B consolidated", "semantic", 0.6, 0.0, 604800.0, &serde_json::json!({"consolidated_from": [&r2, &r3]}), &vec_seed(1.15, 8)).unwrap();
+        let b_consolidated = b.record("B consolidated", "semantic", 0.6, 0.0, 604800.0, &serde_json::json!({"consolidated_from": [&r2, &r3]}), &vec_seed(1.15, 8), "default").unwrap();
         let hlc_b = b.tick_hlc();
         let hlc_b_bytes = hlc_b.to_bytes().to_vec();
         b.conn().execute(
@@ -305,14 +305,14 @@ mod tests {
         // A records memories
         let emb1 = vec_seed(1.0, 8);
         let emb2 = vec_seed(5.0, 8);
-        a.record("close to query", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &emb1).unwrap();
-        a.record("far from query", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &emb2).unwrap();
+        a.record("close to query", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &emb1, "default").unwrap();
+        a.record("far from query", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &emb2, "default").unwrap();
 
         // Sync to B
         sync_bidirectional(&a, &b).unwrap();
 
         // A can recall (has vec_memories entries)
-        let a_results = a.recall(&emb1, 2, None, None, false, false, None, false).unwrap();
+        let a_results = a.recall(&emb1, 2, None, None, false, false, None, false, None).unwrap();
         assert!(!a_results.is_empty());
 
         // B won't have vec_memories (embeddings aren't in oplog)
@@ -326,8 +326,8 @@ mod tests {
         // This is the correct V1 behavior — embedding sync is deferred.
 
         // Just verify the memory data converged
-        let a_stats = a.stats().unwrap();
-        let b_stats = b.stats().unwrap();
+        let a_stats = a.stats(None).unwrap();
+        let b_stats = b.stats(None).unwrap();
         assert_eq!(a_stats.active_memories, b_stats.active_memories);
     }
 
@@ -338,8 +338,8 @@ mod tests {
         let a = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
         let b = AIDB::new_with_actor(":memory:", 8, "B").unwrap();
 
-        let rid_a = a.record("birthday March 5", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
-        let rid_b = a.record("birthday March 15", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(2.0, 8)).unwrap();
+        let rid_a = a.record("birthday March 5", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
+        let rid_b = a.record("birthday March 15", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(2.0, 8), "default").unwrap();
 
         // Create and resolve a conflict on A
         let conflict = crate::conflict::create_conflict(
@@ -380,7 +380,7 @@ mod tests {
         let a = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
         let b = AIDB::new_with_actor(":memory:", 8, "B").unwrap();
 
-        let rid = a.record("color is green", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        let rid = a.record("color is green", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
         sync_bidirectional(&a, &b).unwrap();
 
         // Correct on A
@@ -402,8 +402,8 @@ mod tests {
         let a = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
         let b = AIDB::new_with_actor(":memory:", 8, "B").unwrap();
 
-        let rid_a = a.record("mem a", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
-        let rid_b = a.record("mem b", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(2.0, 8)).unwrap();
+        let rid_a = a.record("mem a", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
+        let rid_b = a.record("mem b", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(2.0, 8), "default").unwrap();
 
         // Create conflict on A
         crate::conflict::create_conflict(

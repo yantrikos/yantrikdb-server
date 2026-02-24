@@ -16,6 +16,7 @@ pub struct Memory {
     pub storage_tier: String,
     pub consolidated_into: Option<String>,
     pub metadata: serde_json::Value,
+    pub namespace: String,
 }
 
 /// Score breakdown for a recall result.
@@ -41,6 +42,7 @@ pub struct RecallResult {
     pub scores: ScoreBreakdown,
     pub why_retrieved: Vec<String>,
     pub metadata: serde_json::Value,
+    pub namespace: String,
 }
 
 /// An edge in the entity graph.
@@ -117,6 +119,7 @@ pub struct MemoryWithEmbedding {
     pub half_life: f64,
     pub last_access: f64,
     pub metadata: serde_json::Value,
+    pub namespace: String,
 }
 
 /// A decayed memory candidate from decay().
@@ -141,6 +144,7 @@ pub struct ScoringRow {
     pub valence: f64,
     pub consolidation_status: String,
     pub memory_type: String,
+    pub namespace: String,
 }
 
 /// Input for batch record operations.
@@ -153,6 +157,7 @@ pub struct RecordInput {
     pub half_life: f64,
     pub metadata: serde_json::Value,
     pub embedding: Vec<f32>,
+    pub namespace: String,
 }
 
 // ── Conflict types (V2) ──

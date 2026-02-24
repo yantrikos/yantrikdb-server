@@ -202,6 +202,7 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
                     valence: op.payload["valence"].as_f64().unwrap_or(0.0),
                     consolidation_status: "active".to_string(),
                     memory_type: op.payload["type"].as_str().unwrap_or("episodic").to_string(),
+                    namespace: op.payload["namespace"].as_str().unwrap_or("default").to_string(),
                 });
             }
         }
@@ -250,6 +251,7 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
                     valence: op.payload["valence"].as_f64().unwrap_or(0.0),
                     consolidation_status: "active".to_string(),
                     memory_type: "semantic".to_string(),
+                    namespace: op.payload["namespace"].as_str().unwrap_or("default").to_string(),
                 });
             }
             if let Some(source_rids) = op.payload["source_rids"].as_array() {
@@ -285,6 +287,7 @@ fn materialize_op(db: &AIDB, op: &OplogEntry) -> Result<()> {
                     valence: op.payload["valence"].as_f64().unwrap_or(0.0),
                     consolidation_status: "active".to_string(),
                     memory_type: op.payload["type"].as_str().unwrap_or("episodic").to_string(),
+                    namespace: op.payload["namespace"].as_str().unwrap_or("default").to_string(),
                 });
             }
             let original_rid = op.payload["original_rid"].as_str().unwrap_or_default();
@@ -328,15 +331,17 @@ fn materialize_record(conn: &Connection, payload: &serde_json::Value, _embedding
         return Ok(()); // Can't materialize without a rid
     }
 
+    let namespace = payload["namespace"].as_str().unwrap_or("default");
+
     // Add-Wins Set: INSERT OR IGNORE means first writer wins (UUIDv7 = no collisions)
     conn.execute(
         "INSERT OR IGNORE INTO memories \
          (rid, type, text, created_at, updated_at, importance, \
-          half_life, last_access, valence, metadata) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+          half_life, last_access, valence, metadata, namespace) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             rid, mem_type, text, created_at, updated_at, importance,
-            half_life, created_at, valence, metadata,
+            half_life, created_at, valence, metadata, namespace,
         ],
     )?;
 
@@ -443,14 +448,15 @@ fn materialize_consolidate(
             .unwrap()
             .as_secs_f64();
 
+        let namespace = payload["namespace"].as_str().unwrap_or("default");
         conn.execute(
             "INSERT OR IGNORE INTO memories \
              (rid, type, text, created_at, updated_at, importance, \
-              half_life, last_access, valence, metadata) \
-             VALUES (?1, 'semantic', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              half_life, last_access, valence, metadata, namespace) \
+             VALUES (?1, 'semantic', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 consolidated_rid, text, ts, ts, importance,
-                half_life, ts, valence, metadata,
+                half_life, ts, valence, metadata, namespace,
             ],
         )?;
     }
@@ -585,14 +591,15 @@ fn materialize_correct(conn: &Connection, payload: &serde_json::Value) -> Result
         .map(|m| serde_json::to_string(m).unwrap_or_else(|_| "{}".to_string()))
         .unwrap_or_else(|| "{}".to_string());
 
+    let namespace = payload["namespace"].as_str().unwrap_or("default");
     conn.execute(
         "INSERT OR IGNORE INTO memories
          (rid, type, text, created_at, updated_at, importance,
-          half_life, last_access, valence, metadata)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+          half_life, last_access, valence, metadata, namespace)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             new_rid, mem_type, text, created_at, created_at, importance,
-            half_life, created_at, valence, metadata,
+            half_life, created_at, valence, metadata, namespace,
         ],
     )?;
 
@@ -840,7 +847,7 @@ mod tests {
     #[test]
     fn test_extract_ops_after_record() {
         let db = AIDB::new(":memory:", 8).unwrap();
-        db.record("hello", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        db.record("hello", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
 
         let ops = extract_ops_since(db.conn(), None, None, None, 100).unwrap();
         // record + reinforce (from recall? no — just record op)
@@ -852,7 +859,7 @@ mod tests {
     #[test]
     fn test_apply_ops_idempotent() {
         let a = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
-        a.record("from A", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        a.record("from A", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
 
         let ops = extract_ops_since(a.conn(), None, None, None, 100).unwrap();
 
@@ -871,7 +878,7 @@ mod tests {
     #[test]
     fn test_materialize_record() {
         let a = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
-        let rid = a.record("test mem", "semantic", 0.8, 0.2, 1000.0, &serde_json::json!({"k": "v"}), &vec_seed(1.0, 8)).unwrap();
+        let rid = a.record("test mem", "semantic", 0.8, 0.2, 1000.0, &serde_json::json!({"k": "v"}), &vec_seed(1.0, 8), "default").unwrap();
 
         let ops = extract_ops_since(a.conn(), None, None, None, 100).unwrap();
         let record_op = ops.iter().find(|o| o.op_type == "record").unwrap();
@@ -891,7 +898,7 @@ mod tests {
     #[test]
     fn test_tombstone_wins() {
         let a = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
-        let rid = a.record("doomed", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        let rid = a.record("doomed", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
         a.forget(&rid).unwrap();
 
         let ops = extract_ops_since(a.conn(), None, None, None, 100).unwrap();
@@ -979,7 +986,7 @@ mod tests {
     #[test]
     fn test_extract_with_exclude_actor() {
         let db = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
-        db.record("from A", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
+        db.record("from A", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
 
         // Extracting while excluding actor "A" should return nothing
         let ops = extract_ops_since(db.conn(), None, None, Some("A"), 100).unwrap();
@@ -993,8 +1000,8 @@ mod tests {
     #[test]
     fn test_consolidation_members_replicate() {
         let a = AIDB::new_with_actor(":memory:", 8, "A").unwrap();
-        a.record("mem1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8)).unwrap();
-        a.record("mem2", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.1, 8)).unwrap();
+        a.record("mem1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default").unwrap();
+        a.record("mem2", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.1, 8), "default").unwrap();
 
         // Consolidate on A
         let consolidated = crate::consolidate::consolidate(&a, 0.0, 365.0, 2, false).unwrap();

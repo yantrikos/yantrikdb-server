@@ -21,6 +21,7 @@ fn seed_db(db: &AIDB, n: usize, dim: usize) {
             604800.0,
             &meta,
             &emb,
+            "default",
         )
         .unwrap();
     }
@@ -43,6 +44,7 @@ fn bench_record(c: &mut Criterion) {
                 604800.0,
                 &meta,
                 &emb,
+                "default",
             )
             .unwrap();
             i += 1;
@@ -60,7 +62,7 @@ fn bench_recall(c: &mut Criterion) {
         let query = vec_seed(999.0, dim);
 
         group.bench_with_input(BenchmarkId::new("top10", n), &n, |b, _| {
-            b.iter(|| db.recall(black_box(&query), 10, None, None, false, false, None, false).unwrap())
+            b.iter(|| db.recall(black_box(&query), 10, None, None, false, false, None, false, None).unwrap())
         });
     }
     group.finish();
@@ -71,7 +73,7 @@ fn bench_get(c: &mut Criterion) {
     let db = AIDB::new(":memory:", dim).unwrap();
     let meta = serde_json::json!({});
     let rid = db
-        .record("lookup target", "episodic", 0.5, 0.0, 604800.0, &meta, &vec_seed(1.0, dim))
+        .record("lookup target", "episodic", 0.5, 0.0, 604800.0, &meta, &vec_seed(1.0, dim), "default")
         .unwrap();
 
     c.bench_function("get", |b| {
@@ -85,7 +87,7 @@ fn bench_stats(c: &mut Criterion) {
     seed_db(&db, 100, dim);
 
     c.bench_function("stats_100", |b| {
-        b.iter(|| db.stats().unwrap())
+        b.iter(|| db.stats(None).unwrap())
     });
 }
 
@@ -136,6 +138,7 @@ fn bench_bulk_insert(c: &mut Criterion) {
                     604800.0,
                     &meta,
                     &emb,
+                    "default",
                 )
                 .unwrap();
             }
@@ -157,6 +160,7 @@ fn bench_record_batch(c: &mut Criterion) {
                 half_life: 604800.0,
                 metadata: serde_json::json!({}),
                 embedding: vec_seed(i as f32 * 0.37, dim),
+                namespace: "default".to_string(),
             }).collect();
             db.record_batch(black_box(&inputs)).unwrap();
         })
@@ -173,7 +177,7 @@ fn bench_archive(c: &mut Criterion) {
                 let db = AIDB::new(":memory:", dim).unwrap();
                 let emb = vec_seed(42.0, dim);
                 let rid = db.record("archive target", "episodic", 0.5, 0.0, 604800.0,
-                    &serde_json::json!({}), &emb).unwrap();
+                    &serde_json::json!({}), &emb, "default").unwrap();
                 (db, rid)
             },
             |(db, rid)| {
@@ -194,7 +198,7 @@ fn bench_hydrate(c: &mut Criterion) {
                 let db = AIDB::new(":memory:", dim).unwrap();
                 let emb = vec_seed(42.0, dim);
                 let rid = db.record("hydrate target", "episodic", 0.5, 0.0, 604800.0,
-                    &serde_json::json!({}), &emb).unwrap();
+                    &serde_json::json!({}), &emb, "default").unwrap();
                 db.archive(&rid).unwrap();
                 (db, rid)
             },
@@ -228,7 +232,7 @@ fn bench_recall_scaled(c: &mut Criterion) {
         let query = vec_seed(999.0, dim);
 
         group.bench_with_input(BenchmarkId::new("top10", n), &n, |b, _| {
-            b.iter(|| db.recall(black_box(&query), 10, None, None, false, false, None, true).unwrap())
+            b.iter(|| db.recall(black_box(&query), 10, None, None, false, false, None, true, None).unwrap())
         });
     }
     group.finish();
@@ -252,7 +256,7 @@ fn bench_recall_dim_comparison(c: &mut Criterion) {
                 &n,
                 |b, _| {
                     b.iter(|| {
-                        db.recall(black_box(&query), 10, None, None, false, false, None, true)
+                        db.recall(black_box(&query), 10, None, None, false, false, None, true, None)
                             .unwrap()
                     })
                 },
@@ -282,7 +286,7 @@ fn bench_recall_100k(c: &mut Criterion) {
             &top_k,
             |b, &k| {
                 b.iter(|| {
-                    db.recall(black_box(&query), k, None, None, false, false, None, true)
+                    db.recall(black_box(&query), k, None, None, false, false, None, true, None)
                         .unwrap()
                 })
             },
@@ -312,6 +316,7 @@ fn bench_recall_with_graph(c: &mut Criterion) {
                         false, true,
                         Some("Memory about Entity_5 involving Entity_10"),
                         true,
+                        None,
                     ).unwrap()
                 })
             },
@@ -322,7 +327,7 @@ fn bench_recall_with_graph(c: &mut Criterion) {
             &n,
             |b, _| {
                 b.iter(|| {
-                    db.recall(black_box(&query), 10, None, None, false, false, None, true)
+                    db.recall(black_box(&query), 10, None, None, false, false, None, true, None)
                         .unwrap()
                 })
             },
@@ -346,14 +351,14 @@ fn bench_reinforce_overhead(c: &mut Criterion) {
 
     group.bench_function("with_reinforce", |b| {
         b.iter(|| {
-            db_with.recall(black_box(&query), 10, None, None, false, false, None, false)
+            db_with.recall(black_box(&query), 10, None, None, false, false, None, false, None)
                 .unwrap()
         })
     });
 
     group.bench_function("without_reinforce", |b| {
         b.iter(|| {
-            db_without.recall(black_box(&query), 10, None, None, false, false, None, true)
+            db_without.recall(black_box(&query), 10, None, None, false, false, None, true, None)
                 .unwrap()
         })
     });
@@ -383,7 +388,7 @@ fn bench_record_scaled(c: &mut Criterion) {
                     let emb = vec_seed_dim(i as f32 * 0.37 + 100000.0, dim);
                     db.record(
                         black_box(&format!("bench scaled record {}", i)),
-                        "episodic", 0.5, 0.0, 604800.0, &meta, &emb,
+                        "episodic", 0.5, 0.0, 604800.0, &meta, &emb, "default",
                     ).unwrap();
                     i += 1;
                 })
@@ -413,6 +418,7 @@ fn bench_record_batch_scaled(c: &mut Criterion) {
                         half_life: 604800.0,
                         metadata: serde_json::json!({}),
                         embedding: vec_seed_dim(i as f32 * 0.37, dim),
+                        namespace: "default".to_string(),
                     }).collect();
                     db.record_batch(black_box(&inputs)).unwrap();
                 })

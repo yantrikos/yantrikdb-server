@@ -16,6 +16,7 @@ pub fn memory_to_dict(py: Python<'_>, mem: &aidb_core::Memory) -> PyResult<PyObj
     dict.set_item("storage_tier", &mem.storage_tier)?;
     dict.set_item("consolidated_into", &mem.consolidated_into)?;
     dict.set_item("metadata", json_to_py(py, &mem.metadata)?)?;
+    dict.set_item("namespace", &mem.namespace)?;
     Ok(dict.into())
 }
 
@@ -42,6 +43,7 @@ pub fn recall_result_to_dict(py: Python<'_>, r: &aidb_core::RecallResult) -> PyR
     dict.set_item("why_retrieved", why)?;
 
     dict.set_item("metadata", json_to_py(py, &r.metadata)?)?;
+    dict.set_item("namespace", &r.namespace)?;
 
     Ok(dict.into())
 }

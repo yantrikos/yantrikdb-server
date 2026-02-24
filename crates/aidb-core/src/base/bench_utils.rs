@@ -60,6 +60,7 @@ pub fn seed_db_scaled(db: &AIDB, n: usize, dim: usize, with_graph: bool) {
                         "source": format!("source_{}", i % 5),
                     }),
                     embedding: vec_seed_dim(i as f32 * 0.37, dim),
+                    namespace: "default".to_string(),
                 }
             })
             .collect();

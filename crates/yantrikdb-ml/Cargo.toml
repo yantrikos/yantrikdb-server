@@ -34,9 +34,9 @@ candle-llm = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "de
 candle-stt = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
 
 # Hardware acceleration for candle
-cuda = ["candle-core/cuda"]
-metal = ["candle-core/metal"]
-accelerate = ["candle-core/accelerate"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 
 # API backend
 api-llm = ["dep:ureq"]

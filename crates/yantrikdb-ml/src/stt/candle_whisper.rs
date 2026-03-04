@@ -85,15 +85,17 @@ impl CandleWhisper {
             serde_json::from_str(&config_str).context("parsing Whisper config.json")?;
 
         let suppress_tokens = config.suppress_tokens.clone();
-        let num_mel_bins = config.num_mel_bins;
-
-        // Compute mel filterbank
-        let mel_filters = compute_mel_filters(num_mel_bins, m::N_FFT, m::SAMPLE_RATE as f64);
+        // Load pre-computed mel filterbank (from OpenAI Whisper, matches librosa exactly)
+        let mel_bytes = include_bytes!("melfilters.bytes");
+        let mel_filters: Vec<f32> = mel_bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
 
         tracing::info!(
-            num_mel_bins,
+            num_mel_bins = config.num_mel_bins,
             mel_filters_len = mel_filters.len(),
-            "Computed mel filterbank"
+            "Loaded pre-computed mel filterbank"
         );
 
         // Load model
@@ -139,8 +141,14 @@ impl CandleWhisper {
 
         let config = &inner.model.config;
 
+        // Whisper expects exactly 30 seconds of audio (N_SAMPLES = 480000).
+        // Pad short clips with silence, truncate long ones.
+        let mut padded = vec![0.0f32; m::N_SAMPLES];
+        let copy_len = pcm.len().min(m::N_SAMPLES);
+        padded[..copy_len].copy_from_slice(&pcm[..copy_len]);
+
         // Convert PCM to mel spectrogram
-        let mel = audio::pcm_to_mel(config, pcm, &inner.mel_filters);
+        let mel = audio::pcm_to_mel(config, &padded, &inner.mel_filters);
         let mel_len = mel.len();
         let n_mels = config.num_mel_bins;
         let n_frames = mel_len / n_mels;
@@ -159,7 +167,8 @@ impl CandleWhisper {
         let no_timestamps = token_id(&inner.tokenizer, m::NO_TIMESTAMPS_TOKEN).unwrap_or(50363);
         let eot = token_id(&inner.tokenizer, m::EOT_TOKEN).unwrap_or(50257);
 
-        let mut tokens: Vec<u32> = vec![sot, transcribe, no_timestamps];
+        let lang_en = token_id(&inner.tokenizer, "<|en|>").unwrap_or(50259);
+        let mut tokens: Vec<u32> = vec![sot, lang_en, transcribe, no_timestamps];
         let mut result_tokens: Vec<u32> = Vec::new();
 
         let max_decode_len: usize = 224;
@@ -248,74 +257,3 @@ fn suppress_tokens_mask(logits: &Tensor, suppress: &[u32], eot: u32) -> Result<T
     Ok((logits + mask_t)?)
 }
 
-// --- Mel filterbank computation (Slaney scale, matches librosa/OpenAI Whisper) ---
-
-const F_SP: f64 = 200.0 / 3.0;
-const MIN_LOG_HZ: f64 = 1000.0;
-const MIN_LOG_MEL: f64 = 15.0; // 1000.0 / (200.0 / 3.0)
-const LOG_STEP: f64 = 0.068_751_777_420_949_12; // ln(6.4) / 27.0
-
-fn hz_to_mel(hz: f64) -> f64 {
-    if hz < MIN_LOG_HZ {
-        hz / F_SP
-    } else {
-        MIN_LOG_MEL + (hz / MIN_LOG_HZ).ln() / LOG_STEP
-    }
-}
-
-fn mel_to_hz(mel: f64) -> f64 {
-    if mel < MIN_LOG_MEL {
-        mel * F_SP
-    } else {
-        MIN_LOG_HZ * ((mel - MIN_LOG_MEL) * LOG_STEP).exp()
-    }
-}
-
-/// Compute mel filterbank matching librosa's Slaney normalization.
-///
-/// Returns a flat array of shape [num_mel_bins, n_fft/2+1].
-fn compute_mel_filters(num_mel_bins: usize, n_fft: usize, sample_rate: f64) -> Vec<f32> {
-    let n_freqs = n_fft / 2 + 1;
-
-    // Mel scale endpoints
-    let mel_min = hz_to_mel(0.0);
-    let mel_max = hz_to_mel(sample_rate / 2.0);
-
-    // n_mels + 2 points for triangular filters
-    let n_points = num_mel_bins + 2;
-    let mel_points: Vec<f64> = (0..n_points)
-        .map(|i| mel_min + (mel_max - mel_min) * i as f64 / (n_points - 1) as f64)
-        .collect();
-
-    let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
-
-    // FFT bin center frequencies
-    let fft_freqs: Vec<f64> = (0..n_freqs)
-        .map(|i| i as f64 * sample_rate / n_fft as f64)
-        .collect();
-
-    let mut filters = vec![0.0f32; num_mel_bins * n_freqs];
-
-    for i in 0..num_mel_bins {
-        let f_left = hz_points[i];
-        let f_center = hz_points[i + 1];
-        let f_right = hz_points[i + 2];
-
-        // Slaney normalization factor
-        let enorm = 2.0 / (f_right - f_left);
-
-        for j in 0..n_freqs {
-            let f = fft_freqs[j];
-            let val = if f >= f_left && f <= f_center && f_center > f_left {
-                (f - f_left) / (f_center - f_left)
-            } else if f > f_center && f <= f_right && f_right > f_center {
-                (f_right - f) / (f_right - f_center)
-            } else {
-                0.0
-            };
-            filters[i * n_freqs + j] = (val * enorm) as f32;
-        }
-    }
-
-    filters
-}

@@ -2,6 +2,9 @@
 name = "yantrikdb-python"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-only"
+description = "Python bindings for YantrikDB cognitive memory engine"
+repository = "https://github.com/yantrikos/yantrikdb"
 
 [lib]
 name = "_yantrikdb_rust"

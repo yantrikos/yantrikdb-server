@@ -2,6 +2,9 @@
 name = "yantrikdb-core"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-only"
+description = "Cognitive memory engine for persistent AI systems"
+repository = "https://github.com/yantrikos/yantrikdb"
 
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

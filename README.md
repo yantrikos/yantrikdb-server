@@ -240,15 +240,16 @@ Built-in safety constraints:
 
 ## Roadmap
 
-- [ ] **V0** — Single device, embedded engine, core memory model (record, recall, relate, consolidate, decay)
-- [ ] **V1** — Replication log, sync between two devices
-- [ ] **V2** — Conflict resolution with human-in-the-loop, production-grade sync
-- [ ] **V3** — Proactive cognition loop, pattern detection, trigger system
+- [x] **V0** — Single device, embedded engine, core memory model (record, recall, relate, consolidate, decay)
+- [x] **V1** — Replication log, sync between two devices
+- [x] **V2** — Conflict resolution with human-in-the-loop, production-grade sync
+- [x] **V3** — Proactive cognition loop, pattern detection, trigger system
 - [ ] **V4** — Multi-agent shared memory, federated learning across users
 
 ## Research & Publications
 
-- **Whitepaper (upcoming):** "YantrikDB: A Cognitive Memory Engine for Persistent AI Systems" — to be published on Zenodo and ArXiv
+- **U.S. Patent Application 19/573,392** (March 2026): "Cognitive Memory Database System with Relevance-Conditioned Scoring and Autonomous Knowledge Management"
+- **Zenodo:** [YantrikDB: A Cognitive Memory Engine for Persistent AI Systems](https://zenodo.org/records/14933693)
 - **Related work by the author:** ["Convert Once, Consume Many: SDF for Cacheable, Typed Semantic Extraction from Web Pages"](https://zenodo.org/records/18559223) — solving efficient data ingestion for AI agents (the upstream problem to memory)
 
 ## Author
@@ -258,6 +259,14 @@ Built-in safety constraints:
 - LinkedIn: [pranab-sarkar-b0511160](https://www.linkedin.com/in/pranab-sarkar-b0511160/)
 - Email: developer@pranab.co.in
 
+## Patent
+
+YantrikDB's cognitive memory methods are covered by U.S. Patent Application No. 19/573,392 (filed March 20, 2026), claiming priority to Provisional Application No. 63/991,357 (filed February 26, 2026).
+
 ## License
 
-MIT
+Copyright (c) 2026 Pranab Sarkar
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, version 3.
+
+See [LICENSE](LICENSE) for the full text.

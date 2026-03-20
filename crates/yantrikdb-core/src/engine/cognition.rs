@@ -8,8 +8,8 @@ use super::{now, YantrikDB};
 impl YantrikDB {
     // ── Cognition loop (V3) ──
 
-    /// Run the full cognition loop: trigger detection, consolidation, conflict
-    /// scanning, and pattern mining. Returns a prioritized list of triggers
+    /// Run the full cognition loop: trigger detection, conflict scanning,
+    /// consolidation, and pattern mining. Returns a prioritized list of triggers
     /// and summary of actions taken.
     #[tracing::instrument(skip(self, config))]
     pub fn think(&self, config: &ThinkConfig) -> Result<ThinkResult> {
@@ -38,7 +38,15 @@ impl YantrikDB {
         all_triggers.extend(crate::triggers::check_valence_trend(self)?);
         all_triggers.extend(crate::triggers::check_entity_anomaly(self)?);
 
-        // Phase 2: Run consolidation if configured
+        // Phase 2: Scan for conflicts BEFORE consolidation
+        // (so contradictions are flagged before similar memories get merged)
+        let conflicts_found = if config.run_conflict_scan {
+            crate::conflict::scan_conflicts(self)?.len()
+        } else {
+            0
+        };
+
+        // Phase 3: Run consolidation if configured
         let consolidation_count = if config.run_consolidation {
             let stats = self.stats(None)?;
             if stats.active_memories >= config.min_active_memories {
@@ -53,13 +61,6 @@ impl YantrikDB {
             } else {
                 0
             }
-        } else {
-            0
-        };
-
-        // Phase 3: Scan for conflicts
-        let conflicts_found = if config.run_conflict_scan {
-            crate::conflict::scan_conflicts(self)?.len()
         } else {
             0
         };

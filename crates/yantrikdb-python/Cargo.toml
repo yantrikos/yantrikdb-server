@@ -11,7 +11,7 @@ name = "_yantrikdb_rust"
 crate-type = ["cdylib"]
 
 [dependencies]
-yantrikdb-core = { path = "../yantrikdb-core" }
+yantrikdb-core = { path = "../yantrikdb-core", package = "yantrikdb" }
 pyo3 = { version = "0.23", features = ["extension-module", "multiple-pymethods"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"

@@ -1,10 +1,13 @@
 [package]
 name = "yantrikdb"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "Cognitive memory engine for persistent AI systems"
+readme = "../../README.md"
 repository = "https://github.com/yantrikos/yantrikdb"
+keywords = ["ai", "memory", "cognitive", "database", "embeddings"]
+categories = ["database", "science"]
 
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

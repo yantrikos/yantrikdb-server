@@ -96,6 +96,8 @@ pub struct RecallResult {
 pub struct RecallResponse {
     pub results: Vec<RecallResult>,
     pub confidence: f64,
+    /// Human-readable explanation of what drove the confidence score.
+    pub certainty_reasons: Vec<String>,
     pub retrieval_summary: RetrievalSummary,
     pub hints: Vec<RefinementHint>,
 }
@@ -762,6 +764,40 @@ pub struct EntityBridge {
     pub domains: Vec<DomainCount>,
     pub bridge_score: f64,
     pub total_mentions: i64,
+}
+
+// ── Relationship depth types (V14) ──
+
+/// Rich interaction metrics for an entity, measuring depth of knowledge.
+/// This goes beyond simple mention counts to capture how deeply the system
+/// knows about an entity across sessions, domains, and time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipDepth {
+    /// The entity name.
+    pub entity: String,
+    /// The entity type (person, organization, tech, etc.).
+    pub entity_type: String,
+    /// Number of distinct sessions where this entity appeared.
+    pub sessions_together: i64,
+    /// Total memories mentioning this entity.
+    pub memories_mentioning: i64,
+    /// Average valence of memories involving this entity.
+    pub avg_valence: f64,
+    /// Domains this entity spans (e.g., ["work", "health", "family"]).
+    pub domains_spanning: Vec<String>,
+    /// Distinct relationship types connected to this entity.
+    pub relationship_types: Vec<String>,
+    /// Number of distinct entities this entity is connected to in the graph.
+    pub connection_count: i64,
+    /// Composite depth score (0.0-1.0): higher = deeper relationship.
+    /// Combines sessions, memories, domain breadth, connection count.
+    pub depth_score: f64,
+    /// When this entity was first seen.
+    pub first_seen: f64,
+    /// When this entity was last seen.
+    pub last_seen: f64,
+    /// Mentions per day since first seen.
+    pub interaction_frequency: f64,
 }
 
 impl Default for PatternConfig {

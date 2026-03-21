@@ -90,22 +90,139 @@ impl YantrikDB {
         }
 
         // Phase 5: Generate pattern_discovered triggers for new patterns
+        // Cross-domain and entity_bridge patterns get higher urgency ("surprise" triggers)
         if pattern_result.new_patterns > 0 {
-            let new_patterns = crate::patterns::get_patterns(self, None, Some("active"), 5)?;
+            let new_patterns = crate::patterns::get_patterns(self, None, Some("active"), 10)?;
             for p in new_patterns {
                 let mut context = std::collections::HashMap::new();
                 context.insert("pattern_type".to_string(), serde_json::json!(p.pattern_type));
                 context.insert("confidence".to_string(), serde_json::json!(p.confidence));
                 context.insert("description".to_string(), serde_json::json!(p.description));
 
+                // Cross-domain patterns are "surprise" discoveries — boost urgency
+                let (urgency, trigger_type, action) = match p.pattern_type.as_str() {
+                    "cross_domain" => {
+                        // Extract domain info from context for richer trigger
+                        if let Some(ctx) = p.context.as_object() {
+                            if let (Some(da), Some(db)) = (
+                                ctx.get("domain_a").and_then(|v| v.as_str()),
+                                ctx.get("domain_b").and_then(|v| v.as_str()),
+                            ) {
+                                context.insert("domain_a".to_string(), serde_json::json!(da));
+                                context.insert("domain_b".to_string(), serde_json::json!(db));
+                            }
+                        }
+                        (
+                            (p.confidence * 0.8).max(0.5),
+                            "surprise_connection",
+                            "explore_cross_domain",
+                        )
+                    }
+                    "entity_bridge" => {
+                        // Entity bridges reveal hidden connectors between domains
+                        (
+                            (p.confidence * 0.7).max(0.4),
+                            "entity_bridge_discovered",
+                            "explore_entity_bridge",
+                        )
+                    }
+                    _ => (
+                        p.confidence * 0.5,
+                        "pattern_discovered",
+                        "explore_pattern",
+                    ),
+                };
+
+                // Add session context if available
+                let active_sessions = self.active_sessions.borrow();
+                if !active_sessions.is_empty() {
+                    let session_ids: Vec<&String> = active_sessions.values().collect();
+                    context.insert(
+                        "active_sessions".to_string(),
+                        serde_json::json!(session_ids),
+                    );
+                }
+
                 all_triggers.push(Trigger {
-                    trigger_type: "pattern_discovered".to_string(),
+                    trigger_type: trigger_type.to_string(),
                     reason: format!("New pattern discovered: {}", p.description),
-                    urgency: p.confidence * 0.5,
+                    urgency,
                     source_rids: p.evidence_rids,
-                    suggested_action: "explore_pattern".to_string(),
+                    suggested_action: action.to_string(),
                     context,
                 });
+            }
+        }
+
+        // Phase 5.5: Session awareness triggers
+        // Check for gaps between sessions and surface context from last session
+        {
+            let mut session_stmt = self.conn.prepare(
+                "SELECT session_id, client_id, ended_at, summary, avg_valence, memory_count, topics \
+                 FROM sessions WHERE status = 'ended' \
+                 ORDER BY ended_at DESC LIMIT 1",
+            )?;
+            if let Ok((session_id, client_id, ended_at, summary, avg_valence, memory_count, topics_json)) =
+                session_stmt.query_row([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<f64>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                })
+            {
+                let gap_hours = (ts - ended_at) / 3600.0;
+                let topics: Vec<String> = serde_json::from_str(&topics_json).unwrap_or_default();
+
+                // Generate session awareness trigger if there's a meaningful gap
+                if gap_hours > 4.0 {
+                    let mut context = std::collections::HashMap::new();
+                    context.insert("last_session_id".to_string(), serde_json::json!(session_id));
+                    context.insert("client_id".to_string(), serde_json::json!(client_id));
+                    context.insert("gap_hours".to_string(), serde_json::json!(gap_hours));
+                    context.insert("last_session_memory_count".to_string(), serde_json::json!(memory_count));
+                    context.insert("last_session_topics".to_string(), serde_json::json!(topics));
+                    if let Some(ref s) = summary {
+                        context.insert("last_session_summary".to_string(), serde_json::json!(s));
+                    }
+                    if let Some(v) = avg_valence {
+                        context.insert("last_session_valence".to_string(), serde_json::json!(v));
+                    }
+
+                    let urgency = if gap_hours > 72.0 { 0.7 } else if gap_hours > 24.0 { 0.5 } else { 0.3 };
+                    let reason = if gap_hours > 24.0 {
+                        format!(
+                            "It's been {:.0} hours since your last session. Last time: {} memories stored{}.",
+                            gap_hours,
+                            memory_count,
+                            summary.as_ref().map(|s| format!(" — {}", s)).unwrap_or_default(),
+                        )
+                    } else {
+                        format!(
+                            "Welcome back ({:.0}h gap). Last session: {} memories{}.",
+                            gap_hours,
+                            memory_count,
+                            if !topics.is_empty() {
+                                format!(" about {}", topics.iter().take(3).cloned().collect::<Vec<_>>().join(", "))
+                            } else {
+                                String::new()
+                            },
+                        )
+                    };
+
+                    all_triggers.push(Trigger {
+                        trigger_type: "session_awareness".to_string(),
+                        reason,
+                        urgency,
+                        source_rids: vec![],
+                        suggested_action: "acknowledge".to_string(),
+                        context,
+                    });
+                }
             }
         }
 

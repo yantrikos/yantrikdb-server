@@ -1,6 +1,7 @@
 mod memory;
 mod graph;
 mod cognition;
+mod session_temporal;
 mod sync;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};

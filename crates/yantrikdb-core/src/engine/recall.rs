@@ -1619,7 +1619,7 @@ impl YantrikDB {
             candidate_count,
         };
 
-        // Compute confidence from 4 signals
+        // Compute confidence from 4 signals with detailed reasons
         let signal_sim = top_similarity;
         let signal_gap = if results.len() >= 3 {
             results[0].score - results[2].score
@@ -1634,6 +1634,73 @@ impl YantrikDB {
         let confidence = (0.35 * signal_sim + 0.25 * signal_gap + 0.20 * signal_diversity + 0.20 * signal_density)
             .clamp(0.0, 1.0);
 
+        // Build certainty reasons explaining the confidence score
+        let mut certainty_reasons = Vec::new();
+        if signal_sim >= 0.7 {
+            certainty_reasons.push(format!(
+                "Strong semantic match (top similarity: {:.0}%)", signal_sim * 100.0
+            ));
+        } else if signal_sim >= 0.4 {
+            certainty_reasons.push(format!(
+                "Moderate semantic match (top similarity: {:.0}%)", signal_sim * 100.0
+            ));
+        } else if signal_sim > 0.0 {
+            certainty_reasons.push(format!(
+                "Weak semantic match (top similarity: {:.0}%) — query may be outside stored knowledge",
+                signal_sim * 100.0
+            ));
+        } else {
+            certainty_reasons.push("No matching memories found".to_string());
+        }
+
+        if results.is_empty() {
+            certainty_reasons.push(format!(
+                "No results from {} candidates", candidate_count
+            ));
+        } else if signal_density < 0.5 {
+            certainty_reasons.push(format!(
+                "Sparse results: only {}/{} slots filled", results.len(), top_k
+            ));
+        }
+
+        if signal_gap > 0.3 {
+            certainty_reasons.push(
+                "Clear winner: top result stands out from the rest".to_string()
+            );
+        } else if signal_gap < 0.05 && results.len() >= 2 {
+            certainty_reasons.push(
+                "Ambiguous: multiple results scored similarly — consider refining query".to_string()
+            );
+        }
+
+        if sources_used.contains(&"graph".to_string()) {
+            certainty_reasons.push(
+                "Graph expansion contributed entity-linked memories".to_string()
+            );
+        }
+
+        // Check for stale results (last accessed > 30 days ago)
+        let ts = now();
+        let stale_count = results.iter().filter(|r| {
+            // Use created_at as a proxy since we don't have last_access in RecallResult
+            ts - r.created_at > 30.0 * 86400.0
+        }).count();
+        if stale_count > results.len() / 2 && !results.is_empty() {
+            certainty_reasons.push(format!(
+                "Note: {}/{} results are older than 30 days — information may be outdated",
+                stale_count, results.len()
+            ));
+        }
+
+        // Check for low-certainty memories in results
+        let low_certainty_count = results.iter().filter(|r| r.certainty < 0.5).count();
+        if low_certainty_count > 0 {
+            certainty_reasons.push(format!(
+                "{}/{} results have low memory certainty (<50%) — treat with caution",
+                low_certainty_count, results.len()
+            ));
+        }
+
         // Generate hints when confidence < 0.60
         let hints = if confidence < 0.60 {
             self.generate_hints(query_text, query_embedding, &results, &summary)
@@ -1644,6 +1711,7 @@ impl YantrikDB {
         Ok(RecallResponse {
             results,
             confidence,
+            certainty_reasons,
             retrieval_summary: summary,
             hints,
         })
@@ -1720,6 +1788,68 @@ impl YantrikDB {
                 suggestion: "The query may use different words than the stored memories. Try rephrasing with synonyms or related terms.".to_string(),
                 related_entities: vec![],
             });
+        }
+
+        // Hint 5: Domain diversity — if all results from one domain but DB has others
+        if results.len() >= 3 {
+            let result_domains: std::collections::HashSet<&str> =
+                results.iter().map(|r| r.domain.as_str()).collect();
+            if result_domains.len() == 1 {
+                // Check if other domains exist in the DB
+                let cache = self.scoring_cache.borrow();
+                let all_domains: std::collections::HashSet<&str> =
+                    cache.values().map(|r| r.domain.as_str()).collect();
+                let other_domains: Vec<&str> = all_domains
+                    .difference(&result_domains)
+                    .filter(|d| **d != "general")
+                    .copied()
+                    .take(5)
+                    .collect();
+                if !other_domains.is_empty() {
+                    hints.push(RefinementHint {
+                        hint_type: "domain".to_string(),
+                        suggestion: format!(
+                            "Results only from '{}' domain. Other domains available: {}. \
+                             Consider cross-domain search if relevant.",
+                            result_domains.iter().next().unwrap_or(&"unknown"),
+                            other_domains.join(", ")
+                        ),
+                        related_entities: vec![],
+                    });
+                }
+            }
+        }
+
+        // Hint 6: Procedural memory available — if query looks like a "how to" question
+        if let Some(qt) = query_text {
+            let qt_lower = qt.to_lowercase();
+            let is_procedural_query = qt_lower.starts_with("how ")
+                || qt_lower.contains("how do")
+                || qt_lower.contains("how to")
+                || qt_lower.contains("best way")
+                || qt_lower.contains("approach")
+                || qt_lower.contains("strategy");
+            if is_procedural_query {
+                let has_procedural = results.iter().any(|r| r.memory_type == "procedural");
+                if !has_procedural {
+                    // Check if procedural memories exist at all
+                    let cache = self.scoring_cache.borrow();
+                    let procedural_count = cache.values()
+                        .filter(|r| r.memory_type == "procedural")
+                        .count();
+                    if procedural_count > 0 {
+                        hints.push(RefinementHint {
+                            hint_type: "memory_type".to_string(),
+                            suggestion: format!(
+                                "{} procedural memories exist but weren't retrieved. \
+                                 Try filtering by memory_type='procedural'.",
+                                procedural_count
+                            ),
+                            related_entities: vec![],
+                        });
+                    }
+                }
+            }
         }
 
         hints

@@ -32,6 +32,144 @@ fn classify_conflict(rel_type: &str) -> ConflictType {
     }
 }
 
+/// Entity types that, when substituted in otherwise-identical sentences, indicate
+/// a factual contradiction (identity-level conflict).
+const IDENTITY_ENTITY_TYPES: &[&str] = &[
+    "organization", "place", "person",
+];
+
+/// Entity types where substitution indicates a preference contradiction.
+const PREFERENCE_ENTITY_TYPES: &[&str] = &[
+    "tech",
+];
+
+/// Temporal keywords whose presence (when differing) suggests a temporal conflict.
+const TEMPORAL_KEYWORDS: &[&str] = &[
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "morning", "afternoon", "evening", "night",
+    "today", "tomorrow", "yesterday",
+    "2024", "2025", "2026", "2027",
+    "q1", "q2", "q3", "q4",
+];
+
+/// Detect entity substitution in two memory texts.
+///
+/// When two memories are semantically similar but differ in specific entities,
+/// this classifies the substitution type. For example:
+/// - "works at Google" vs "works at Meta" → IdentityFact (organization substitution)
+/// - "uses PostgreSQL for API" vs "uses MySQL for API" → Preference (tech substitution)
+/// - "meeting on March 15" vs "meeting on April 1" → Temporal (date substitution)
+fn classify_entity_substitution(
+    conn: &rusqlite::Connection,
+    text_a: &str,
+    text_b: &str,
+) -> (ConflictType, Option<String>) {
+    let words_a: std::collections::HashSet<String> = text_a
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let words_b: std::collections::HashSet<String> = text_b
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let diff_a: Vec<&String> = words_a.difference(&words_b).collect();
+    let diff_b: Vec<&String> = words_b.difference(&words_a).collect();
+
+    // Check for temporal keyword substitution first (doesn't require entity lookup)
+    let temporal_a = diff_a.iter().any(|w| TEMPORAL_KEYWORDS.contains(&w.as_str()));
+    let temporal_b = diff_b.iter().any(|w| TEMPORAL_KEYWORDS.contains(&w.as_str()));
+    if temporal_a && temporal_b {
+        let diff_desc = format!(
+            "temporal substitution: {{{}}} vs {{{}}}",
+            diff_a.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+            diff_b.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+        );
+        return (ConflictType::Temporal, Some(diff_desc));
+    }
+
+    // Look up differing tokens in the entities table to see if they're known entities
+    let mut entity_types_a: Vec<String> = Vec::new();
+    let mut entity_types_b: Vec<String> = Vec::new();
+    let mut entity_names_a: Vec<String> = Vec::new();
+    let mut entity_names_b: Vec<String> = Vec::new();
+
+    if let Ok(mut stmt) = conn.prepare_cached(
+        "SELECT name, entity_type FROM entities WHERE LOWER(name) = ?1"
+    ) {
+        for word in &diff_a {
+            if let Ok(etype) = stmt.query_row(params![word.as_str()], |row| row.get::<_, String>(1)) {
+                entity_types_a.push(etype);
+                entity_names_a.push(word.to_string());
+            }
+        }
+        for word in &diff_b {
+            if let Ok(etype) = stmt.query_row(params![word.as_str()], |row| row.get::<_, String>(1)) {
+                entity_types_b.push(etype);
+                entity_names_b.push(word.to_string());
+            }
+        }
+    }
+
+    // Also try multi-word entity matching: join diff tokens and check
+    if entity_types_a.is_empty() && diff_a.len() >= 2 {
+        let joined: String = diff_a.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+        if let Ok(mut stmt) = conn.prepare_cached(
+            "SELECT name, entity_type FROM entities WHERE LOWER(name) = ?1"
+        ) {
+            if let Ok((name, etype)) = stmt.query_row(params![joined], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                entity_types_a.push(etype);
+                entity_names_a.push(name);
+            }
+        }
+    }
+    if entity_types_b.is_empty() && diff_b.len() >= 2 {
+        let joined: String = diff_b.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+        if let Ok(mut stmt) = conn.prepare_cached(
+            "SELECT name, entity_type FROM entities WHERE LOWER(name) = ?1"
+        ) {
+            if let Ok((name, etype)) = stmt.query_row(params![joined], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                entity_types_b.push(etype);
+                entity_names_b.push(name);
+            }
+        }
+    }
+
+    // Check if both sides have entities of the same type → substitution conflict
+    for type_a in &entity_types_a {
+        for type_b in &entity_types_b {
+            if type_a == type_b {
+                let diff_desc = format!(
+                    "{} substitution: {{{}}} vs {{{}}}",
+                    type_a,
+                    entity_names_a.join(", "),
+                    entity_names_b.join(", "),
+                );
+
+                if IDENTITY_ENTITY_TYPES.contains(&type_a.as_str()) {
+                    return (ConflictType::IdentityFact, Some(diff_desc));
+                }
+                if PREFERENCE_ENTITY_TYPES.contains(&type_a.as_str()) {
+                    return (ConflictType::Preference, Some(diff_desc));
+                }
+                // Same type but not in identity/preference → still a meaningful conflict
+                return (ConflictType::Minor, Some(diff_desc));
+            }
+        }
+    }
+
+    // No entity substitution detected
+    (ConflictType::Minor, None)
+}
+
 /// Check if a conflict already exists for this (memory_a, memory_b) pair.
 /// Checks both orderings.
 fn conflict_exists(db: &YantrikDB, rid_a: &str, rid_b: &str) -> Result<bool> {
@@ -360,18 +498,32 @@ pub fn scan_conflicts(db: &YantrikDB) -> Result<Vec<Conflict>> {
                         if jaccard < 0.7 {
                             seen_pairs.insert(pair);
                             if !conflict_exists(db, rid_a, rid_b)? {
-                                let conflict = create_conflict(
-                                    db,
-                                    &ConflictType::Minor,
-                                    rid_a,
-                                    rid_b,
-                                    Some(entity),
-                                    None,
-                                    &format!(
+                                // Run entity substitution classifier to determine
+                                // conflict type and generate a specific reason
+                                let (conflict_type, substitution_desc) =
+                                    classify_entity_substitution(conn, text_a, text_b);
+
+                                let reason = match substitution_desc {
+                                    Some(ref desc) => format!(
+                                        "Memories sharing entity '{}' contradict via {}: \
+                                         similarity={:.0}%, word_overlap={:.0}%",
+                                        entity, desc, sim * 100.0, jaccard * 100.0
+                                    ),
+                                    None => format!(
                                         "Memories sharing entity '{}' may contradict: \
                                          similarity={:.0}%, word_overlap={:.0}%",
                                         entity, sim * 100.0, jaccard * 100.0
                                     ),
+                                };
+
+                                let conflict = create_conflict(
+                                    db,
+                                    &conflict_type,
+                                    rid_a,
+                                    rid_b,
+                                    Some(entity),
+                                    None,
+                                    &reason,
                                 )?;
                                 conflicts.push(conflict);
                             }

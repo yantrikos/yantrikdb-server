@@ -1,7 +1,7 @@
 use rusqlite::params;
 
 use crate::error::Result;
-use crate::types::{DomainCount, EntityProfile, Memory};
+use crate::types::{DomainCount, EntityProfile, Memory, RelationshipDepth};
 
 use super::{now, YantrikDB};
 
@@ -280,6 +280,142 @@ impl YantrikDB {
             last_mentioned_at: last_seen,
             first_seen,
             window_days,
+        })
+    }
+
+    /// Compute relationship depth for an entity — how deeply the system knows it.
+    ///
+    /// Combines session count, memory count, domain breadth, graph connections,
+    /// and interaction frequency into a composite depth score.
+    pub fn relationship_depth(
+        &self,
+        entity: &str,
+        namespace: Option<&str>,
+    ) -> Result<RelationshipDepth> {
+        let conn = &self.conn;
+
+        // Get entity metadata
+        let (entity_type, first_seen, last_seen): (String, f64, f64) = conn.query_row(
+            "SELECT entity_type, first_seen, last_seen FROM entities WHERE name = ?1",
+            params![entity],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows =>
+                crate::error::YantrikDbError::NotFound(format!("entity: {}", entity)),
+            _ => e.into(),
+        })?;
+
+        // Count memories mentioning this entity
+        let memories_mentioning: i64 = if let Some(ns) = namespace {
+            conn.query_row(
+                "SELECT COUNT(*) FROM memory_entities me \
+                 JOIN memories m ON m.rid = me.memory_rid \
+                 WHERE me.entity_name = ?1 AND m.consolidation_status = 'active' \
+                 AND m.namespace = ?2",
+                params![entity, ns],
+                |row| row.get(0),
+            )?
+        } else {
+            conn.query_row(
+                "SELECT COUNT(*) FROM memory_entities me \
+                 JOIN memories m ON m.rid = me.memory_rid \
+                 WHERE me.entity_name = ?1 AND m.consolidation_status = 'active'",
+                params![entity],
+                |row| row.get(0),
+            )?
+        };
+
+        // Count distinct sessions
+        let sessions_together: i64 = if let Some(ns) = namespace {
+            conn.query_row(
+                "SELECT COUNT(DISTINCT m.session_id) FROM memory_entities me \
+                 JOIN memories m ON m.rid = me.memory_rid \
+                 WHERE me.entity_name = ?1 AND m.session_id IS NOT NULL \
+                 AND m.consolidation_status = 'active' AND m.namespace = ?2",
+                params![entity, ns],
+                |row| row.get(0),
+            )?
+        } else {
+            conn.query_row(
+                "SELECT COUNT(DISTINCT m.session_id) FROM memory_entities me \
+                 JOIN memories m ON m.rid = me.memory_rid \
+                 WHERE me.entity_name = ?1 AND m.session_id IS NOT NULL \
+                 AND m.consolidation_status = 'active'",
+                params![entity],
+                |row| row.get(0),
+            )?
+        };
+
+        // Average valence
+        let avg_valence: f64 = conn.query_row(
+            "SELECT COALESCE(AVG(m.valence), 0.0) FROM memory_entities me \
+             JOIN memories m ON m.rid = me.memory_rid \
+             WHERE me.entity_name = ?1 AND m.consolidation_status = 'active'",
+            params![entity],
+            |row| row.get(0),
+        )?;
+
+        // Domains spanning
+        let mut domain_stmt = conn.prepare(
+            "SELECT DISTINCT m.domain FROM memory_entities me \
+             JOIN memories m ON m.rid = me.memory_rid \
+             WHERE me.entity_name = ?1 AND m.consolidation_status = 'active' \
+             AND m.domain != 'general'",
+        )?;
+        let domains_spanning: Vec<String> = domain_stmt
+            .query_map(params![entity], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // Distinct relationship types
+        let mut rel_stmt = conn.prepare(
+            "SELECT DISTINCT rel_type FROM edges \
+             WHERE (src = ?1 OR dst = ?1) AND tombstoned = 0",
+        )?;
+        let relationship_types: Vec<String> = rel_stmt
+            .query_map(params![entity], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // Connection count (distinct entities connected via edges)
+        let connection_count: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT CASE WHEN src = ?1 THEN dst ELSE src END) \
+             FROM edges WHERE (src = ?1 OR dst = ?1) AND tombstoned = 0",
+            params![entity],
+            |row| row.get(0),
+        )?;
+
+        // Compute composite depth score
+        // Factors: sessions (log scale), memories (log scale), domain breadth,
+        // connection count (log scale), relationship type diversity
+        let ts = now();
+        let days_known = ((ts - first_seen) / 86400.0).max(1.0);
+        let interaction_frequency = memories_mentioning as f64 / days_known;
+
+        let s_sessions = (1.0 + sessions_together as f64).ln() / 4.0_f64.ln(); // normalized to ~1.0 at 3 sessions
+        let s_memories = (1.0 + memories_mentioning as f64).ln() / 20.0_f64.ln(); // ~1.0 at 19 memories
+        let s_domains = (domains_spanning.len() as f64 / 3.0).min(1.0); // ~1.0 at 3 domains
+        let s_connections = (1.0 + connection_count as f64).ln() / 10.0_f64.ln(); // ~1.0 at 9 connections
+        let s_rel_types = (relationship_types.len() as f64 / 4.0).min(1.0); // ~1.0 at 4 rel types
+
+        let depth_score = (0.25 * s_sessions
+            + 0.25 * s_memories
+            + 0.20 * s_domains
+            + 0.15 * s_connections
+            + 0.15 * s_rel_types)
+            .clamp(0.0, 1.0);
+
+        Ok(RelationshipDepth {
+            entity: entity.to_string(),
+            entity_type,
+            sessions_together,
+            memories_mentioning,
+            avg_valence,
+            domains_spanning,
+            relationship_types,
+            connection_count,
+            depth_score,
+            first_seen,
+            last_seen,
+            interaction_frequency,
         })
     }
 }

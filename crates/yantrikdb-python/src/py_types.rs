@@ -76,6 +76,8 @@ pub fn recall_response_to_dict(py: Python<'_>, r: &yantrikdb_core::RecallRespons
         .collect::<PyResult<_>>()?;
     dict.set_item("results", results)?;
     dict.set_item("confidence", r.confidence)?;
+    let reasons: Vec<&str> = r.certainty_reasons.iter().map(|s| s.as_str()).collect();
+    dict.set_item("certainty_reasons", reasons)?;
 
     let summary = PyDict::new(py);
     summary.set_item("top_similarity", r.retrieval_summary.top_similarity)?;
@@ -296,6 +298,81 @@ pub fn json_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<PyObject>
             Ok(dict.into())
         }
     }
+}
+
+/// Convert a Session to a Python dict.
+pub fn session_to_dict(py: Python<'_>, s: &yantrikdb_core::Session) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("session_id", &s.session_id)?;
+    dict.set_item("namespace", &s.namespace)?;
+    dict.set_item("client_id", &s.client_id)?;
+    dict.set_item("status", &s.status)?;
+    dict.set_item("started_at", s.started_at)?;
+    dict.set_item("ended_at", s.ended_at)?;
+    dict.set_item("summary", &s.summary)?;
+    dict.set_item("avg_valence", s.avg_valence)?;
+    dict.set_item("memory_count", s.memory_count)?;
+    let topics: Vec<&str> = s.topics.iter().map(|t| t.as_str()).collect();
+    dict.set_item("topics", topics)?;
+    dict.set_item("metadata", json_to_py(py, &s.metadata)?)?;
+    Ok(dict.into())
+}
+
+/// Convert a SessionSummary to a Python dict.
+pub fn session_summary_to_dict(py: Python<'_>, s: &yantrikdb_core::SessionSummary) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("session_id", &s.session_id)?;
+    dict.set_item("duration_secs", s.duration_secs)?;
+    dict.set_item("memory_count", s.memory_count)?;
+    dict.set_item("avg_valence", s.avg_valence)?;
+    let topics: Vec<&str> = s.topics.iter().map(|t| t.as_str()).collect();
+    dict.set_item("topics", topics)?;
+    Ok(dict.into())
+}
+
+/// Convert an EntityProfile to a Python dict.
+pub fn entity_profile_to_dict(py: Python<'_>, p: &yantrikdb_core::EntityProfile) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("entity", &p.entity)?;
+    dict.set_item("entity_type", &p.entity_type)?;
+    dict.set_item("mention_count", p.mention_count)?;
+    dict.set_item("session_count", p.session_count)?;
+    let domains = pyo3::types::PyList::empty(py);
+    for dc in &p.domains {
+        let dd = PyDict::new(py);
+        dd.set_item("domain", &dc.domain)?;
+        dd.set_item("count", dc.count)?;
+        domains.append(dd)?;
+    }
+    dict.set_item("domains", domains)?;
+    dict.set_item("avg_valence", p.avg_valence)?;
+    dict.set_item("valence_trend", p.valence_trend)?;
+    dict.set_item("dominant_emotion", &p.dominant_emotion)?;
+    dict.set_item("interaction_frequency", p.interaction_frequency)?;
+    dict.set_item("last_mentioned_at", p.last_mentioned_at)?;
+    dict.set_item("first_seen", p.first_seen)?;
+    dict.set_item("window_days", p.window_days)?;
+    Ok(dict.into())
+}
+
+/// Convert a RelationshipDepth to a Python dict.
+pub fn relationship_depth_to_dict(py: Python<'_>, r: &yantrikdb_core::RelationshipDepth) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("entity", &r.entity)?;
+    dict.set_item("entity_type", &r.entity_type)?;
+    dict.set_item("sessions_together", r.sessions_together)?;
+    dict.set_item("memories_mentioning", r.memories_mentioning)?;
+    dict.set_item("avg_valence", r.avg_valence)?;
+    let domains: Vec<&str> = r.domains_spanning.iter().map(|s| s.as_str()).collect();
+    dict.set_item("domains_spanning", domains)?;
+    let rel_types: Vec<&str> = r.relationship_types.iter().map(|s| s.as_str()).collect();
+    dict.set_item("relationship_types", rel_types)?;
+    dict.set_item("connection_count", r.connection_count)?;
+    dict.set_item("depth_score", r.depth_score)?;
+    dict.set_item("first_seen", r.first_seen)?;
+    dict.set_item("last_seen", r.last_seen)?;
+    dict.set_item("interaction_frequency", r.interaction_frequency)?;
+    Ok(dict.into())
 }
 
 /// Convert a Python object to serde_json::Value.

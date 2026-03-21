@@ -42,6 +42,7 @@ mod learning;
 mod lifecycle;
 mod recall;
 mod record;
+mod procedural;
 mod session;
 mod stats;
 mod storage;

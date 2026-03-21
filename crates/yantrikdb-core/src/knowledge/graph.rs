@@ -122,6 +122,43 @@ const ORG_DST_RELS: &[&str] = &[
     "member_of", "belongs_to", "founded",
 ];
 
+/// Relationship types where dst is tech/tool (src is project or person).
+const TECH_DST_RELS: &[&str] = &[
+    "built_with", "uses", "depends_on", "integrates", "requires",
+    "written_in", "coded_in", "implemented_with", "powered_by",
+    "runs_on", "compiled_with",
+];
+
+/// Relationship types where dst is infrastructure.
+const INFRA_DST_RELS: &[&str] = &[
+    "deployed_on", "hosted_on", "deployed_to", "hosted_at",
+    "runs_on_infra", "served_by",
+];
+
+/// Relationship types where src is a person and dst is a project/thing.
+const PERSON_PROJECT_RELS: &[&str] = &[
+    "works_on", "contributes_to", "maintains", "leads", "created",
+    "built", "designed", "architected", "owns",
+];
+
+/// Relationship types where src is a project and dst is a project (dependency).
+const PROJECT_PROJECT_RELS: &[&str] = &[
+    "depends_on_project", "extends", "forks", "replaces",
+    "supersedes", "derived_from",
+];
+
+/// Relationship types where dst is an event or activity.
+const EVENT_DST_RELS: &[&str] = &[
+    "attended_event", "participated_in", "scheduled_for",
+    "presented_at", "spoke_at",
+];
+
+/// Relationship types where dst is a concept/topic.
+const CONCEPT_DST_RELS: &[&str] = &[
+    "interested_in", "studies", "researches", "specializes_in",
+    "expert_in", "learning", "teaches",
+];
+
 /// Classify entity types using relationship semantics.
 /// Returns (src_type, dst_type) — either may be "unknown" if not inferable.
 pub fn classify_with_relationship(
@@ -145,6 +182,38 @@ pub fn classify_with_relationship(
     // Person → Organization relationships
     if ORG_DST_RELS.contains(&rel) {
         return ("person", "organization");
+    }
+
+    // * → Tech/Tool relationships (src type from name heuristic)
+    if TECH_DST_RELS.contains(&rel) {
+        let src_type = classify_entity_type(src);
+        return (if src_type == "unknown" { "project" } else { src_type }, "tech");
+    }
+
+    // * → Infrastructure relationships
+    if INFRA_DST_RELS.contains(&rel) {
+        let src_type = classify_entity_type(src);
+        return (if src_type == "unknown" { "project" } else { src_type }, "infrastructure");
+    }
+
+    // Person → Project relationships
+    if PERSON_PROJECT_RELS.contains(&rel) {
+        return ("person", "project");
+    }
+
+    // Project → Project relationships
+    if PROJECT_PROJECT_RELS.contains(&rel) {
+        return ("project", "project");
+    }
+
+    // * → Event relationships
+    if EVENT_DST_RELS.contains(&rel) {
+        return (classify_entity_type(src), "event");
+    }
+
+    // Person → Concept/Topic relationships
+    if CONCEPT_DST_RELS.contains(&rel) {
+        return ("person", "concept");
     }
 
     // Fall back to name-based heuristics
@@ -489,9 +558,39 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_with_rel_fallback() {
-        // Unknown relationship → falls back to name heuristics
+    fn test_classify_with_rel_tech_dst() {
+        // "uses" implies dst is tech; FAISS is tech by name heuristic
         let (s, d) = classify_with_relationship("FAISS", "data pipeline", "uses");
+        assert_eq!(s, "tech");
+        assert_eq!(d, "tech");
+    }
+
+    #[test]
+    fn test_classify_with_rel_built_with() {
+        // "built_with" → src defaults to "project" if unknown, dst is tech
+        let (s, d) = classify_with_relationship("MyApp", "React", "built_with");
+        assert_eq!(s, "project");
+        assert_eq!(d, "tech");
+    }
+
+    #[test]
+    fn test_classify_with_rel_deployed_on() {
+        let (s, d) = classify_with_relationship("MyApp", "AWS", "deployed_on");
+        assert_eq!(s, "project");
+        assert_eq!(d, "infrastructure");
+    }
+
+    #[test]
+    fn test_classify_with_rel_works_on() {
+        let (s, d) = classify_with_relationship("Pranab", "YantrikDB", "works_on");
+        assert_eq!(s, "person");
+        assert_eq!(d, "project");
+    }
+
+    #[test]
+    fn test_classify_with_rel_fallback() {
+        // Truly unknown relationship → falls back to name heuristics
+        let (s, d) = classify_with_relationship("FAISS", "data pipeline", "related_to");
         assert_eq!(s, "tech");
         assert_eq!(d, "unknown");
     }

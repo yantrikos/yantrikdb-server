@@ -442,10 +442,7 @@ mod tests {
             suggested_action: "ask_user".to_string(),
             context: std::collections::HashMap::new(),
         };
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+        let ts = crate::time::now_secs();
         crate::triggers::persist_trigger(&a, &trigger, ts).unwrap();
 
         // Sync A -> B
@@ -471,10 +468,7 @@ mod tests {
             suggested_action: "run_consolidation".to_string(),
             context: std::collections::HashMap::new(),
         };
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+        let ts = crate::time::now_secs();
         let tid = crate::triggers::persist_trigger(&a, &trigger, ts)
             .unwrap()
             .unwrap();

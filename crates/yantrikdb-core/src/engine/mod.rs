@@ -85,10 +85,7 @@ pub struct YantrikDB {
 }
 
 pub(crate) fn now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64()
+    crate::time::now_secs()
 }
 
 /// Compute BLAKE3 hash of an embedding blob.
@@ -177,7 +174,7 @@ impl YantrikDB {
             match Self::get_meta(&conn, "actor_id")? {
                 Some(id) => id,
                 None => {
-                    let id = uuid7::uuid7().to_string();
+                    let id = crate::id::new_id();
                     conn.execute(
                         "INSERT OR REPLACE INTO meta (key, value) VALUES ('actor_id', ?1)",
                         params![id],

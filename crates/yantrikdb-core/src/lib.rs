@@ -5,6 +5,8 @@ mod cognition;
 mod distributed;
 mod knowledge;
 mod vector;
+pub(crate) mod time;
+pub(crate) mod id;
 
 // ── Re-exports at original crate paths ──
 pub use base::{bench_utils, compression, encryption, error, hlc, schema, scoring, serde_helpers, types, vault};

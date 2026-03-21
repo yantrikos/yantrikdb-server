@@ -15,7 +15,7 @@ impl YantrikDB {
         rel_type: &str,
         weight: f64,
     ) -> Result<String> {
-        let edge_id = uuid7::uuid7().to_string();
+        let edge_id = crate::id::new_id();
         let ts = now();
 
         self.conn.execute(

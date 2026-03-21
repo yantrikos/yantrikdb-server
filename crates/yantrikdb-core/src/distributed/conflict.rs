@@ -81,11 +81,8 @@ pub fn create_conflict(
     rel_type: Option<&str>,
     detection_reason: &str,
 ) -> Result<Conflict> {
-    let conflict_id = uuid7::uuid7().to_string();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let conflict_id = crate::id::new_id();
+    let ts = crate::time::now_secs();
     let priority = conflict_type.default_priority();
     let hlc_ts = db.tick_hlc();
     let hlc_bytes = hlc_ts.to_bytes().to_vec();

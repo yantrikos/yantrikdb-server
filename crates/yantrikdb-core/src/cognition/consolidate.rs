@@ -228,10 +228,7 @@ pub fn consolidate(
     }
 
     let mut results = Vec::new();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let ts = crate::time::now_secs();
 
     for cluster in &clusters {
         let source_rids: Vec<String> = cluster.iter().map(|m| m.rid.clone()).collect();

@@ -458,10 +458,7 @@ fn materialize_consolidate(
             .get("metadata")
             .map(|m| serde_json::to_string(m).unwrap_or_else(|_| "{}".to_string()))
             .unwrap_or_else(|| "{}".to_string());
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+        let ts = crate::time::now_secs();
 
         let namespace = payload["namespace"].as_str().unwrap_or("default");
         conn.execute(
@@ -659,10 +656,7 @@ pub fn set_peer_watermark(
     hlc: &[u8],
     op_id: &str,
 ) -> Result<()> {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let ts = crate::time::now_secs();
 
     conn.execute(
         "INSERT INTO sync_peers (peer_actor, last_synced_hlc, last_synced_op_id, last_sync_time) \

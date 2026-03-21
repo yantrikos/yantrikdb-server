@@ -9,10 +9,7 @@ use crate::scoring;
 use crate::types::{PersistedTrigger, Trigger, TriggerType};
 
 fn now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64()
+    crate::time::now_secs()
 }
 
 // ── Existing trigger checks ──
@@ -513,7 +510,7 @@ pub fn persist_trigger(db: &YantrikDB, trigger: &Trigger, ts: f64) -> Result<Opt
         return Ok(None);
     }
 
-    let trigger_id = uuid7::uuid7().to_string();
+    let trigger_id = crate::id::new_id();
     let hlc_ts = db.tick_hlc();
     let hlc_bytes = hlc_ts.to_bytes().to_vec();
     let actor_id = db.actor_id().to_string();

@@ -81,7 +81,7 @@ impl YantrikDB {
         payload: &serde_json::Value,
         emb_hash: Option<&[u8]>,
     ) -> Result<String> {
-        let op_id = uuid7::uuid7().to_string();
+        let op_id = crate::id::new_id();
         let hlc_ts = self.tick_hlc();
         let hlc_bytes = hlc_ts.to_bytes().to_vec();
         let payload_str = serde_json::to_string(payload)?;

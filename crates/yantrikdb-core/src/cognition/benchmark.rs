@@ -110,7 +110,7 @@ impl BenchTracker {
 
     /// Start a new benchmark run.
     pub fn start_run(&self, description: &str, git_commit: Option<&str>) -> Result<BenchRun> {
-        let run_id = uuid7::uuid7().to_string();
+        let run_id = crate::id::new_id();
         let timestamp = now_secs();
         self.conn.execute(
             "INSERT INTO bench_runs (run_id, timestamp, git_commit, description, \
@@ -127,7 +127,7 @@ impl BenchTracker {
 
     /// Record a single test result.
     pub fn record_result(&self, run_id: &str, result: &BenchResult) -> Result<()> {
-        let result_id = uuid7::uuid7().to_string();
+        let result_id = crate::id::new_id();
         self.conn.execute(
             "INSERT OR REPLACE INTO bench_results \
              (result_id, run_id, category, test_name, persona, passed, \
@@ -226,7 +226,7 @@ impl BenchTracker {
                     severity: severity.to_string(),
                 };
 
-                let reg_id = uuid7::uuid7().to_string();
+                let reg_id = crate::id::new_id();
                 self.conn.execute(
                     "INSERT INTO bench_regressions \
                      (regression_id, run_id, test_name, previous_value, \

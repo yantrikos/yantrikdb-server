@@ -1,0 +1,25 @@
+[package]
+name = "yantrikdb-wasm"
+version = "0.2.4"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "YantrikDB compiled to WebAssembly — run cognitive memory in the browser"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+yantrikdb = { path = "../yantrikdb-core" }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

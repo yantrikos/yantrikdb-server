@@ -1481,18 +1481,12 @@ pub fn logit(p: f64) -> f64 {
 
 /// Current time in milliseconds since Unix epoch.
 pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+    crate::time::now_ms()
 }
 
 /// Current time in seconds since Unix epoch (f64 for compatibility with existing code).
 pub fn now_secs() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64()
+    crate::time::now_secs()
 }
 
 // ── Serialization Helpers ──

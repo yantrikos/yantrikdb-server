@@ -15,10 +15,7 @@ use crate::serde_helpers::deserialize_f32;
 use crate::types::{MemoryWithEmbedding, Pattern, PatternConfig, PatternMiningResult};
 
 fn now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64()
+    crate::time::now_secs()
 }
 
 /// Internal raw pattern before persistence.
@@ -419,7 +416,7 @@ fn upsert_pattern(db: &YantrikDB, raw: &RawPattern, ts: f64) -> Result<bool> {
         )?;
         Ok(false) // not new
     } else {
-        let pattern_id = uuid7::uuid7().to_string();
+        let pattern_id = crate::id::new_id();
         let hlc = db.tick_hlc();
         let hlc_bytes = hlc.to_bytes().to_vec();
         let actor_id = db.actor_id().to_string();

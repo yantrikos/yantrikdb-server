@@ -82,10 +82,7 @@ pub struct HLC {
 }
 
 fn wall_clock_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+    crate::time::now_ms()
 }
 
 impl HLC {

@@ -13,7 +13,7 @@ impl YantrikDB {
     /// and summary of actions taken.
     #[tracing::instrument(skip(self, config))]
     pub fn think(&self, config: &ThinkConfig) -> Result<ThinkResult> {
-        let start = std::time::Instant::now();
+        let start = crate::time::Instant::now();
         let ts = now();
 
         // Phase 0: Expire old triggers
@@ -147,7 +147,7 @@ impl YantrikDB {
             None,
         )?;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
+        let duration_ms = start.elapsed_ms();
 
         Ok(ThinkResult {
             triggers: final_triggers,

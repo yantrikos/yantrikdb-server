@@ -23,6 +23,8 @@ tracing = "0.1"
 aes-gcm = "0.10"
 base64 = "0.22"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 
 [features]
 default = []

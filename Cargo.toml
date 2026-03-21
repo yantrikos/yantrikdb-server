@@ -4,6 +4,9 @@ members = [
     "crates/yantrikdb-core",
     "crates/yantrikdb-python",
 ]
+exclude = [
+    "crates/yantrikdb-wasm",
+]
 
 # Optimize dependencies (candle, tokenizers) even in dev builds.
 # Without this, quantized LLM inference is ~100x slower.

@@ -24,7 +24,7 @@ impl YantrikDB {
         source: &str,
         emotional_state: Option<&str>,
     ) -> Result<String> {
-        let rid = uuid7::uuid7().to_string();
+        let rid = crate::id::new_id();
         let ts = now();
         let emb_blob = serialize_f32(embedding);
         let meta_str = serde_json::to_string(metadata)?;
@@ -102,7 +102,7 @@ impl YantrikDB {
 
         let mut rids = Vec::with_capacity(inputs.len());
         for input in inputs {
-            let rid = uuid7::uuid7().to_string();
+            let rid = crate::id::new_id();
             let ts = now();
             let emb_blob = serialize_f32(&input.embedding);
             let meta_str = serde_json::to_string(&input.metadata)?;

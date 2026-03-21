@@ -107,10 +107,7 @@ pub fn store(
     notes: Option<&str>,
     category: Option<&str>,
 ) -> Result<i64> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let now = crate::time::now_secs();
 
     let username_enc = enc.encrypt_string(username)?;
     let password_enc = enc.encrypt_string(password)?;

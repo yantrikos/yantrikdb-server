@@ -40,6 +40,10 @@ pub struct Memory {
     pub domain: String,
     pub source: String,
     pub emotional_state: Option<String>,
+    // Session & temporal (V13)
+    pub session_id: Option<String>,
+    pub due_at: Option<f64>,
+    pub temporal_kind: Option<String>,
 }
 
 /// Score breakdown for a recall result.
@@ -501,6 +505,13 @@ pub struct PatternConfig {
     pub topic_cluster_time_window_days: f64,
     pub entity_hub_min_degree: usize,
     pub max_patterns: usize,
+    // Cross-domain mining (V13)
+    pub cross_domain_candidates_per_domain: usize,
+    pub cross_domain_sim_threshold: f64,
+    pub cross_domain_max_per_pair: usize,
+    pub entity_bridge_min_domains: usize,
+    pub entity_bridge_min_mentions_per_domain: usize,
+    pub run_cross_domain: bool,
 }
 
 // ── Profiling types (feature-gated) ──
@@ -675,6 +686,84 @@ pub struct PersonalityProfile {
     pub updated_at: f64,
 }
 
+// ── Session types (V13) ──
+
+/// A session tracks a conversation or interaction period.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub session_id: String,
+    pub namespace: String,
+    pub client_id: String,
+    pub status: String,
+    pub started_at: f64,
+    pub ended_at: Option<f64>,
+    pub summary: Option<String>,
+    pub avg_valence: Option<f64>,
+    pub memory_count: i64,
+    pub topics: Vec<String>,
+    pub metadata: serde_json::Value,
+}
+
+/// Summary returned when ending a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub duration_secs: f64,
+    pub memory_count: i64,
+    pub avg_valence: f64,
+    pub topics: Vec<String>,
+}
+
+// ── Temporal & Entity Profile types (V13) ──
+
+/// Rich profile of an entity across time, domains, and sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityProfile {
+    pub entity: String,
+    pub entity_type: String,
+    pub mention_count: i64,
+    pub session_count: i64,
+    pub domains: Vec<DomainCount>,
+    pub avg_valence: f64,
+    pub valence_trend: f64,
+    pub dominant_emotion: Option<String>,
+    pub interaction_frequency: f64,
+    pub last_mentioned_at: f64,
+    pub first_seen: f64,
+    pub window_days: f64,
+}
+
+/// Count of mentions within a domain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainCount {
+    pub domain: String,
+    pub count: i64,
+}
+
+// ── Cross-domain mining types (V13) ──
+
+/// A link between memories in different domains discovered by cross-domain mining.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossDomainLink {
+    pub rid_a: String,
+    pub rid_b: String,
+    pub domain_a: String,
+    pub domain_b: String,
+    pub similarity: f64,
+    pub text_a: String,
+    pub text_b: String,
+    pub score: f64,
+}
+
+/// An entity that bridges multiple domains.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityBridge {
+    pub entity: String,
+    pub domains: Vec<DomainCount>,
+    pub bridge_score: f64,
+    pub total_mentions: i64,
+}
+
 impl Default for PatternConfig {
     fn default() -> Self {
         Self {
@@ -685,6 +774,12 @@ impl Default for PatternConfig {
             topic_cluster_time_window_days: 30.0,
             entity_hub_min_degree: 5,
             max_patterns: 50,
+            cross_domain_candidates_per_domain: 15,
+            cross_domain_sim_threshold: 0.50,
+            cross_domain_max_per_pair: 3,
+            entity_bridge_min_domains: 2,
+            entity_bridge_min_mentions_per_domain: 3,
+            run_cross_domain: true,
         }
     }
 }

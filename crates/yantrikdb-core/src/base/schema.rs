@@ -1,4 +1,4 @@
-pub const SCHEMA_VERSION: i32 = 12;
+pub const SCHEMA_VERSION: i32 = 13;
 
 pub const SCHEMA_SQL: &str = "
 -- Memory records: the source of truth
@@ -36,7 +36,29 @@ CREATE TABLE IF NOT EXISTS memories (
     certainty REAL NOT NULL DEFAULT 0.8,     -- confidence in accuracy [0, 1]
     domain TEXT NOT NULL DEFAULT 'general',   -- topic domain (work, health, family, finance, etc.)
     source TEXT NOT NULL DEFAULT 'user',      -- origin (user, system, document, inference)
-    emotional_state TEXT                      -- rich emotion label (joy, sadness, anger, fear, etc.)
+    emotional_state TEXT,                     -- rich emotion label (joy, sadness, anger, fear, etc.)
+
+    -- Session & temporal (V13)
+    session_id TEXT,                          -- FK to sessions.session_id (nullable)
+    due_at REAL,                              -- unix timestamp for upcoming() queries
+    temporal_kind TEXT                         -- deadline | reminder | event | follow_up
+);
+
+-- Session tracking (V13)
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    namespace TEXT NOT NULL DEFAULT 'default',
+    client_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    started_at REAL NOT NULL,
+    ended_at REAL,
+    summary TEXT,
+    avg_valence REAL,
+    memory_count INTEGER NOT NULL DEFAULT 0,
+    topics TEXT NOT NULL DEFAULT '[]',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    hlc BLOB,
+    origin_actor TEXT
 );
 
 -- Entity relationship graph
@@ -169,6 +191,11 @@ CREATE INDEX IF NOT EXISTS idx_memories_access_count ON memories(access_count);
 CREATE INDEX IF NOT EXISTS idx_memories_domain ON memories(domain);
 CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source);
 CREATE INDEX IF NOT EXISTS idx_memories_emotional_state ON memories(emotional_state);
+CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(namespace, session_id);
+CREATE INDEX IF NOT EXISTS idx_memories_due_at ON memories(namespace, due_at) WHERE due_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memories_last_access ON memories(last_access);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_active ON sessions(namespace, client_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_sessions_client_started ON sessions(namespace, client_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src);
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_edges_rel ON edges(rel_type);
@@ -637,4 +664,37 @@ CREATE TABLE IF NOT EXISTS cognitive_node_hwm (
     kind TEXT PRIMARY KEY,
     high_water_mark INTEGER NOT NULL DEFAULT 0
 );
+";
+
+/// SQL to migrate from schema V12 to V13.
+pub const MIGRATE_V12_TO_V13: &str = "
+-- Session tracking
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    namespace TEXT NOT NULL DEFAULT 'default',
+    client_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    started_at REAL NOT NULL,
+    ended_at REAL,
+    summary TEXT,
+    avg_valence REAL,
+    memory_count INTEGER NOT NULL DEFAULT 0,
+    topics TEXT NOT NULL DEFAULT '[]',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    hlc BLOB,
+    origin_actor TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_active
+    ON sessions(namespace, client_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_sessions_client_started
+    ON sessions(namespace, client_id, started_at DESC);
+
+-- Memories: session & temporal columns
+ALTER TABLE memories ADD COLUMN session_id TEXT;
+ALTER TABLE memories ADD COLUMN due_at REAL;
+ALTER TABLE memories ADD COLUMN temporal_kind TEXT;
+CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(namespace, session_id);
+CREATE INDEX IF NOT EXISTS idx_memories_due_at ON memories(namespace, due_at)
+    WHERE due_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memories_last_access ON memories(last_access);
 ";

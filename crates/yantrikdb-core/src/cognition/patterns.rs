@@ -4,8 +4,6 @@
 //! entities, valence). No ML dependencies. Five mining algorithms:
 //! co-occurrence, temporal clusters, valence trends, topic clusters, entity hubs.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use rusqlite::params;
 
 use crate::consolidate::find_clusters;
@@ -388,6 +386,316 @@ fn mine_entity_hubs(db: &YantrikDB, config: &PatternConfig) -> Result<Vec<RawPat
     Ok(patterns)
 }
 
+// ── Cross-domain mining (V13) ──
+
+/// Find similar memories across different domains using the HNSW index.
+fn mine_cross_domain_patterns(db: &YantrikDB, config: &PatternConfig) -> Result<Vec<RawPattern>> {
+    let conn = db.conn();
+
+    // Get distinct active domains
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT domain FROM memories \
+         WHERE consolidation_status = 'active' AND domain != 'general'",
+    )?;
+    let domains: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    if domains.len() < 2 {
+        return Ok(vec![]);
+    }
+
+    // Compute co-occurrence rates between domain pairs for surprise scoring
+    let total_memories: f64 = conn.query_row(
+        "SELECT COUNT(*) FROM memories WHERE consolidation_status = 'active'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? as f64;
+
+    let mut domain_counts: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for d in &domains {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE consolidation_status = 'active' AND domain = ?1",
+            params![d],
+            |row| row.get(0),
+        )?;
+        domain_counts.insert(d.clone(), count as f64);
+    }
+
+    // Per domain, select candidates: 50% by importance, 30% by recency, 20% random
+    let m = config.cross_domain_candidates_per_domain;
+    let mut candidates: Vec<(String, String, Vec<f32>)> = Vec::new(); // (rid, domain, embedding)
+
+    for domain in &domains {
+        let imp_limit = (m * 50 / 100).max(1);
+        let rec_limit = (m * 30 / 100).max(1);
+        let rand_limit = m.saturating_sub(imp_limit + rec_limit).max(1);
+
+        // By importance
+        let mut stmt = conn.prepare(
+            "SELECT rid, embedding FROM memories \
+             WHERE consolidation_status = 'active' AND domain = ?1 AND embedding IS NOT NULL \
+             ORDER BY importance DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![domain, imp_limit as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (rid, emb_blob) = row?;
+            let emb_blob = db.decrypt_embedding(&emb_blob)?;
+            candidates.push((rid, domain.clone(), deserialize_f32(&emb_blob)));
+        }
+
+        // By recency
+        let mut stmt = conn.prepare(
+            "SELECT rid, embedding FROM memories \
+             WHERE consolidation_status = 'active' AND domain = ?1 AND embedding IS NOT NULL \
+             ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![domain, rec_limit as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (rid, emb_blob) = row?;
+            let emb_blob = db.decrypt_embedding(&emb_blob)?;
+            candidates.push((rid, domain.clone(), deserialize_f32(&emb_blob)));
+        }
+
+        // Random sample
+        let mut stmt = conn.prepare(
+            "SELECT rid, embedding FROM memories \
+             WHERE consolidation_status = 'active' AND domain = ?1 AND embedding IS NOT NULL \
+             ORDER BY RANDOM() LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![domain, rand_limit as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (rid, emb_blob) = row?;
+            let emb_blob = db.decrypt_embedding(&emb_blob)?;
+            candidates.push((rid, domain.clone(), deserialize_f32(&emb_blob)));
+        }
+    }
+
+    // Deduplicate candidates by rid
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|(rid, _, _)| seen.insert(rid.clone()));
+
+    // For each candidate, query HNSW for K=10 global neighbors
+    let vi = db.vec_index.borrow();
+    let mut patterns = Vec::new();
+    let mut pair_counts: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+
+    // Build rid→domain lookup
+    let mut rid_domain: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (rid, domain, _) in &candidates {
+        rid_domain.insert(rid.clone(), domain.clone());
+    }
+
+    // Also need domain for neighbors not in candidates
+    // We'll query from DB as needed
+
+    for (rid_a, domain_a, embedding) in &candidates {
+        let neighbors = match vi.search(embedding, 10) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+
+        for (rid_b, similarity) in neighbors {
+            if &rid_b == rid_a || similarity < config.cross_domain_sim_threshold {
+                continue;
+            }
+
+            // Get domain of neighbor
+            let domain_b = if let Some(d) = rid_domain.get(&rid_b) {
+                d.clone()
+            } else {
+                match conn.query_row(
+                    "SELECT domain FROM memories WHERE rid = ?1",
+                    params![rid_b],
+                    |row| row.get::<_, String>(0),
+                ) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                }
+            };
+
+            // Must be different domain
+            if &domain_b == domain_a || domain_b == "general" {
+                continue;
+            }
+
+            // Domain pair key (sorted for symmetry)
+            let pair = if domain_a < &domain_b {
+                (domain_a.clone(), domain_b.clone())
+            } else {
+                (domain_b.clone(), domain_a.clone())
+            };
+
+            // Cap per domain pair
+            let count = pair_counts.entry(pair.clone()).or_insert(0);
+            if *count >= config.cross_domain_max_per_pair {
+                continue;
+            }
+
+            // Compute domain surprise
+            let count_a = domain_counts.get(domain_a).copied().unwrap_or(1.0);
+            let count_b = domain_counts.get(&domain_b).copied().unwrap_or(1.0);
+            let co_occurrence_rate = (count_a * count_b) / (total_memories * total_memories);
+            let domain_surprise = 1.0 - co_occurrence_rate.min(1.0);
+
+            // Check shared entities for entity_support
+            let shared_entities: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM memory_entities me1 \
+                 JOIN memory_entities me2 ON me1.entity_name = me2.entity_name \
+                 WHERE me1.memory_rid = ?1 AND me2.memory_rid = ?2",
+                params![rid_a, rid_b],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            let entity_support = 1.0 + 0.5 * shared_entities as f64;
+
+            let score = similarity as f64 * domain_surprise * entity_support;
+
+            // Dedup key (sorted rids)
+            let dedup = if rid_a < &rid_b {
+                format!("cross_domain:{rid_a}:{rid_b}")
+            } else {
+                format!("cross_domain:{rid_b}:{rid_a}")
+            };
+
+            *count += 1;
+
+            patterns.push(RawPattern {
+                pattern_type: "cross_domain".to_string(),
+                confidence: score.min(1.0),
+                description: format!(
+                    "Cross-domain connection between {domain_a} and {domain_b} (sim={similarity:.2}, surprise={domain_surprise:.2})"
+                ),
+                evidence_rids: vec![rid_a.clone(), rid_b.clone()],
+                entity_names: vec![],
+                context: serde_json::json!({
+                    "domain_a": domain_a,
+                    "domain_b": domain_b,
+                    "similarity": similarity,
+                    "domain_surprise": domain_surprise,
+                    "entity_support": entity_support,
+                    "score": score,
+                }),
+                dedup_key: dedup,
+            });
+        }
+    }
+
+    // Sort by score descending, keep top results
+    patterns.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+    patterns.truncate(config.max_patterns);
+
+    Ok(patterns)
+}
+
+/// Detect entities that bridge multiple domains.
+fn mine_entity_bridges(db: &YantrikDB, config: &PatternConfig) -> Result<Vec<RawPattern>> {
+    let conn = db.conn();
+
+    // Get entity-domain counts
+    let mut stmt = conn.prepare(
+        "SELECT me.entity_name, m.domain, COUNT(*) as cnt \
+         FROM memory_entities me \
+         JOIN memories m ON m.rid = me.memory_rid \
+         WHERE m.consolidation_status = 'active' AND m.domain != 'general' \
+         GROUP BY me.entity_name, m.domain \
+         HAVING cnt >= ?1",
+    )?;
+
+    let min_mentions = config.entity_bridge_min_mentions_per_domain as i64;
+    let rows: Vec<(String, String, i64)> = stmt
+        .query_map(params![min_mentions], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // Group by entity
+    let mut entity_domains: std::collections::HashMap<String, Vec<(String, i64)>> =
+        std::collections::HashMap::new();
+    for (entity, domain, count) in rows {
+        entity_domains
+            .entry(entity)
+            .or_default()
+            .push((domain, count));
+    }
+
+    // Filter: must span min_domains
+    let min_domains = config.entity_bridge_min_domains;
+    let mut patterns = Vec::new();
+
+    // Total entity count for IDF
+    let total_entities: f64 = conn.query_row(
+        "SELECT COUNT(*) FROM entities",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? as f64;
+
+    for (entity, domain_counts) in &entity_domains {
+        if domain_counts.len() < min_domains {
+            continue;
+        }
+
+        let domain_count = domain_counts.len() as f64;
+        let total_mentions: i64 = domain_counts.iter().map(|(_, c)| c).sum();
+
+        // Entropy of domain distribution
+        let total = total_mentions as f64;
+        let entropy: f64 = domain_counts
+            .iter()
+            .map(|(_, c)| {
+                let p = *c as f64 / total;
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            })
+            .sum();
+
+        // IDF: penalize very common entities
+        let mention_count: i64 = conn.query_row(
+            "SELECT mention_count FROM entities WHERE name = ?1",
+            params![entity],
+            |row| row.get(0),
+        ).unwrap_or(1);
+        let idf = (total_entities / (1.0 + mention_count as f64)).ln().max(0.1);
+
+        let bridge_score = domain_count.ln() * entropy * idf;
+
+        let domains_detail: Vec<serde_json::Value> = domain_counts
+            .iter()
+            .map(|(d, c)| serde_json::json!({"domain": d, "count": c}))
+            .collect();
+
+        patterns.push(RawPattern {
+            pattern_type: "entity_bridge".to_string(),
+            confidence: (bridge_score / 5.0).min(1.0), // normalize
+            description: format!(
+                "'{entity}' bridges {} domains ({} total mentions)",
+                domain_counts.len(),
+                total_mentions
+            ),
+            evidence_rids: vec![],
+            entity_names: vec![entity.clone()],
+            context: serde_json::json!({
+                "domains": domains_detail,
+                "bridge_score": bridge_score,
+                "entropy": entropy,
+                "idf": idf,
+            }),
+            dedup_key: format!("entity_bridge:{entity}"),
+        });
+    }
+
+    // Sort by score descending, keep top 10
+    patterns.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+    patterns.truncate(10);
+
+    Ok(patterns)
+}
+
 // ── Pattern persistence ──
 
 /// Upsert a pattern: insert new or update existing (by dedup_key via pattern_type + entities/rids).
@@ -509,12 +817,26 @@ pub fn mine_patterns(db: &YantrikDB, config: &PatternConfig) -> Result<PatternMi
     let topics = mine_topic_clusters(db, config)?;
     let hubs = mine_entity_hubs(db, config)?;
 
+    // Cross-domain mining (V13)
+    let cross_domain = if config.run_cross_domain {
+        mine_cross_domain_patterns(db, config)?
+    } else {
+        vec![]
+    };
+    let entity_bridges = if config.run_cross_domain {
+        mine_entity_bridges(db, config)?
+    } else {
+        vec![]
+    };
+
     let all_raw: Vec<&RawPattern> = co_occurrences
         .iter()
         .chain(temporal.iter())
         .chain(valence.iter())
         .chain(topics.iter())
         .chain(hubs.iter())
+        .chain(cross_domain.iter())
+        .chain(entity_bridges.iter())
         .collect();
 
     for raw in all_raw.into_iter().take(config.max_patterns) {

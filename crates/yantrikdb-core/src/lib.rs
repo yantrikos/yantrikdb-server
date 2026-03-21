@@ -30,6 +30,7 @@ pub use state::{
 };
 pub use attention::{WorkingSet, AttentionConfig};
 pub use personality::{derive_personality, get_personality, set_personality_trait};
+// V13: sessions, temporal helpers, entity profile, cross-domain types are re-exported via `pub use types::*;`
 pub use engine::graph_state::{CognitiveGraphSaveResult, CognitiveGraphStats, CognitiveNodeFilter, CognitiveNodeOrder};
 pub use belief::{Evidence, EvidenceResult, BeliefRevisionConfig, RevisionSummary, ThresholdDirection};
 pub use belief_query::{BeliefPattern, BeliefOrder, BeliefExplanation, BeliefInventory};

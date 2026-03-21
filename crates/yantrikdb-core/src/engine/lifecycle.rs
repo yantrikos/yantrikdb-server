@@ -34,6 +34,9 @@ impl YantrikDB {
                 row.get::<_, String>("domain")?,
                 row.get::<_, String>("source")?,
                 row.get::<_, Option<String>>("emotional_state")?,
+                row.get::<_, Option<String>>("session_id")?,
+                row.get::<_, Option<f64>>("due_at")?,
+                row.get::<_, Option<String>>("temporal_kind")?,
             ))
         });
 
@@ -62,6 +65,9 @@ impl YantrikDB {
                     domain: row.15,
                     source: row.16,
                     emotional_state: row.17,
+                    session_id: row.18,
+                    due_at: row.19,
+                    temporal_kind: row.20,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),

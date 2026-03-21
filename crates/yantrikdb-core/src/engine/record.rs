@@ -64,6 +64,18 @@ impl YantrikDB {
             emotional_state: emotional_state.map(|s| s.to_string()),
         });
 
+        // Auto-link to active session for this namespace
+        if let Some(session_id) = self.active_sessions.borrow().get(namespace) {
+            self.conn.execute(
+                "UPDATE memories SET session_id = ?1 WHERE rid = ?2",
+                params![session_id, rid],
+            )?;
+            self.conn.execute(
+                "UPDATE sessions SET memory_count = memory_count + 1 WHERE session_id = ?1",
+                params![session_id],
+            )?;
+        }
+
         let emb_hash = embedding_hash(embedding);
         self.log_op(
             "record",
@@ -130,6 +142,23 @@ impl YantrikDB {
             }
 
             rids.push(rid);
+        }
+
+        // Auto-link batch to active sessions
+        {
+            let sessions = self.active_sessions.borrow();
+            for (rid, input) in rids.iter().zip(inputs.iter()) {
+                if let Some(session_id) = sessions.get(&input.namespace) {
+                    self.conn.execute(
+                        "UPDATE memories SET session_id = ?1 WHERE rid = ?2",
+                        params![session_id, rid],
+                    )?;
+                    self.conn.execute(
+                        "UPDATE sessions SET memory_count = memory_count + 1 WHERE session_id = ?1",
+                        params![session_id],
+                    )?;
+                }
+            }
         }
 
         self.conn.execute_batch("RELEASE batch_record")?;

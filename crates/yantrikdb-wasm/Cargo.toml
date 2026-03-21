@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-wasm"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "YantrikDB compiled to WebAssembly — run cognitive memory in the browser"

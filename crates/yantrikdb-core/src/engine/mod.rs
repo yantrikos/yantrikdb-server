@@ -42,15 +42,16 @@ mod learning;
 mod lifecycle;
 mod recall;
 mod record;
+mod session;
 mod stats;
 mod storage;
+mod temporal_helpers;
 pub mod tenant;
 #[cfg(test)]
 mod tests;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use rand::Rng;
@@ -64,7 +65,7 @@ use crate::hnsw::HnswIndex;
 use crate::schema::{
     MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, MIGRATE_V3_TO_V4, MIGRATE_V4_TO_V5,
     MIGRATE_V5_TO_V6, MIGRATE_V6_TO_V7, MIGRATE_V7_TO_V8, MIGRATE_V8_TO_V9,
-    MIGRATE_V9_TO_V10, MIGRATE_V10_TO_V11, MIGRATE_V11_TO_V12,
+    MIGRATE_V9_TO_V10, MIGRATE_V10_TO_V11, MIGRATE_V11_TO_V12, MIGRATE_V12_TO_V13,
     SCHEMA_SQL, SCHEMA_VERSION,
 };
 use crate::types::*;
@@ -82,6 +83,8 @@ pub struct YantrikDB {
     /// Optional text-to-embedding converter. When set, enables `record_text()`
     /// and `recall_text()` which auto-embed text without an external server.
     embedder: Option<Box<dyn crate::types::Embedder>>,
+    /// Cache of active sessions: namespace → session_id
+    pub(crate) active_sessions: RefCell<HashMap<String, String>>,
 }
 
 pub(crate) fn now() -> f64 {
@@ -146,6 +149,7 @@ impl YantrikDB {
             (9, MIGRATE_V9_TO_V10),
             (10, MIGRATE_V10_TO_V11),
             (11, MIGRATE_V11_TO_V12),
+            (12, MIGRATE_V12_TO_V13),
         ];
         if let Some(v) = existing_version {
             for &(from_v, sql) in migrations {
@@ -242,6 +246,9 @@ impl YantrikDB {
         let vec_index = Self::build_vec_index_with_enc(&conn, embedding_dim, enc.as_ref())?;
         let graph_index = GraphIndex::build_from_db(&conn)?;
 
+        // Load active sessions from DB
+        let active_sessions = Self::load_active_sessions(&conn)?;
+
         Ok(Self {
             conn,
             embedding_dim,
@@ -252,6 +259,7 @@ impl YantrikDB {
             graph_index: RefCell::new(graph_index),
             enc,
             embedder: None,
+            active_sessions: RefCell::new(active_sessions),
         })
     }
 
@@ -265,6 +273,25 @@ impl YantrikDB {
             },
         )
         .ok()
+    }
+
+    fn load_active_sessions(conn: &Connection) -> Result<HashMap<String, String>> {
+        let mut map = HashMap::new();
+        // Table may not exist yet during initial schema creation
+        let mut stmt = match conn.prepare(
+            "SELECT namespace, session_id FROM sessions WHERE status = 'active'",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Ok(map),
+        };
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (ns, sid) = row?;
+            map.insert(ns, sid);
+        }
+        Ok(map)
     }
 
     fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {

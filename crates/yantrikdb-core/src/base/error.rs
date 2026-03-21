@@ -31,6 +31,9 @@ pub enum YantrikDbError {
 
     #[error("inference error: {0}")]
     Inference(String),
+
+    #[error("session conflict: {0}")]
+    SessionConflict(String),
 }
 
 pub type Result<T> = std::result::Result<T, YantrikDbError>;

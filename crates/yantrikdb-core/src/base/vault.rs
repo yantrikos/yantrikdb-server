@@ -116,17 +116,21 @@ pub fn store(
         .transpose()?;
     let cat = category.unwrap_or("general");
 
-    conn.execute(
-        "INSERT INTO vault_entries (service, username_enc, password_enc, url, notes_enc, category, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
-         ON CONFLICT(service, url) DO UPDATE SET
-           username_enc = excluded.username_enc,
-           password_enc = excluded.password_enc,
-           notes_enc = excluded.notes_enc,
-           category = excluded.category,
-           updated_at = excluded.updated_at",
-        rusqlite::params![service, username_enc, password_enc, url, notes_enc, cat, now],
+    // Try UPDATE first for upsert — ON CONFLICT doesn't match NULLs in url
+    let updated = conn.execute(
+        "UPDATE vault_entries SET username_enc = ?1, password_enc = ?2, \
+         notes_enc = ?3, category = ?4, updated_at = ?5 \
+         WHERE service = ?6 AND (url IS ?7)",
+        rusqlite::params![username_enc, password_enc, notes_enc, cat, now, service, url],
     )?;
+    if updated == 0 {
+        conn.execute(
+            "INSERT INTO vault_entries \
+             (service, username_enc, password_enc, url, notes_enc, category, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+            rusqlite::params![service, username_enc, password_enc, url, notes_enc, cat, now],
+        )?;
+    }
 
     let id = conn.last_insert_rowid();
     Ok(id)

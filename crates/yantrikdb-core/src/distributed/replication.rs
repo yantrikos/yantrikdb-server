@@ -118,14 +118,13 @@ pub fn extract_ops_since(
 /// Apply remote ops to a local YantrikDB instance. Idempotent via INSERT OR IGNORE on op_id.
 /// Returns the number of ops actually applied (newly inserted).
 pub fn apply_ops(db: &YantrikDB, ops: &[OplogEntry]) -> Result<SyncStats> {
-    let conn = db.conn();
     let mut applied = 0;
     let mut skipped = 0;
     let mut has_relate_or_record = false;
 
     for op in ops {
         // Check if we already have this op (idempotent)
-        let exists: bool = conn.query_row(
+        let exists: bool = db.conn().query_row(
             "SELECT COUNT(*) > 0 FROM oplog WHERE op_id = ?1",
             params![op.op_id],
             |row| row.get(0),
@@ -151,7 +150,7 @@ pub fn apply_ops(db: &YantrikDB, ops: &[OplogEntry]) -> Result<SyncStats> {
 
         // Insert the op into our local oplog
         let payload_str = serde_json::to_string(&op.payload)?;
-        conn.execute(
+        db.conn().execute(
             "INSERT OR IGNORE INTO oplog \
              (op_id, op_type, timestamp, target_rid, payload, \
               actor_id, hlc, embedding_hash, origin_actor, applied) \
@@ -186,11 +185,9 @@ pub fn apply_ops(db: &YantrikDB, ops: &[OplogEntry]) -> Result<SyncStats> {
 
 /// Materialize a single op — replay its side effects on the local DB.
 fn materialize_op(db: &YantrikDB, op: &OplogEntry) -> Result<()> {
-    let conn = db.conn();
-
     match op.op_type.as_str() {
         "record" => {
-            materialize_record(conn, &op.payload, db.embedding_dim())?;
+            materialize_record(&*db.conn(), &op.payload, db.embedding_dim())?;
             // Update scoring cache with new record
             let rid = op.payload["rid"].as_str().unwrap_or_default();
             if !rid.is_empty() {
@@ -212,14 +209,14 @@ fn materialize_op(db: &YantrikDB, op: &OplogEntry) -> Result<()> {
             }
         }
         "relate" => {
-            materialize_relate(conn, &op.payload)?;
+            materialize_relate(&*db.conn(), &op.payload)?;
             // Update graph index
             let src = op.payload["src"].as_str().unwrap_or_default();
             let dst = op.payload["dst"].as_str().unwrap_or_default();
             let rel_type = op.payload["rel_type"].as_str().unwrap_or_default();
             let weight = op.payload["weight"].as_f64().unwrap_or(1.0);
             if !src.is_empty() && !dst.is_empty() {
-                let mut gi = db.graph_index.borrow_mut();
+                let mut gi = db.graph_index.write().unwrap();
                 let (src_type, dst_type) =
                     crate::graph::classify_with_relationship(src, dst, rel_type);
                 gi.add_entity(src, src_type);
@@ -233,17 +230,17 @@ fn materialize_op(db: &YantrikDB, op: &OplogEntry) -> Result<()> {
             }
         }
         "forget" => {
-            materialize_forget(conn, &op.payload)?;
+            materialize_forget(&*db.conn(), &op.payload)?;
             // Remove from scoring cache + vec index + graph index
             let rid = op.payload["rid"].as_str().unwrap_or_default();
             if !rid.is_empty() {
                 db.cache_remove(rid);
-                db.vec_index.borrow_mut().remove(rid);
-                db.graph_index.borrow_mut().unlink_memory(rid);
+                db.vec_index.write().unwrap().remove(rid);
+                db.graph_index.write().unwrap().unlink_memory(rid);
             }
         }
         "consolidate" => {
-            materialize_consolidate(conn, &op.payload, &op.hlc, &op.origin_actor)?;
+            materialize_consolidate(&*db.conn(), &op.payload, &op.hlc, &op.origin_actor)?;
             // Cache: insert consolidated memory + mark sources
             let consolidated_rid = op.payload["consolidated_rid"].as_str().unwrap_or_default();
             let text = op.payload["text"].as_str().unwrap_or("");
@@ -272,20 +269,20 @@ fn materialize_op(db: &YantrikDB, op: &OplogEntry) -> Result<()> {
                 }
             }
         }
-        "conflict_detect" => materialize_conflict_detect(conn, &op.payload, &op.hlc, &op.origin_actor)?,
+        "conflict_detect" => materialize_conflict_detect(&*db.conn(), &op.payload, &op.hlc, &op.origin_actor)?,
         "conflict_resolve" => {
-            materialize_conflict_resolve(conn, &op.payload)?;
+            materialize_conflict_resolve(&*db.conn(), &op.payload)?;
             // If keep_a or keep_b, remove the loser from cache + vec index
             let strategy = op.payload["strategy"].as_str().unwrap_or("");
             if strategy == "keep_a" || strategy == "keep_b" {
                 if let Some(loser) = op.payload["loser_rid"].as_str() {
                     db.cache_remove(loser);
-                    db.vec_index.borrow_mut().remove(loser);
+                    db.vec_index.write().unwrap().remove(loser);
                 }
             }
         }
         "correct" => {
-            materialize_correct(conn, &op.payload)?;
+            materialize_correct(&*db.conn(), &op.payload)?;
             // Cache: insert new corrected memory, remove original
             let new_rid = op.payload["new_rid"].as_str().unwrap_or_default();
             if !new_rid.is_empty() {
@@ -308,14 +305,14 @@ fn materialize_op(db: &YantrikDB, op: &OplogEntry) -> Result<()> {
             let original_rid = op.payload["original_rid"].as_str().unwrap_or_default();
             if !original_rid.is_empty() {
                 db.cache_remove(original_rid);
-                db.vec_index.borrow_mut().remove(original_rid);
+                db.vec_index.write().unwrap().remove(original_rid);
             }
         }
-        "trigger_fire" => materialize_trigger_fire(conn, &op.payload, &op.hlc, &op.origin_actor)?,
+        "trigger_fire" => materialize_trigger_fire(&*db.conn(), &op.payload, &op.hlc, &op.origin_actor)?,
         "trigger_deliver" | "trigger_ack" | "trigger_act" | "trigger_dismiss" => {
-            materialize_trigger_lifecycle(conn, &op.payload)?;
+            materialize_trigger_lifecycle(&*db.conn(), &op.payload)?;
         }
-        "pattern_upsert" => materialize_pattern(conn, &op.payload, &op.hlc, &op.origin_actor)?,
+        "pattern_upsert" => materialize_pattern(&*db.conn(), &op.payload, &op.hlc, &op.origin_actor)?,
         "reinforce" | "think" => {
             // Local-only ops; skip during replication
         }
@@ -849,7 +846,7 @@ mod tests {
     #[test]
     fn test_extract_ops_empty() {
         let db = YantrikDB::new(":memory:", 8).unwrap();
-        let ops = extract_ops_since(db.conn(), None, None, None, 100).unwrap();
+        let ops = extract_ops_since(&*db.conn(), None, None, None, 100).unwrap();
         assert!(ops.is_empty());
     }
 
@@ -858,7 +855,7 @@ mod tests {
         let db = YantrikDB::new(":memory:", 8).unwrap();
         db.record("hello", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
 
-        let ops = extract_ops_since(db.conn(), None, None, None, 100).unwrap();
+        let ops = extract_ops_since(&*db.conn(), None, None, None, 100).unwrap();
         // record + reinforce (from recall? no — just record op)
         assert!(!ops.is_empty());
         assert_eq!(ops[0].op_type, "record");
@@ -870,7 +867,7 @@ mod tests {
         let a = YantrikDB::new_with_actor(":memory:", 8, "A").unwrap();
         a.record("from A", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
 
-        let ops = extract_ops_since(a.conn(), None, None, None, 100).unwrap();
+        let ops = extract_ops_since(&*a.conn(), None, None, None, 100).unwrap();
 
         let b = YantrikDB::new_with_actor(":memory:", 8, "B").unwrap();
 
@@ -889,7 +886,7 @@ mod tests {
         let a = YantrikDB::new_with_actor(":memory:", 8, "A").unwrap();
         let rid = a.record("test mem", "semantic", 0.8, 0.2, 1000.0, &serde_json::json!({"k": "v"}), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
 
-        let ops = extract_ops_since(a.conn(), None, None, None, 100).unwrap();
+        let ops = extract_ops_since(&*a.conn(), None, None, None, 100).unwrap();
         let record_op = ops.iter().find(|o| o.op_type == "record").unwrap();
 
         let b = YantrikDB::new_with_actor(":memory:", 8, "B").unwrap();
@@ -910,7 +907,7 @@ mod tests {
         let rid = a.record("doomed", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
         a.forget(&rid).unwrap();
 
-        let ops = extract_ops_since(a.conn(), None, None, None, 100).unwrap();
+        let ops = extract_ops_since(&*a.conn(), None, None, None, 100).unwrap();
 
         let b = YantrikDB::new_with_actor(":memory:", 8, "B").unwrap();
         apply_ops(&b, &ops).unwrap();
@@ -924,7 +921,7 @@ mod tests {
         let a = YantrikDB::new_with_actor(":memory:", 8, "A").unwrap();
         a.relate("Alice", "Bob", "knows", 0.9).unwrap();
 
-        let ops = extract_ops_since(a.conn(), None, None, None, 100).unwrap();
+        let ops = extract_ops_since(&*a.conn(), None, None, None, 100).unwrap();
         let relate_op = ops.iter().find(|o| o.op_type == "relate").unwrap();
 
         let b = YantrikDB::new_with_actor(":memory:", 8, "B").unwrap();
@@ -948,7 +945,7 @@ mod tests {
         b.relate("X", "Y", "linked", 0.9).unwrap();
 
         // Apply A's ops to B
-        let a_ops = extract_ops_since(a.conn(), None, None, None, 100).unwrap();
+        let a_ops = extract_ops_since(&*a.conn(), None, None, None, 100).unwrap();
         apply_ops(&b, &a_ops).unwrap();
 
         // B should keep its own weight (0.9) since it's newer
@@ -957,7 +954,7 @@ mod tests {
         assert_eq!(edges[0].weight, 0.9);
 
         // Apply B's ops to A
-        let b_ops = extract_ops_since(b.conn(), None, None, None, 100).unwrap();
+        let b_ops = extract_ops_since(&*b.conn(), None, None, None, 100).unwrap();
         apply_ops(&a, &b_ops).unwrap();
 
         // A should now have B's weight (0.9) since it's newer
@@ -972,22 +969,22 @@ mod tests {
         let conn = db.conn();
 
         // No watermark initially
-        let wm = get_peer_watermark(conn, "peer-1").unwrap();
+        let wm = get_peer_watermark(&*conn, "peer-1").unwrap();
         assert!(wm.is_none());
 
         // Set watermark
         let hlc_bytes = vec![0u8; 16];
-        set_peer_watermark(conn, "peer-1", &hlc_bytes, "op-123").unwrap();
+        set_peer_watermark(&*conn, "peer-1", &hlc_bytes, "op-123").unwrap();
 
-        let wm = get_peer_watermark(conn, "peer-1").unwrap().unwrap();
+        let wm = get_peer_watermark(&*conn, "peer-1").unwrap().unwrap();
         assert_eq!(wm.0, hlc_bytes);
         assert_eq!(wm.1, "op-123");
 
         // Update watermark
         let new_hlc = vec![1u8; 16];
-        set_peer_watermark(conn, "peer-1", &new_hlc, "op-456").unwrap();
+        set_peer_watermark(&*conn, "peer-1", &new_hlc, "op-456").unwrap();
 
-        let wm = get_peer_watermark(conn, "peer-1").unwrap().unwrap();
+        let wm = get_peer_watermark(&*conn, "peer-1").unwrap().unwrap();
         assert_eq!(wm.0, new_hlc);
         assert_eq!(wm.1, "op-456");
     }
@@ -998,11 +995,11 @@ mod tests {
         db.record("from A", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
 
         // Extracting while excluding actor "A" should return nothing
-        let ops = extract_ops_since(db.conn(), None, None, Some("A"), 100).unwrap();
+        let ops = extract_ops_since(&*db.conn(), None, None, Some("A"), 100).unwrap();
         assert!(ops.is_empty());
 
         // Extracting without exclusion should return the op
-        let ops = extract_ops_since(db.conn(), None, None, None, 100).unwrap();
+        let ops = extract_ops_since(&*db.conn(), None, None, None, 100).unwrap();
         assert!(!ops.is_empty());
     }
 
@@ -1017,7 +1014,7 @@ mod tests {
         assert!(!consolidated.is_empty());
 
         // Extract all ops and apply to B
-        let ops = extract_ops_since(a.conn(), None, None, None, 1000).unwrap();
+        let ops = extract_ops_since(&*a.conn(), None, None, None, 1000).unwrap();
         let b = YantrikDB::new_with_actor(":memory:", 8, "B").unwrap();
         apply_ops(&b, &ops).unwrap();
 

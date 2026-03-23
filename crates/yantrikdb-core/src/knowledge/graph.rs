@@ -381,7 +381,7 @@ mod tests {
             "SELECT rid FROM memories ORDER BY created_at LIMIT 1", [], |row| row.get(0),
         ).unwrap();
 
-        let entities = entities_for_memories(db.conn(), &[&rid]).unwrap();
+        let entities = entities_for_memories(&*db.conn(), &[&rid]).unwrap();
         assert!(entities.contains(&"Alice".to_string()));
         assert!(entities.contains(&"ProjectX".to_string()));
     }
@@ -389,14 +389,14 @@ mod tests {
     #[test]
     fn test_memories_for_entities() {
         let db = setup_db();
-        let rids = memories_for_entities(db.conn(), &["Alice"]).unwrap();
+        let rids = memories_for_entities(&*db.conn(), &["Alice"]).unwrap();
         assert_eq!(rids.len(), 1); // Only the Alice memory is linked
     }
 
     #[test]
     fn test_expand_1hop() {
         let db = setup_db();
-        let expanded = expand_entities_nhop(db.conn(), &["Alice"], 1, 30).unwrap();
+        let expanded = expand_entities_nhop(&*db.conn(), &["Alice"], 1, 30).unwrap();
         let names: HashSet<String> = expanded.iter().map(|(n, _, _)| n.clone()).collect();
         // Alice (seed) + Bob (knows) + ProjectX (works_on)
         assert!(names.contains("Alice"));
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn test_expand_2hop() {
         let db = setup_db();
-        let expanded = expand_entities_nhop(db.conn(), &["Alice"], 2, 30).unwrap();
+        let expanded = expand_entities_nhop(&*db.conn(), &["Alice"], 2, 30).unwrap();
         let names: HashSet<String> = expanded.iter().map(|(n, _, _)| n.clone()).collect();
         // 2-hop from Alice: Alice->Bob->Charlie, Alice->ProjectX->Dave
         assert!(names.contains("Charlie"));
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn test_expand_budget_limit() {
         let db = setup_db();
-        let expanded = expand_entities_nhop(db.conn(), &["Alice"], 2, 3).unwrap();
+        let expanded = expand_entities_nhop(&*db.conn(), &["Alice"], 2, 3).unwrap();
         assert!(expanded.len() <= 3);
     }
 
@@ -429,7 +429,7 @@ mod tests {
             "UPDATE edges SET tombstoned = 1 WHERE src = 'Alice' AND dst = 'Bob'",
             [],
         ).unwrap();
-        let expanded = expand_entities_nhop(db.conn(), &["Alice"], 1, 30).unwrap();
+        let expanded = expand_entities_nhop(&*db.conn(), &["Alice"], 1, 30).unwrap();
         let names: HashSet<String> = expanded.iter().map(|(n, _, _)| n.clone()).collect();
         // Bob should NOT be reachable via tombstoned edge
         assert!(!names.contains("Bob"));
@@ -448,7 +448,7 @@ mod tests {
         expanded.insert("Alice".to_string(), (0u8, 1.0f64));
         expanded.insert("ProjectX".to_string(), (1u8, 1.0f64));
 
-        let prox = graph_proximity(db.conn(), &rid, &expanded).unwrap();
+        let prox = graph_proximity(&*db.conn(), &rid, &expanded).unwrap();
         // Alice is hops=0 → proximity = 1.0 / (0+1) = 1.0
         assert!((prox - 1.0).abs() < 1e-10);
     }

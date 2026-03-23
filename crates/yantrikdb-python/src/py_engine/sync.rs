@@ -39,7 +39,7 @@ impl PyYantrikDB {
     ) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
         let ops = yantrikdb_core::replication::extract_ops_since(
-            db.conn(),
+            &*db.conn(),
             since_hlc.as_deref(),
             since_op_id,
             exclude_actor,
@@ -121,7 +121,7 @@ impl PyYantrikDB {
 
     fn get_peer_watermark(&self, py: Python<'_>, peer_actor: &str) -> PyResult<Option<PyObject>> {
         let db = self.get_inner()?;
-        match yantrikdb_core::replication::get_peer_watermark(db.conn(), peer_actor).map_err(map_err)? {
+        match yantrikdb_core::replication::get_peer_watermark(&*db.conn(), peer_actor).map_err(map_err)? {
             Some((hlc, op_id)) => {
                 let dict = PyDict::new(py);
                 dict.set_item("hlc", &hlc)?;
@@ -134,7 +134,7 @@ impl PyYantrikDB {
 
     fn set_peer_watermark(&self, peer_actor: &str, hlc: Vec<u8>, op_id: &str) -> PyResult<()> {
         let db = self.get_inner()?;
-        yantrikdb_core::replication::set_peer_watermark(db.conn(), peer_actor, &hlc, op_id)
+        yantrikdb_core::replication::set_peer_watermark(&*db.conn(), peer_actor, &hlc, op_id)
             .map_err(map_err)
     }
 

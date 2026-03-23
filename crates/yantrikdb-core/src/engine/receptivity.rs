@@ -19,7 +19,7 @@ impl YantrikDB {
 
     /// Load the receptivity model from the database (or create default).
     pub fn load_receptivity_model(&self) -> Result<ReceptivityModel> {
-        match Self::get_meta(&self.conn, RECEPTIVITY_META_KEY)? {
+        match Self::get_meta(&self.conn(), RECEPTIVITY_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -36,7 +36,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![RECEPTIVITY_META_KEY, json],
         )?;

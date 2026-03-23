@@ -22,7 +22,7 @@ impl YantrikDB {
 
     /// Load the learning state from the database.
     pub fn load_learning_state(&self) -> Result<LearningState> {
-        match Self::get_meta(&self.conn, LEARNING_STATE_META_KEY)? {
+        match Self::get_meta(&self.conn(), LEARNING_STATE_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -46,7 +46,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![LEARNING_STATE_META_KEY, json],
         )?;
@@ -55,7 +55,7 @@ impl YantrikDB {
 
     /// Load the learning configuration.
     pub fn load_learning_config(&self) -> Result<LearningConfig> {
-        match Self::get_meta(&self.conn, LEARNING_CONFIG_META_KEY)? {
+        match Self::get_meta(&self.conn(), LEARNING_CONFIG_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -72,7 +72,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![LEARNING_CONFIG_META_KEY, json],
         )?;

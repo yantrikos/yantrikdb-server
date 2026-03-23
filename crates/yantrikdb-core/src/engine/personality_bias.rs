@@ -20,7 +20,7 @@ impl YantrikDB {
 
     /// Load the personality bias store.
     pub fn load_personality_bias_store(&self) -> Result<PersonalityBiasStore> {
-        match Self::get_meta(&self.conn, PERSONALITY_BIAS_STORE_META_KEY)? {
+        match Self::get_meta(&self.conn(), PERSONALITY_BIAS_STORE_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -37,7 +37,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![PERSONALITY_BIAS_STORE_META_KEY, json],
         )?;

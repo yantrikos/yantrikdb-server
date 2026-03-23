@@ -51,13 +51,16 @@ impl YantrikDB {
             )
         };
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt
             .query_map(params_ref.as_slice(), |row| row_to_memory(row))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        drop(conn);
 
         // Decrypt text and metadata
         let mut memories = Vec::with_capacity(rows.len());
@@ -120,13 +123,16 @@ impl YantrikDB {
             )
         };
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt
             .query_map(params_ref.as_slice(), |row| row_to_memory(row))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        drop(conn);
 
         let mut memories = Vec::with_capacity(rows.len());
         for mut m in rows {
@@ -151,8 +157,9 @@ impl YantrikDB {
         let cutoff = ts - days * 86400.0;
 
         // Get entity metadata
+        let conn = self.conn();
         let (entity_type, first_seen, last_seen, total_mentions): (String, f64, f64, i64) =
-            self.conn.query_row(
+            conn.query_row(
                 "SELECT entity_type, first_seen, last_seen, mention_count \
                  FROM entities WHERE name = ?1",
                 params![entity],
@@ -175,7 +182,7 @@ impl YantrikDB {
              ORDER BY m.created_at"
         );
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(&sql)?;
 
         struct Row {
             valence: f64,
@@ -292,7 +299,7 @@ impl YantrikDB {
         entity: &str,
         namespace: Option<&str>,
     ) -> Result<RelationshipDepth> {
-        let conn = &self.conn;
+        let conn = self.conn();
 
         // Get entity metadata
         let (entity_type, first_seen, last_seen): (String, f64, f64) = conn.query_row(

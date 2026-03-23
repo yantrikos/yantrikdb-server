@@ -230,34 +230,37 @@ pub fn check_temporal_drift(db: &YantrikDB) -> Result<Vec<Trigger>> {
 
 /// Trigger for near-duplicate active memories (cosine similarity > 0.85).
 pub fn check_redundancy(db: &YantrikDB, _sim_threshold: f64) -> Result<Vec<Trigger>> {
-    let conn = db.conn();
-    let mut stmt = conn.prepare(
-        "SELECT rid, text, embedding \
-         FROM memories \
-         WHERE consolidation_status = 'active' \
-         AND embedding IS NOT NULL \
-         ORDER BY created_at DESC \
-         LIMIT 100",
-    )?;
+    // Phase 1: Collect memory data while holding the conn lock.
+    let rows: Vec<(String, String, Vec<u8>)> = {
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
+            "SELECT rid, text, embedding \
+             FROM memories \
+             WHERE consolidation_status = 'active' \
+             AND embedding IS NOT NULL \
+             ORDER BY created_at DESC \
+             LIMIT 100",
+        )?;
 
-    let raw_rows: Vec<(String, String, Vec<u8>)> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>("rid")?,
-                row.get::<_, String>("text")?,
-                row.get::<_, Vec<u8>>("embedding")?,
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        let raw_rows: Vec<(String, String, Vec<u8>)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>("rid")?,
+                    row.get::<_, String>("text")?,
+                    row.get::<_, Vec<u8>>("embedding")?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    // Decrypt text and embeddings if encrypted
-    let rows: Vec<(String, String, Vec<u8>)> = raw_rows.into_iter()
-        .map(|(rid, stored_text, stored_emb)| {
-            let text = db.decrypt_text(&stored_text)?;
-            let emb = db.decrypt_embedding(&stored_emb)?;
-            Ok((rid, text, emb))
-        })
-        .collect::<Result<Vec<_>>>()?;
+        // Decrypt text and embeddings if encrypted
+        raw_rows.into_iter()
+            .map(|(rid, stored_text, stored_emb)| {
+                let text = db.decrypt_text(&stored_text)?;
+                let emb = db.decrypt_embedding(&stored_emb)?;
+                Ok((rid, text, emb))
+            })
+            .collect::<Result<Vec<_>>>()?
+    }; // conn lock released here
 
     let mut triggers = Vec::new();
     let threshold = 0.85;
@@ -276,14 +279,18 @@ pub fn check_redundancy(db: &YantrikDB, _sim_threshold: f64) -> Result<Vec<Trigg
 
                 // Check if the pair shares entities — if so, this is likely a
                 // contradiction (same topic, different facts) not a simple duplicate.
-                let entities_a: Vec<String> = conn
-                    .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
-                    .query_map(rusqlite::params![rows[i].0], |r| r.get(0))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                let entities_b: Vec<String> = conn
-                    .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
-                    .query_map(rusqlite::params![rows[j].0], |r| r.get(0))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let (entities_a, entities_b) = {
+                    let conn = db.conn();
+                    let ea: Vec<String> = conn
+                        .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
+                        .query_map(rusqlite::params![rows[i].0], |r| r.get(0))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    let eb: Vec<String> = conn
+                        .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")?
+                        .query_map(rusqlite::params![rows[j].0], |r| r.get(0))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    (ea, eb)
+                };
 
                 let shared: Vec<&String> = entities_a.iter().filter(|e| entities_b.contains(e)).collect();
                 let is_potential_conflict = !shared.is_empty() && sim < 0.98;
@@ -304,9 +311,9 @@ pub fn check_redundancy(db: &YantrikDB, _sim_threshold: f64) -> Result<Vec<Trigg
                         context,
                     });
                 } else if let Some((cat_name, token_a, token_b)) =
-                    check_substitution_category_pair(conn, &rows[i].1, &rows[j].1)
+                    check_substitution_category_pair(&*db.conn(), &rows[i].1, &rows[j].1)
                 {
-                    // Substitution category match → create actual conflict record
+                    // Substitution category match -> create actual conflict record
                     let reason = format!(
                         "{} substitution: '{}' vs '{}' (similarity={:.0}%)",
                         cat_name, token_a, token_b, sim * 100.0
@@ -364,7 +371,7 @@ pub fn check_redundancy(db: &YantrikDB, _sim_threshold: f64) -> Result<Vec<Trigg
 
             if sim > cat_threshold && sim <= threshold {
                 if let Some((cat_name, token_a, token_b)) =
-                    check_substitution_category_pair(conn, &rows[i].1, &rows[j].1)
+                    check_substitution_category_pair(&*db.conn(), &rows[i].1, &rows[j].1)
                 {
                     let reason = format!(
                         "{} substitution: '{}' vs '{}' (similarity={:.0}%)",
@@ -609,8 +616,7 @@ pub fn persist_trigger(db: &YantrikDB, trigger: &Trigger, ts: f64) -> Result<Opt
     let cooldown_key = build_cooldown_key(trigger);
     let cooldown_secs = trigger_type.default_cooldown_secs();
 
-    let conn = db.conn();
-    let active_exists: bool = conn.query_row(
+    let active_exists: bool = db.conn().query_row(
         "SELECT COUNT(*) > 0 FROM trigger_log \
          WHERE cooldown_key = ?1 \
          AND status IN ('pending', 'delivered') \
@@ -631,34 +637,37 @@ pub fn persist_trigger(db: &YantrikDB, trigger: &Trigger, ts: f64) -> Result<Opt
     let source_rids_json = serde_json::to_string(&trigger.source_rids)?;
     let context_json = serde_json::to_string(&trigger.context)?;
 
-    conn.execute(
-        "INSERT INTO trigger_log \
-         (trigger_id, trigger_type, urgency, status, reason, suggested_action, \
-          source_rids, context, created_at, expires_at, cooldown_key, hlc, origin_actor) \
-         VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![
-            trigger_id,
-            trigger.trigger_type,
-            trigger.urgency,
-            trigger.reason,
-            trigger.suggested_action,
-            source_rids_json,
-            context_json,
-            ts,
-            expires_at,
-            cooldown_key,
-            hlc_bytes,
-            actor_id,
-        ],
-    )?;
-
-    // Dual-write to join table
-    for rid in &trigger.source_rids {
+    {
+        let conn = db.conn();
         conn.execute(
-            "INSERT OR IGNORE INTO trigger_source_rids (trigger_id, rid) VALUES (?1, ?2)",
-            params![trigger_id, rid],
+            "INSERT INTO trigger_log \
+             (trigger_id, trigger_type, urgency, status, reason, suggested_action, \
+              source_rids, context, created_at, expires_at, cooldown_key, hlc, origin_actor) \
+             VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                trigger_id,
+                trigger.trigger_type,
+                trigger.urgency,
+                trigger.reason,
+                trigger.suggested_action,
+                source_rids_json,
+                context_json,
+                ts,
+                expires_at,
+                cooldown_key,
+                hlc_bytes,
+                actor_id,
+            ],
         )?;
-    }
+
+        // Dual-write to join table
+        for rid in &trigger.source_rids {
+            conn.execute(
+                "INSERT OR IGNORE INTO trigger_source_rids (trigger_id, rid) VALUES (?1, ?2)",
+                params![trigger_id, rid],
+            )?;
+        }
+    } // conn lock released before log_op
 
     db.log_op(
         "trigger_fire",

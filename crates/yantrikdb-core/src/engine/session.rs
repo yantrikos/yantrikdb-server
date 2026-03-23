@@ -21,25 +21,29 @@ impl YantrikDB {
         let actor = self.actor_id().to_string();
         let meta_str = serde_json::to_string(metadata)?;
 
-        self.conn.execute(
-            "INSERT INTO sessions \
-             (session_id, namespace, client_id, status, started_at, metadata, hlc, origin_actor) \
-             VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7)",
-            params![session_id, namespace, client_id, ts, meta_str, hlc_bytes, actor],
-        ).map_err(|e| {
-            if let rusqlite::Error::SqliteFailure(ref err, _) = e {
-                if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
-                    return YantrikDbError::SessionConflict(format!(
-                        "active session already exists for namespace={namespace}, client_id={client_id}"
-                    ));
+        {
+            let conn = self.conn();
+            conn.execute(
+                "INSERT INTO sessions \
+                 (session_id, namespace, client_id, status, started_at, metadata, hlc, origin_actor) \
+                 VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7)",
+                params![session_id, namespace, client_id, ts, meta_str, hlc_bytes, actor],
+            ).map_err(|e| {
+                if let rusqlite::Error::SqliteFailure(ref err, _) = e {
+                    if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
+                        return YantrikDbError::SessionConflict(format!(
+                            "active session already exists for namespace={namespace}, client_id={client_id}"
+                        ));
+                    }
                 }
-            }
-            e.into()
-        })?;
+                e.into()
+            })?;
+        } // drop conn before acquiring active_sessions write lock
 
         // Cache the active session
         self.active_sessions
-            .borrow_mut()
+            .write()
+            .unwrap()
             .insert(namespace.to_string(), session_id.clone());
 
         self.log_op(
@@ -65,48 +69,53 @@ impl YantrikDB {
     ) -> Result<SessionSummary> {
         let ts = now();
 
-        // Gather stats from memories linked to this session
-        let (memory_count, avg_valence): (i64, f64) = self.conn.query_row(
-            "SELECT COUNT(*), COALESCE(AVG(valence), 0.0) \
-             FROM memories WHERE session_id = ?1",
-            params![session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        let (memory_count, avg_valence, topics, duration_secs) = {
+            let conn = self.conn();
 
-        // Gather topics: distinct entity names from this session's memories
-        let mut topic_stmt = self.conn.prepare(
-            "SELECT DISTINCT e.name FROM entities e \
-             JOIN memory_entities me ON me.entity_name = e.name \
-             JOIN memories m ON m.rid = me.memory_rid \
-             WHERE m.session_id = ?1 \
-             LIMIT 20",
-        )?;
-        let topics: Vec<String> = topic_stmt
-            .query_map(params![session_id], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            // Gather stats from memories linked to this session
+            let (memory_count, avg_valence): (i64, f64) = conn.query_row(
+                "SELECT COUNT(*), COALESCE(AVG(valence), 0.0) \
+                 FROM memories WHERE session_id = ?1",
+                params![session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
 
-        let topics_json = serde_json::to_string(&topics)?;
+            // Gather topics: distinct entity names from this session's memories
+            let mut topic_stmt = conn.prepare(
+                "SELECT DISTINCT e.name FROM entities e \
+                 JOIN memory_entities me ON me.entity_name = e.name \
+                 JOIN memories m ON m.rid = me.memory_rid \
+                 WHERE m.session_id = ?1 \
+                 LIMIT 20",
+            )?;
+            let topics: Vec<String> = topic_stmt
+                .query_map(params![session_id], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        // Get started_at for duration calc
-        let started_at: f64 = self.conn.query_row(
-            "SELECT started_at FROM sessions WHERE session_id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        )?;
+            let topics_json = serde_json::to_string(&topics)?;
 
-        let duration_secs = ts - started_at;
+            // Get started_at for duration calc
+            let started_at: f64 = conn.query_row(
+                "SELECT started_at FROM sessions WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )?;
 
-        // Update the session row
-        self.conn.execute(
-            "UPDATE sessions SET status = 'ended', ended_at = ?1, avg_valence = ?2, \
-             memory_count = ?3, topics = ?4, summary = ?5 \
-             WHERE session_id = ?6 AND status = 'active'",
-            params![ts, avg_valence, memory_count, topics_json, summary, session_id],
-        )?;
+            let duration_secs = ts - started_at;
+
+            // Update the session row
+            conn.execute(
+                "UPDATE sessions SET status = 'ended', ended_at = ?1, avg_valence = ?2, \
+                 memory_count = ?3, topics = ?4, summary = ?5 \
+                 WHERE session_id = ?6 AND status = 'active'",
+                params![ts, avg_valence, memory_count, topics_json, summary, session_id],
+            )?;
+
+            (memory_count, avg_valence, topics, duration_secs)
+        }; // drop conn before acquiring active_sessions write lock
 
         // Clear from active_sessions cache
-        let mut cache = self.active_sessions.borrow_mut();
-        cache.retain(|_, sid| sid != session_id);
+        self.active_sessions.write().unwrap().retain(|_, sid| sid != session_id);
 
         self.log_op(
             "session_end",
@@ -136,7 +145,8 @@ impl YantrikDB {
         namespace: &str,
         client_id: &str,
     ) -> Result<Option<Session>> {
-        let result = self.conn.query_row(
+        let conn = self.conn();
+        let result = conn.query_row(
             "SELECT session_id, namespace, client_id, status, started_at, ended_at, \
              summary, avg_valence, memory_count, topics, metadata \
              FROM sessions \
@@ -159,7 +169,8 @@ impl YantrikDB {
         client_id: &str,
         limit: usize,
     ) -> Result<Vec<Session>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT session_id, namespace, client_id, status, started_at, ended_at, \
              summary, avg_valence, memory_count, topics, metadata \
              FROM sessions \
@@ -181,17 +192,22 @@ impl YantrikDB {
         let ts = now();
         let cutoff = ts - max_age_hours * 3600.0;
 
-        let changes = self.conn.execute(
-            "UPDATE sessions SET status = 'abandoned', ended_at = ?1 \
-             WHERE status = 'active' AND started_at < ?2",
-            params![ts, cutoff],
-        )?;
+        let changes = {
+            let conn = self.conn();
+            let changes = conn.execute(
+                "UPDATE sessions SET status = 'abandoned', ended_at = ?1 \
+                 WHERE status = 'active' AND started_at < ?2",
+                params![ts, cutoff],
+            )?;
 
-        if changes > 0 {
-            // Reload active_sessions cache
-            let new_cache = Self::load_active_sessions(&self.conn)?;
-            *self.active_sessions.borrow_mut() = new_cache;
-        }
+            if changes > 0 {
+                // Reload active_sessions cache while still holding conn
+                let new_cache = Self::load_active_sessions(&conn)?;
+                // conn < active_sessions in lock ordering, safe to hold both
+                *self.active_sessions.write().unwrap() = new_cache;
+            }
+            changes
+        };
 
         Ok(changes)
     }

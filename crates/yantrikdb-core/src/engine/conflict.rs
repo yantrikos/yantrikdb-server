@@ -95,7 +95,8 @@ impl YantrikDB {
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
         let conflicts = stmt
             .query_map(params_ref.as_slice(), |row| {
                 Ok(Conflict {
@@ -124,7 +125,8 @@ impl YantrikDB {
 
     /// Get a single conflict by ID.
     pub fn get_conflict(&self, conflict_id: &str) -> Result<Option<Conflict>> {
-        let result = self.conn.query_row(
+        let conn = self.conn();
+        let result = conn.query_row(
             "SELECT * FROM conflicts WHERE conflict_id = ?1",
             params![conflict_id],
             |row| {
@@ -258,7 +260,7 @@ impl YantrikDB {
         };
 
         // Update the conflict record
-        self.conn.execute(
+        self.conn().execute(
             "UPDATE conflicts SET
              status = 'resolved',
              resolved_at = ?1,
@@ -373,7 +375,7 @@ impl YantrikDB {
             for &(token_b, cat_id_b, _cat_name_b) in &known_b {
                 if cat_id_a == cat_id_b {
                     // Same category — reinforce confidence
-                    self.conn.execute(
+                    self.conn().execute(
                         "UPDATE substitution_members SET confidence = 1.0, source = 'user_confirmed', updated_at = ?1
                          WHERE category_id = ?2 AND (token_normalized = ?3 OR token_normalized = ?4)",
                         params![ts, cat_id_a, token_a, token_b],
@@ -468,7 +470,7 @@ impl YantrikDB {
                 if recurrence >= 1 {
                     let prov_name = format!("learned_{}_{}", ta, tb);
                     let cat_id = crate::id::new_id();
-                    self.conn.execute(
+                    self.conn().execute(
                         "INSERT OR IGNORE INTO substitution_categories
                          (id, name, conflict_mode, status, created_at, updated_at, hlc, origin_actor)
                          VALUES (?1, ?2, 'exclusive', 'provisional', ?3, ?3, ?4, ?5)",
@@ -494,7 +496,7 @@ impl YantrikDB {
         // Update conflict type and priority
         let new_conflict_type = ConflictType::from_str(new_type);
         let new_priority = new_conflict_type.default_priority();
-        self.conn.execute(
+        self.conn().execute(
             "UPDATE conflicts SET conflict_type = ?1, priority = ?2 WHERE conflict_id = ?3",
             params![new_type, new_priority, conflict_id],
         )?;
@@ -528,7 +530,8 @@ impl YantrikDB {
 
     /// List all substitution categories with member counts.
     pub fn substitution_categories(&self) -> Result<Vec<SubstitutionCategory>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT c.id, c.name, c.conflict_mode, c.status,
                     (SELECT COUNT(*) FROM substitution_members m
                      WHERE m.category_id = c.id AND m.status = 'active') as member_count
@@ -553,7 +556,8 @@ impl YantrikDB {
 
     /// List members of a specific substitution category.
     pub fn substitution_members(&self, category_name: &str) -> Result<Vec<SubstitutionMember>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT m.id, c.name, m.token_normalized, m.token_display,
                     m.confidence, m.source, m.status
              FROM substitution_members m
@@ -594,7 +598,7 @@ impl YantrikDB {
         let actor = self.actor_id.clone();
 
         // Find or create category
-        let cat_id = match self.conn.query_row(
+        let cat_id = match self.conn().query_row(
             "SELECT id FROM substitution_categories WHERE name = ?1",
             params![category_name],
             |row| row.get::<_, String>(0),
@@ -602,7 +606,7 @@ impl YantrikDB {
             Ok(id) => id,
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 let id = crate::id::new_id();
-                self.conn.execute(
+                self.conn().execute(
                     "INSERT INTO substitution_categories
                      (id, name, conflict_mode, status, created_at, updated_at, hlc, origin_actor)
                      VALUES (?1, ?2, 'exclusive', 'active', ?3, ?3, ?4, ?5)",
@@ -658,17 +662,19 @@ impl YantrikDB {
     /// Reset a substitution category to its seed state by removing all non-seed members.
     /// Returns the number of members removed.
     pub fn reset_category_to_seed(&self, category_name: &str) -> Result<usize> {
-        let cat_id: String = self.conn.query_row(
+        let conn = self.conn();
+        let cat_id: String = conn.query_row(
             "SELECT id FROM substitution_categories WHERE name = ?1",
             params![category_name],
             |row| row.get(0),
         ).map_err(|_| YantrikDbError::NotFound(format!("category: {}", category_name)))?;
 
-        let removed = self.conn.execute(
+        let removed = conn.execute(
             "DELETE FROM substitution_members
              WHERE category_id = ?1 AND source != 'seed'",
             params![cat_id],
         )?;
+        drop(conn);
 
         self.log_op(
             "category_reset",
@@ -687,7 +693,7 @@ impl YantrikDB {
     // ── Internal helpers for substitution categories ──
 
     fn find_member_category(&self, token: &str) -> Option<(String, String)> {
-        self.conn.query_row(
+        self.conn().query_row(
             "SELECT c.id, c.name FROM substitution_members m
              JOIN substitution_categories c ON c.id = m.category_id
              WHERE m.token_normalized = ?1 AND m.status = 'active'
@@ -710,7 +716,7 @@ impl YantrikDB {
     ) -> Result<bool> {
         let member_id = crate::id::new_id();
         let status = if source == "llm_suggested" { "pending" } else { "active" };
-        let rows = self.conn.execute(
+        let rows = self.conn().execute(
             "INSERT OR IGNORE INTO substitution_members
              (id, category_id, token_normalized, token_display, confidence,
               source, status, context_hint, created_at, updated_at, hlc, origin_actor)
@@ -722,7 +728,7 @@ impl YantrikDB {
 
     fn count_reclassify_pair_occurrences(&self, token_a: &str, token_b: &str) -> usize {
         // Count how many times this pair appeared in conflict_reclassify oplog events
-        let count: i64 = self.conn.query_row(
+        let count: i64 = self.conn().query_row(
             "SELECT COUNT(*) FROM oplog
              WHERE op_type = 'conflict_reclassify'
                AND (json_extract(payload, '$.diff_a') LIKE ?1
@@ -743,7 +749,7 @@ impl YantrikDB {
         let ts = now();
         let actor_id = self.actor_id.clone();
 
-        self.conn.execute(
+        self.conn().execute(
             "UPDATE conflicts SET
              status = 'dismissed',
              resolved_at = ?1,

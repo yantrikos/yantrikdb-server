@@ -20,7 +20,7 @@ impl YantrikDB {
 
     /// Load the replay engine state from the database.
     pub fn load_replay_engine(&self) -> Result<ReplayEngine> {
-        match Self::get_meta(&self.conn, REPLAY_ENGINE_META_KEY)? {
+        match Self::get_meta(&self.conn(), REPLAY_ENGINE_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -37,7 +37,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![REPLAY_ENGINE_META_KEY, json],
         )?;

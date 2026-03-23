@@ -20,7 +20,7 @@ impl YantrikDB {
 
     /// Load the Hawkes registry from the database (or create a new one).
     pub fn load_hawkes_registry(&self) -> Result<HawkesRegistry> {
-        match Self::get_meta(&self.conn, HAWKES_META_KEY)? {
+        match Self::get_meta(&self.conn(), HAWKES_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -37,7 +37,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![HAWKES_META_KEY, json],
         )?;

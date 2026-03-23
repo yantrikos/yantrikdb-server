@@ -94,52 +94,55 @@ impl YantrikDB {
         let ts = now_secs();
         let hlc_bytes = self.tick_hlc().to_bytes();
 
-        self.conn.execute(
-            "INSERT OR REPLACE INTO cognitive_nodes (
-                node_id, kind, label,
-                confidence, activation, salience, persistence, valence,
-                urgency, novelty, volatility, provenance, evidence_count,
-                last_updated_ms, payload, metadata,
-                created_at, tombstoned, hlc, origin_actor
-            ) VALUES (
-                ?1, ?2, ?3,
-                ?4, ?5, ?6, ?7, ?8,
-                ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16,
-                ?17, 0, ?18, ?19
-            )",
-            params![
-                node.id.to_raw() as i64,
-                node.kind().as_str(),
-                node.label,
-                node.attrs.confidence,
-                node.attrs.activation,
-                node.attrs.salience,
-                node.attrs.persistence,
-                node.attrs.valence,
-                node.attrs.urgency,
-                node.attrs.novelty,
-                node.attrs.volatility,
-                node.attrs.provenance.as_str(),
-                node.attrs.evidence_count,
-                node.attrs.last_updated_ms as i64,
-                payload_json,
-                metadata_json,
-                ts,
-                hlc_bytes,
-                self.actor_id,
-            ],
-        )?;
+        {
+            let conn = self.conn();
+            conn.execute(
+                "INSERT OR REPLACE INTO cognitive_nodes (
+                    node_id, kind, label,
+                    confidence, activation, salience, persistence, valence,
+                    urgency, novelty, volatility, provenance, evidence_count,
+                    last_updated_ms, payload, metadata,
+                    created_at, tombstoned, hlc, origin_actor
+                ) VALUES (
+                    ?1, ?2, ?3,
+                    ?4, ?5, ?6, ?7, ?8,
+                    ?9, ?10, ?11, ?12, ?13,
+                    ?14, ?15, ?16,
+                    ?17, 0, ?18, ?19
+                )",
+                params![
+                    node.id.to_raw() as i64,
+                    node.kind().as_str(),
+                    node.label,
+                    node.attrs.confidence,
+                    node.attrs.activation,
+                    node.attrs.salience,
+                    node.attrs.persistence,
+                    node.attrs.valence,
+                    node.attrs.urgency,
+                    node.attrs.novelty,
+                    node.attrs.volatility,
+                    node.attrs.provenance.as_str(),
+                    node.attrs.evidence_count,
+                    node.attrs.last_updated_ms as i64,
+                    payload_json,
+                    metadata_json,
+                    ts,
+                    hlc_bytes,
+                    self.actor_id,
+                ],
+            )?;
 
-        // Update high-water mark
-        let seq = node.id.seq();
-        self.conn.execute(
-            "INSERT INTO cognitive_node_hwm (kind, high_water_mark)
-             VALUES (?1, ?2)
-             ON CONFLICT(kind) DO UPDATE SET
-                high_water_mark = MAX(high_water_mark, excluded.high_water_mark)",
-            params![node.kind().as_str(), seq],
-        )?;
+            // Update high-water mark
+            let seq = node.id.seq();
+            conn.execute(
+                "INSERT INTO cognitive_node_hwm (kind, high_water_mark)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(kind) DO UPDATE SET
+                    high_water_mark = MAX(high_water_mark, excluded.high_water_mark)",
+                params![node.kind().as_str(), seq],
+            )?;
+        }
 
         self.log_op(
             "cognitive_node_upsert",
@@ -157,7 +160,8 @@ impl YantrikDB {
 
     /// Load a single cognitive node by its ID. Returns None if not found or tombstoned.
     pub fn load_cognitive_node(&self, id: NodeId) -> Result<Option<CognitiveNode>> {
-        let mut stmt = self.conn.prepare_cached(
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
             "SELECT node_id, kind, label,
                     confidence, activation, salience, persistence, valence,
                     urgency, novelty, volatility, provenance, evidence_count,
@@ -180,20 +184,26 @@ impl YantrikDB {
     /// Soft-delete a cognitive node (tombstone it).
     pub fn tombstone_cognitive_node(&self, id: NodeId) -> Result<bool> {
         let hlc_bytes = self.tick_hlc().to_bytes();
-        let changes = self.conn.execute(
-            "UPDATE cognitive_nodes SET tombstoned = 1, hlc = ?1, origin_actor = ?2
-             WHERE node_id = ?3 AND tombstoned = 0",
-            params![hlc_bytes, self.actor_id, id.to_raw() as i64],
-        )?;
-
-        if changes > 0 {
-            // Also tombstone all edges involving this node
-            self.conn.execute(
-                "UPDATE cognitive_edges SET tombstoned = 1, hlc = ?1, origin_actor = ?2
-                 WHERE (src_id = ?3 OR dst_id = ?3) AND tombstoned = 0",
+        let changes = {
+            let conn = self.conn();
+            let changes = conn.execute(
+                "UPDATE cognitive_nodes SET tombstoned = 1, hlc = ?1, origin_actor = ?2
+                 WHERE node_id = ?3 AND tombstoned = 0",
                 params![hlc_bytes, self.actor_id, id.to_raw() as i64],
             )?;
 
+            if changes > 0 {
+                // Also tombstone all edges involving this node
+                conn.execute(
+                    "UPDATE cognitive_edges SET tombstoned = 1, hlc = ?1, origin_actor = ?2
+                     WHERE (src_id = ?3 OR dst_id = ?3) AND tombstoned = 0",
+                    params![hlc_bytes, self.actor_id, id.to_raw() as i64],
+                )?;
+            }
+            changes
+        };
+
+        if changes > 0 {
             self.log_op(
                 "cognitive_node_tombstone",
                 None,
@@ -219,7 +229,8 @@ impl YantrikDB {
             return Ok(0);
         }
 
-        let tx = self.conn.unchecked_transaction()?;
+        let conn = self.conn();
+        let tx = conn.unchecked_transaction()?;
         let ts = now_secs();
         let hlc_bytes = self.tick_hlc().to_bytes();
 
@@ -279,6 +290,7 @@ impl YantrikDB {
         }
 
         tx.commit()?;
+        drop(conn);
 
         self.log_op(
             "cognitive_nodes_batch_upsert",
@@ -335,7 +347,8 @@ impl YantrikDB {
         let limit = if filter.limit > 0 { filter.limit } else { 1000 };
         sql.push_str(&format!(" LIMIT {limit}"));
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
         let nodes = stmt
             .query_map([], |row| Ok(row_to_cognitive_node(row)))?
             .filter_map(|r| r.ok().flatten())
@@ -346,14 +359,15 @@ impl YantrikDB {
 
     /// Count cognitive nodes by kind.
     pub fn count_cognitive_nodes(&self, kind: Option<NodeKind>) -> Result<usize> {
+        let conn = self.conn();
         let count: i64 = if let Some(k) = kind {
-            self.conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM cognitive_nodes WHERE kind = ?1 AND tombstoned = 0",
                 params![k.as_str()],
                 |row| row.get(0),
             )?
         } else {
-            self.conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM cognitive_nodes WHERE tombstoned = 0",
                 [],
                 |row| row.get(0),
@@ -382,7 +396,7 @@ impl YantrikDB {
     pub fn persist_cognitive_edge(&self, edge: &CognitiveEdge) -> Result<()> {
         let hlc_bytes = self.tick_hlc().to_bytes();
 
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO cognitive_edges (
                 src_id, dst_id, kind, weight, confidence,
                 observation_count, created_at_ms, last_confirmed_ms,
@@ -418,7 +432,8 @@ impl YantrikDB {
             return Ok(0);
         }
 
-        let tx = self.conn.unchecked_transaction()?;
+        let conn = self.conn();
+        let tx = conn.unchecked_transaction()?;
         let hlc_bytes = self.tick_hlc().to_bytes();
 
         {
@@ -459,7 +474,8 @@ impl YantrikDB {
 
     /// Load all edges originating from a node.
     pub fn load_cognitive_edges_from(&self, src: NodeId) -> Result<Vec<CognitiveEdge>> {
-        let mut stmt = self.conn.prepare_cached(
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
             "SELECT src_id, dst_id, kind, weight, confidence,
                     observation_count, created_at_ms, last_confirmed_ms
              FROM cognitive_edges
@@ -478,7 +494,8 @@ impl YantrikDB {
 
     /// Load all edges pointing to a node.
     pub fn load_cognitive_edges_to(&self, dst: NodeId) -> Result<Vec<CognitiveEdge>> {
-        let mut stmt = self.conn.prepare_cached(
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
             "SELECT src_id, dst_id, kind, weight, confidence,
                     observation_count, created_at_ms, last_confirmed_ms
              FROM cognitive_edges
@@ -497,7 +514,8 @@ impl YantrikDB {
 
     /// Load all edges involving a node (both directions).
     pub fn load_cognitive_edges_for(&self, node_id: NodeId) -> Result<Vec<CognitiveEdge>> {
-        let mut stmt = self.conn.prepare_cached(
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
             "SELECT src_id, dst_id, kind, weight, confidence,
                     observation_count, created_at_ms, last_confirmed_ms
              FROM cognitive_edges
@@ -519,7 +537,8 @@ impl YantrikDB {
         &self,
         kind: CognitiveEdgeKind,
     ) -> Result<Vec<CognitiveEdge>> {
-        let mut stmt = self.conn.prepare_cached(
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
             "SELECT src_id, dst_id, kind, weight, confidence,
                     observation_count, created_at_ms, last_confirmed_ms
              FROM cognitive_edges
@@ -544,7 +563,7 @@ impl YantrikDB {
         kind: CognitiveEdgeKind,
     ) -> Result<bool> {
         let hlc_bytes = self.tick_hlc().to_bytes();
-        let changes = self.conn.execute(
+        let changes = self.conn().execute(
             "UPDATE cognitive_edges SET tombstoned = 1, hlc = ?1, origin_actor = ?2
              WHERE src_id = ?3 AND dst_id = ?4 AND kind = ?5 AND tombstoned = 0",
             params![
@@ -560,14 +579,15 @@ impl YantrikDB {
 
     /// Count cognitive edges (optionally filtered by kind).
     pub fn count_cognitive_edges(&self, kind: Option<CognitiveEdgeKind>) -> Result<usize> {
+        let conn = self.conn();
         let count: i64 = if let Some(k) = kind {
-            self.conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM cognitive_edges WHERE kind = ?1 AND tombstoned = 0",
                 params![k.as_str()],
                 |row| row.get(0),
             )?
         } else {
-            self.conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM cognitive_edges WHERE tombstoned = 0",
                 [],
                 |row| row.get(0),
@@ -585,7 +605,8 @@ impl YantrikDB {
     /// Scans the `cognitive_node_hwm` table and reconstructs the allocator
     /// so that newly allocated IDs never collide with persisted ones.
     pub fn load_node_id_allocator(&self) -> Result<NodeIdAllocator> {
-        let mut stmt = self.conn.prepare_cached(
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
             "SELECT kind, high_water_mark FROM cognitive_node_hwm",
         )?;
 
@@ -607,7 +628,8 @@ impl YantrikDB {
 
     /// Persist the allocator's high-water marks to SQLite.
     pub fn persist_node_id_allocator(&self, allocator: &NodeIdAllocator) -> Result<()> {
-        let mut stmt = self.conn.prepare_cached(
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
             "INSERT INTO cognitive_node_hwm (kind, high_water_mark)
              VALUES (?1, ?2)
              ON CONFLICT(kind) DO UPDATE SET
@@ -663,7 +685,8 @@ impl YantrikDB {
         // Load edges between the loaded nodes
         // We query all non-tombstoned edges and filter in-memory to those
         // where both endpoints are in the working set
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT src_id, dst_id, kind, weight, confidence,
                     observation_count, created_at_ms, last_confirmed_ms
              FROM cognitive_edges WHERE tombstoned = 0",
@@ -711,7 +734,8 @@ impl YantrikDB {
         }
 
         // Save everything in a transaction
-        let tx = self.conn.unchecked_transaction()?;
+        let conn = self.conn();
+        let tx = conn.unchecked_transaction()?;
         let ts = now_secs();
         let hlc_bytes = self.tick_hlc().to_bytes();
 
@@ -999,8 +1023,8 @@ impl YantrikDB {
         }
 
         // Average activation across all nodes
-        let avg_activation: f64 = self
-            .conn
+        let conn = self.conn();
+        let avg_activation: f64 = conn
             .query_row(
                 "SELECT COALESCE(AVG(activation), 0.0) FROM cognitive_nodes WHERE tombstoned = 0",
                 [],
@@ -1008,8 +1032,7 @@ impl YantrikDB {
             )?;
 
         // Highest urgency node
-        let max_urgency: f64 = self
-            .conn
+        let max_urgency: f64 = conn
             .query_row(
                 "SELECT COALESCE(MAX(urgency), 0.0) FROM cognitive_nodes WHERE tombstoned = 0",
                 [],

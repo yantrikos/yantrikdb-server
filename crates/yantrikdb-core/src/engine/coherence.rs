@@ -28,7 +28,7 @@ impl YantrikDB {
 
     /// Load the coherence config from the database.
     pub fn load_coherence_config(&self) -> Result<CoherenceConfig> {
-        match Self::get_meta(&self.conn, COHERENCE_CONFIG_META_KEY)? {
+        match Self::get_meta(&self.conn(), COHERENCE_CONFIG_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -45,7 +45,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![COHERENCE_CONFIG_META_KEY, json],
         )?;
@@ -54,7 +54,7 @@ impl YantrikDB {
 
     /// Load the coherence history from the database.
     pub fn load_coherence_history(&self) -> Result<CoherenceHistory> {
-        match Self::get_meta(&self.conn, COHERENCE_HISTORY_META_KEY)? {
+        match Self::get_meta(&self.conn(), COHERENCE_HISTORY_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -71,7 +71,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![COHERENCE_HISTORY_META_KEY, json],
         )?;

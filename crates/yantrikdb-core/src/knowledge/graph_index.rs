@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn test_build_from_empty_db() {
         let db = YantrikDB::new(":memory:", 4).unwrap();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
         assert_eq!(idx.entity_count(), 0);
         assert_eq!(idx.edge_count(), 0);
         assert_eq!(idx.link_count(), 0);
@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn test_build_from_populated_db() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
         // 4 edges: Alice-Bob, Bob-Charlie, Alice-ProjectX, Dave-ProjectX
         assert_eq!(idx.edge_count(), 4);
         // 5 entities: Alice, Bob, Charlie, ProjectX, Dave
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn test_expand_bfs_1hop() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
         let expanded = idx.expand_bfs(&["Alice"], 1, 30);
         let names: HashSet<String> = expanded.iter().map(|(n, _, _)| n.clone()).collect();
         assert!(names.contains("Alice"));
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn test_expand_bfs_2hop() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
         let expanded = idx.expand_bfs(&["Alice"], 2, 30);
         let names: HashSet<String> = expanded.iter().map(|(n, _, _)| n.clone()).collect();
         assert!(names.contains("Charlie"));
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn test_expand_bfs_budget_limit() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
         let expanded = idx.expand_bfs(&["Alice"], 2, 3);
         assert!(expanded.len() <= 3);
     }
@@ -415,9 +415,9 @@ mod tests {
     #[test]
     fn test_expand_bfs_matches_sql() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
 
-        let sql_result = graph::expand_entities_nhop(db.conn(), &["Alice"], 1, 20).unwrap();
+        let sql_result = graph::expand_entities_nhop(&*db.conn(), &["Alice"], 1, 20).unwrap();
         let idx_result = idx.expand_bfs(&["Alice"], 1, 20);
 
         let sql_names: HashSet<String> = sql_result.iter().map(|(n, _, _)| n.clone()).collect();
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn test_graph_proximity() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
 
         let rid: String = db.conn().query_row(
             "SELECT rid FROM memories ORDER BY created_at LIMIT 1", [], |row| row.get(0),
@@ -445,19 +445,19 @@ mod tests {
     #[test]
     fn test_graph_proximity_matches_sql() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
 
         let rid: String = db.conn().query_row(
             "SELECT rid FROM memories ORDER BY created_at LIMIT 1", [], |row| row.get(0),
         ).unwrap();
 
-        let expanded = graph::expand_entities_nhop(db.conn(), &["Alice"], 1, 20).unwrap();
+        let expanded = graph::expand_entities_nhop(&*db.conn(), &["Alice"], 1, 20).unwrap();
         let expanded_map: HashMap<String, (u8, f64)> = expanded
             .iter()
             .map(|(n, h, w)| (n.clone(), (*h, *w)))
             .collect();
 
-        let sql_prox = graph::graph_proximity(db.conn(), &rid, &expanded_map).unwrap();
+        let sql_prox = graph::graph_proximity(&*db.conn(), &rid, &expanded_map).unwrap();
         let idx_prox = idx.graph_proximity(&rid, &expanded_map);
         assert!((sql_prox - idx_prox).abs() < 1e-10);
     }
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn test_entities_for_memories() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
 
         let rid: String = db.conn().query_row(
             "SELECT rid FROM memories ORDER BY created_at LIMIT 1", [], |row| row.get(0),
@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn test_memories_for_entities() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
         let rids = idx.memories_for_entities(&["Alice"]);
         assert_eq!(rids.len(), 1);
     }
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn test_entity_matches_query() {
         let db = setup_db();
-        let idx = GraphIndex::build_from_db(db.conn()).unwrap();
+        let idx = GraphIndex::build_from_db(&*db.conn()).unwrap();
 
         let tokens = graph::tokenize("What did Alice say about ProjectX?");
         let matches = idx.entity_matches_query(&tokens);

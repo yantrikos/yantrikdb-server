@@ -137,7 +137,7 @@ impl YantrikDB {
                 };
 
                 // Add session context if available
-                let active_sessions = self.active_sessions.borrow();
+                let active_sessions = self.active_sessions.read().unwrap();
                 if !active_sessions.is_empty() {
                     let session_ids: Vec<&String> = active_sessions.values().collect();
                     context.insert(
@@ -160,7 +160,8 @@ impl YantrikDB {
         // Phase 5.5: Session awareness triggers
         // Check for gaps between sessions and surface context from last session
         {
-            let mut session_stmt = self.conn.prepare(
+            let conn = self.conn();
+            let mut session_stmt = conn.prepare(
                 "SELECT session_id, client_id, ended_at, summary, avg_valence, memory_count, topics \
                  FROM sessions WHERE status = 'ended' \
                  ORDER BY ended_at DESC LIMIT 1",
@@ -249,7 +250,7 @@ impl YantrikDB {
         };
 
         // Record last_think_at
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_think_at', ?1)",
             params![ts.to_string()],
         )?;
@@ -290,7 +291,7 @@ impl YantrikDB {
     /// - No gossip trigger for this category in last 7 days
     fn check_gossip_triggers(&self) -> Result<Vec<Trigger>> {
         let mut triggers = Vec::new();
-        let conn = &self.conn;
+        let conn = self.conn();
 
         // Find categories with enough confirmed members AND at least one non-seed member
         // (seed-only categories don't need gossip expansion until the user has interacted)
@@ -370,7 +371,7 @@ impl YantrikDB {
     /// Mark a trigger as delivered (surfaced to host app).
     pub fn deliver_trigger(&self, trigger_id: &str) -> Result<bool> {
         let ts = now();
-        let changes = self.conn.execute(
+        let changes = self.conn().execute(
             "UPDATE trigger_log SET status = 'delivered', delivered_at = ?1 \
              WHERE trigger_id = ?2 AND status = 'pending'",
             params![ts, trigger_id],
@@ -389,7 +390,7 @@ impl YantrikDB {
     /// Mark a trigger as acknowledged (user saw it).
     pub fn acknowledge_trigger(&self, trigger_id: &str) -> Result<bool> {
         let ts = now();
-        let changes = self.conn.execute(
+        let changes = self.conn().execute(
             "UPDATE trigger_log SET status = 'acknowledged', acknowledged_at = ?1 \
              WHERE trigger_id = ?2 AND status = 'delivered'",
             params![ts, trigger_id],
@@ -408,7 +409,7 @@ impl YantrikDB {
     /// Mark a trigger as acted upon.
     pub fn act_on_trigger(&self, trigger_id: &str) -> Result<bool> {
         let ts = now();
-        let changes = self.conn.execute(
+        let changes = self.conn().execute(
             "UPDATE trigger_log SET status = 'acted', acted_at = ?1 \
              WHERE trigger_id = ?2 AND status IN ('delivered', 'acknowledged')",
             params![ts, trigger_id],
@@ -427,7 +428,7 @@ impl YantrikDB {
     /// Dismiss a trigger (user doesn't want to act on it).
     pub fn dismiss_trigger(&self, trigger_id: &str) -> Result<bool> {
         let ts = now();
-        let changes = self.conn.execute(
+        let changes = self.conn().execute(
             "UPDATE trigger_log SET status = 'dismissed', acted_at = ?1 \
              WHERE trigger_id = ?2 AND status IN ('pending', 'delivered', 'acknowledged')",
             params![ts, trigger_id],

@@ -18,69 +18,45 @@ impl YantrikDB {
         let edge_id = crate::id::new_id();
         let ts = now();
 
-        self.conn.execute(
-            "INSERT INTO edges (edge_id, src, dst, rel_type, weight, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-             ON CONFLICT(src, dst, rel_type) DO UPDATE SET weight = ?5, created_at = ?6",
-            params![edge_id, src, dst, rel_type, weight, ts],
-        )?;
-
         // Classify entity types using relationship semantics
         let (src_type, dst_type) =
             crate::graph::classify_with_relationship(src, dst, rel_type);
 
-        // Ensure entities exist with classified entity_type
-        for (entity, etype) in [(src, src_type), (dst, dst_type)] {
-            self.conn.execute(
-                "INSERT INTO entities (name, entity_type, first_seen, last_seen) \
-                 VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT(name) DO UPDATE SET last_seen = ?4, mention_count = mention_count + 1, \
-                 entity_type = CASE WHEN entities.entity_type = 'unknown' THEN ?2 ELSE entities.entity_type END",
-                params![entity, etype, ts, ts],
-            )?;
-        }
-
-        // Update in-memory graph index
+        // Phase 1: Lock conn for all SQL operations, then drop
         {
-            let mut gi = self.graph_index.borrow_mut();
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO edges (edge_id, src, dst, rel_type, weight, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(src, dst, rel_type) DO UPDATE SET weight = ?5, created_at = ?6",
+                params![edge_id, src, dst, rel_type, weight, ts],
+            )?;
+
+            // Ensure entities exist with classified entity_type
+            for (entity, etype) in [(src, src_type), (dst, dst_type)] {
+                conn.execute(
+                    "INSERT INTO entities (name, entity_type, first_seen, last_seen) \
+                     VALUES (?1, ?2, ?3, ?4) \
+                     ON CONFLICT(name) DO UPDATE SET last_seen = ?4, mention_count = mention_count + 1, \
+                     entity_type = CASE WHEN entities.entity_type = 'unknown' THEN ?2 ELSE entities.entity_type END",
+                    params![entity, etype, ts, ts],
+                )?;
+            }
+        } // conn dropped
+
+        // Phase 2: Lock graph_index write for in-memory updates, then drop
+        {
+            let mut gi = self.graph_index.write().unwrap();
             gi.add_entity(src, src_type);
             gi.add_entity(dst, dst_type);
             gi.add_edge(src, dst, weight as f32);
-        }
+        } // graph_index dropped
 
         // Backfill memory_entities for newly-created entities.
         // When remember() runs BEFORE relate(), the memory doesn't get linked
         // because the entity doesn't exist yet. Fix: scan active memories for
         // mentions of the src/dst entities and create links retroactively.
-        {
-            let mut stmt = self.conn.prepare_cached(
-                "SELECT rid, text FROM memories \
-                 WHERE consolidation_status = 'active' \
-                 AND rid NOT IN (SELECT memory_rid FROM memory_entities WHERE entity_name = ?1)"
-            )?;
-            for entity in [src, dst] {
-                let entity_tokens = crate::graph::tokenize(entity);
-                if entity_tokens.is_empty() {
-                    continue;
-                }
-                let rows: Vec<(String, String)> = stmt
-                    .query_map(params![entity], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    })?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                for (rid, stored_text) in &rows {
-                    let text = self.decrypt_text(stored_text).unwrap_or_else(|_| stored_text.clone());
-                    let text_tokens = crate::graph::tokenize(&text);
-                    if crate::graph::entity_matches_text(entity, &text_tokens) {
-                        self.conn.execute(
-                            "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
-                            params![rid, entity],
-                        )?;
-                        self.graph_index.borrow_mut().link_memory(rid, entity);
-                    }
-                }
-            }
-        }
+        self.backfill_memory_entities_for(&[src, dst])?;
 
         self.log_op(
             "relate",
@@ -101,7 +77,8 @@ impl YantrikDB {
 
     /// Get all edges connected to an entity.
     pub fn get_edges(&self, entity: &str) -> Result<Vec<Edge>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT * FROM edges WHERE (src = ?1 OR dst = ?1) AND tombstoned = 0",
         )?;
 
@@ -164,7 +141,8 @@ impl YantrikDB {
             ),
         };
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
         let entities = stmt
             .query_map(param_refs.as_slice(), |row| {
@@ -183,11 +161,85 @@ impl YantrikDB {
 
     /// Link a memory to an entity for graph-augmented recall.
     pub fn link_memory_entity(&self, memory_rid: &str, entity_name: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
-            params![memory_rid, entity_name],
-        )?;
-        self.graph_index.borrow_mut().link_memory(memory_rid, entity_name);
+        // Phase 1: Lock conn for SQL INSERT, then drop
+        {
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
+                params![memory_rid, entity_name],
+            )?;
+        } // conn dropped
+
+        // Phase 2: Lock graph_index write for in-memory update
+        self.graph_index.write().unwrap().link_memory(memory_rid, entity_name);
+        Ok(())
+    }
+
+    /// Backfill memory_entities for a specific set of entity names.
+    /// Used by relate() to retroactively link memories to newly-created entities.
+    fn backfill_memory_entities_for(&self, entity_names: &[&str]) -> Result<()> {
+        // Phase 1: Lock conn, query candidate memories for each entity, drop conn
+        struct LinkCandidate {
+            rid: String,
+            entity: String,
+        }
+        let mut candidates = Vec::new();
+
+        {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare_cached(
+                "SELECT rid, text FROM memories \
+                 WHERE consolidation_status = 'active' \
+                 AND rid NOT IN (SELECT memory_rid FROM memory_entities WHERE entity_name = ?1)"
+            )?;
+            for &entity in entity_names {
+                let entity_tokens = crate::graph::tokenize(entity);
+                if entity_tokens.is_empty() {
+                    continue;
+                }
+                let rows: Vec<(String, String)> = stmt
+                    .query_map(params![entity], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+
+                // Phase 2: Compute matches (decrypt_text doesn't need conn)
+                for (rid, stored_text) in &rows {
+                    let text = self.decrypt_text(stored_text).unwrap_or_else(|_| stored_text.clone());
+                    let text_tokens = crate::graph::tokenize(&text);
+                    if crate::graph::entity_matches_text(entity, &text_tokens) {
+                        candidates.push(LinkCandidate {
+                            rid: rid.clone(),
+                            entity: entity.to_string(),
+                        });
+                    }
+                }
+            }
+        } // conn dropped
+
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        // Phase 3: Lock conn, do INSERT OR IGNORE for each link, drop conn
+        {
+            let conn = self.conn.lock().unwrap();
+            for c in &candidates {
+                conn.execute(
+                    "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
+                    params![c.rid, c.entity],
+                )?;
+            }
+        } // conn dropped
+
+        // Phase 4: Lock graph_index write, do link_memory for each, drop
+        {
+            let mut gi = self.graph_index.write().unwrap();
+            for c in &candidates {
+                gi.link_memory(&c.rid, &c.entity);
+            }
+        } // graph_index dropped
+
         Ok(())
     }
 
@@ -195,19 +247,26 @@ impl YantrikDB {
     /// Uses word-boundary matching to avoid false positives.
     /// Returns the number of links created. Idempotent (uses INSERT OR IGNORE).
     pub fn backfill_memory_entities(&self) -> Result<usize> {
-        let entities: Vec<String> = self.conn.prepare(
-            "SELECT name FROM entities",
-        )?.query_map([], |row| row.get(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
+        // Phase 1: Lock conn, query entities and memories, drop conn
+        let entities: Vec<String>;
+        let raw_memories: Vec<(String, String)>;
 
-        if entities.is_empty() {
-            return Ok(0);
-        }
+        {
+            let conn = self.conn.lock().unwrap();
+            entities = conn.prepare(
+                "SELECT name FROM entities",
+            )?.query_map([], |row| row.get(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
 
-        let raw_memories: Vec<(String, String)> = self.conn.prepare(
-            "SELECT rid, text FROM memories WHERE consolidation_status = 'active'",
-        )?.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+            if entities.is_empty() {
+                return Ok(0);
+            }
 
-        // Decrypt text if encrypted
+            raw_memories = conn.prepare(
+                "SELECT rid, text FROM memories WHERE consolidation_status = 'active'",
+            )?.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+        } // conn dropped
+
+        // Phase 2: Compute matches (decrypt_text doesn't need conn)
         let memories: Vec<(String, String)> = raw_memories.into_iter()
             .map(|(rid, stored_text)| {
                 let text = self.decrypt_text(&stored_text)?;
@@ -215,21 +274,49 @@ impl YantrikDB {
             })
             .collect::<crate::error::Result<Vec<_>>>()?;
 
-        let mut count = 0usize;
-        let mut gi = self.graph_index.borrow_mut();
+        struct LinkCandidate {
+            rid: String,
+            entity: String,
+        }
+        let mut candidates = Vec::new();
+
         for (rid, text) in &memories {
             let text_tokens = crate::graph::tokenize(text);
             for entity in &entities {
                 if crate::graph::entity_matches_text(entity, &text_tokens) {
-                    self.conn.execute(
-                        "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
-                        params![rid, entity],
-                    )?;
-                    gi.link_memory(rid, entity);
-                    count += 1;
+                    candidates.push(LinkCandidate {
+                        rid: rid.clone(),
+                        entity: entity.clone(),
+                    });
                 }
             }
         }
+
+        let count = candidates.len();
+
+        if count == 0 {
+            return Ok(0);
+        }
+
+        // Phase 3: Lock conn, do INSERT OR IGNORE for each link, drop conn
+        {
+            let conn = self.conn.lock().unwrap();
+            for c in &candidates {
+                conn.execute(
+                    "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
+                    params![c.rid, c.entity],
+                )?;
+            }
+        } // conn dropped
+
+        // Phase 4: Lock graph_index write, do link_memory for each, drop
+        {
+            let mut gi = self.graph_index.write().unwrap();
+            for c in &candidates {
+                gi.link_memory(&c.rid, &c.entity);
+            }
+        } // graph_index dropped
+
         Ok(count)
     }
 }

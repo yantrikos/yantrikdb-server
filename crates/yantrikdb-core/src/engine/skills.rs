@@ -21,7 +21,7 @@ impl YantrikDB {
 
     /// Load the skill registry from the database.
     pub fn load_skill_registry(&self) -> Result<SkillRegistry> {
-        match Self::get_meta(&self.conn, SKILL_REGISTRY_META_KEY)? {
+        match Self::get_meta(&self.conn(), SKILL_REGISTRY_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -38,7 +38,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![SKILL_REGISTRY_META_KEY, json],
         )?;
@@ -47,7 +47,7 @@ impl YantrikDB {
 
     /// Load the skill configuration.
     pub fn load_skill_config(&self) -> Result<SkillConfig> {
-        match Self::get_meta(&self.conn, SKILL_CONFIG_META_KEY)? {
+        match Self::get_meta(&self.conn(), SKILL_CONFIG_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -64,7 +64,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![SKILL_CONFIG_META_KEY, json],
         )?;

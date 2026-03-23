@@ -26,9 +26,10 @@ pub fn derive_personality(db: &YantrikDB) -> Result<PersonalityProfile> {
 
     let mut profile_traits = Vec::with_capacity(4);
 
+    let conn = db.conn();
     for (name, raw_score) in &raw_traits {
         // Read existing trait
-        let (old_score, old_count): (f64, i64) = db.conn.query_row(
+        let (old_score, old_count): (f64, i64) = conn.query_row(
             "SELECT score, sample_count FROM personality_traits WHERE trait_name = ?1",
             params![name],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -46,7 +47,7 @@ pub fn derive_personality(db: &YantrikDB) -> Result<PersonalityProfile> {
         // Confidence grows with samples, capped at 1.0
         let confidence = (new_count as f64 / 20.0).min(1.0);
 
-        db.conn.execute(
+        conn.execute(
             "UPDATE personality_traits SET score = ?1, confidence = ?2, sample_count = ?3, updated_at = ?4 \
              WHERE trait_name = ?5",
             params![blended, confidence, new_count, ts, name],
@@ -69,7 +70,8 @@ pub fn derive_personality(db: &YantrikDB) -> Result<PersonalityProfile> {
 
 /// Read the current personality profile from the DB without recomputing.
 pub fn get_personality(db: &YantrikDB) -> Result<PersonalityProfile> {
-    let mut stmt = db.conn.prepare(
+    let conn = db.conn();
+    let mut stmt = conn.prepare(
         "SELECT trait_name, score, confidence, sample_count, updated_at \
          FROM personality_traits ORDER BY trait_name",
     )?;
@@ -95,7 +97,7 @@ pub fn get_personality(db: &YantrikDB) -> Result<PersonalityProfile> {
 pub fn set_personality_trait(db: &YantrikDB, name: &str, score: f64) -> Result<bool> {
     let ts = crate::engine::now();
     let score = score.clamp(0.0, 1.0);
-    let changes = db.conn.execute(
+    let changes = db.conn().execute(
         "UPDATE personality_traits SET score = ?1, updated_at = ?2 WHERE trait_name = ?3",
         params![score, ts, name],
     )?;
@@ -106,7 +108,7 @@ pub fn set_personality_trait(db: &YantrikDB, name: &str, score: f64) -> Result<b
 
 /// Warmth: average valence of recent memories mapped from [-1,1] to [0,1].
 fn derive_warmth(db: &YantrikDB) -> Result<f64> {
-    let result: f64 = db.conn.query_row(
+    let result: f64 = db.conn().query_row(
         "SELECT COALESCE(AVG(valence), 0.0) FROM (
             SELECT valence FROM memories
             WHERE consolidation_status = 'active'
@@ -122,7 +124,7 @@ fn derive_warmth(db: &YantrikDB) -> Result<f64> {
 /// Depth: distinct domain count + entity relationship complexity.
 fn derive_depth(db: &YantrikDB) -> Result<f64> {
     // Count distinct domains in last 100 memories
-    let domain_count: i64 = db.conn.query_row(
+    let domain_count: i64 = db.conn().query_row(
         "SELECT COUNT(DISTINCT domain) FROM (
             SELECT domain FROM memories
             WHERE consolidation_status = 'active'
@@ -133,7 +135,7 @@ fn derive_depth(db: &YantrikDB) -> Result<f64> {
     )?;
 
     // Count distinct entities mentioned
-    let entity_count: i64 = db.conn.query_row(
+    let entity_count: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM entities",
         [],
         |row| row.get(0),
@@ -153,7 +155,7 @@ fn derive_energy(db: &YantrikDB) -> Result<f64> {
     let ts = crate::engine::now();
     let seven_days_ago = ts - 7.0 * 86400.0;
 
-    let count: i64 = db.conn.query_row(
+    let count: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM memories WHERE created_at > ?1 AND consolidation_status = 'active'",
         params![seven_days_ago],
         |row| row.get(0),
@@ -167,19 +169,19 @@ fn derive_energy(db: &YantrikDB) -> Result<f64> {
 /// Attentiveness: active pattern count + conflict resolution rate.
 fn derive_attentiveness(db: &YantrikDB) -> Result<f64> {
     // Count active patterns with confidence > 0.5
-    let pattern_count: i64 = db.conn.query_row(
+    let pattern_count: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM patterns WHERE status = 'active' AND confidence > 0.5",
         [],
         |row| row.get(0),
     )?;
 
     // Conflict resolution rate
-    let total_conflicts: i64 = db.conn.query_row(
+    let total_conflicts: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM conflicts",
         [],
         |row| row.get(0),
     )?;
-    let resolved_conflicts: i64 = db.conn.query_row(
+    let resolved_conflicts: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM conflicts WHERE status = 'resolved'",
         [],
         |row| row.get(0),

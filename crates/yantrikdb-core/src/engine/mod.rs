@@ -51,8 +51,8 @@ pub mod tenant;
 #[cfg(test)]
 mod tests;
 
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::{Mutex, RwLock, MutexGuard};
 
 use base64::Engine;
 use rand::Rng;
@@ -73,21 +73,39 @@ use crate::schema::{
 use crate::types::*;
 
 /// The YantrikDB cognitive memory engine.
+///
+/// Thread-safe: all internal state is protected by `Mutex` or `RwLock`.
+/// `conn` uses `Mutex` because `rusqlite::Connection` is `!Sync`.
+/// Read-heavy fields (`scoring_cache`, `vec_index`, `graph_index`,
+/// `active_sessions`) use `RwLock` for concurrent reader throughput.
+///
+/// **Lock ordering** (always acquire in this order to prevent deadlocks):
+///   conn → hlc → scoring_cache → vec_index → graph_index → active_sessions
 pub struct YantrikDB {
-    pub(crate) conn: Connection,
+    pub(crate) conn: Mutex<Connection>,
     pub(crate) embedding_dim: usize,
-    pub(crate) hlc: RefCell<HLC>,
+    pub(crate) hlc: Mutex<HLC>,
     pub(crate) actor_id: String,
-    pub(crate) scoring_cache: RefCell<HashMap<String, ScoringRow>>,
-    pub(crate) vec_index: RefCell<HnswIndex>,
-    pub(crate) graph_index: RefCell<GraphIndex>,
+    pub(crate) scoring_cache: RwLock<HashMap<String, ScoringRow>>,
+    pub(crate) vec_index: RwLock<HnswIndex>,
+    pub(crate) graph_index: RwLock<GraphIndex>,
     pub(crate) enc: Option<EncryptionProvider>,
     /// Optional text-to-embedding converter. When set, enables `record_text()`
     /// and `recall_text()` which auto-embed text without an external server.
-    embedder: Option<Box<dyn crate::types::Embedder>>,
+    embedder: Option<Box<dyn crate::types::Embedder + Send + Sync>>,
     /// Cache of active sessions: namespace → session_id
-    pub(crate) active_sessions: RefCell<HashMap<String, String>>,
+    pub(crate) active_sessions: RwLock<HashMap<String, String>>,
 }
+
+// Static assertion: YantrikDB must be Send + Sync.
+const _: () = {
+    fn _assert_send<T: Send>() {}
+    fn _assert_sync<T: Sync>() {}
+    fn _check() {
+        _assert_send::<YantrikDB>();
+        _assert_sync::<YantrikDB>();
+    }
+};
 
 pub(crate) fn now() -> f64 {
     crate::time::now_secs()
@@ -256,16 +274,16 @@ impl YantrikDB {
         let active_sessions = Self::load_active_sessions(&conn)?;
 
         Ok(Self {
-            conn,
+            conn: Mutex::new(conn),
             embedding_dim,
-            hlc: RefCell::new(HLC::new(node_id)),
+            hlc: Mutex::new(HLC::new(node_id)),
             actor_id,
-            scoring_cache: RefCell::new(scoring_cache),
-            vec_index: RefCell::new(vec_index),
-            graph_index: RefCell::new(graph_index),
+            scoring_cache: RwLock::new(scoring_cache),
+            vec_index: RwLock::new(vec_index),
+            graph_index: RwLock::new(graph_index),
             enc,
             embedder: None,
-            active_sessions: RefCell::new(active_sessions),
+            active_sessions: RwLock::new(active_sessions),
         })
     }
 
@@ -314,12 +332,12 @@ impl YantrikDB {
 
     /// Get a new HLC timestamp (ticks the clock forward).
     pub fn tick_hlc(&self) -> HLCTimestamp {
-        self.hlc.borrow_mut().now()
+        self.hlc.lock().unwrap().now()
     }
 
     /// Merge a remote HLC timestamp into the local clock.
     pub fn merge_hlc(&self, remote: HLCTimestamp) -> HLCTimestamp {
-        self.hlc.borrow_mut().recv(remote)
+        self.hlc.lock().unwrap().recv(remote)
     }
 
     /// Get the actor_id of this instance.
@@ -332,14 +350,12 @@ impl YantrikDB {
         self.embedding_dim
     }
 
-    /// Get a reference to the underlying connection (for test compatibility).
-    pub fn conn(&self) -> &Connection {
-        &self.conn
-    }
-
-    /// Get a mutable reference to the underlying connection.
-    pub fn conn_mut(&mut self) -> &mut Connection {
-        &mut self.conn
+    /// Acquire the database connection lock.
+    ///
+    /// Returns a `MutexGuard` that deref's to `&Connection`.
+    /// The lock is released when the guard is dropped.
+    pub fn conn(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap()
     }
 
     /// Whether this instance has encryption enabled.
@@ -388,14 +404,18 @@ impl YantrikDB {
 
     /// Close the database connection. After this, the engine cannot be used.
     pub fn close(self) -> Result<()> {
-        self.conn.close().map_err(|(_, e)| YantrikDbError::Database(e))
+        self.conn
+            .into_inner()
+            .unwrap()
+            .close()
+            .map_err(|(_, e)| YantrikDbError::Database(e))
     }
 
     // ── Embedder integration ──
 
     /// Set the text-to-embedding converter. Enables `embed()`, `record_text()`,
     /// and `recall_text()` which auto-embed text without an external server.
-    pub fn set_embedder(&mut self, embedder: Box<dyn crate::types::Embedder>) {
+    pub fn set_embedder(&mut self, embedder: Box<dyn crate::types::Embedder + Send + Sync>) {
         self.embedder = Some(embedder);
     }
 

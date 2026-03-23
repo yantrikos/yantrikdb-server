@@ -10,7 +10,8 @@ impl YantrikDB {
     /// Get a single memory by RID.
     #[tracing::instrument(skip(self))]
     pub fn get(&self, rid: &str) -> Result<Option<Memory>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT * FROM memories WHERE rid = ?1",
         )?;
 
@@ -118,7 +119,8 @@ impl YantrikDB {
         let count_sql = format!("SELECT COUNT(*) FROM memories WHERE {where_clause}");
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
-        let total: usize = self.conn.query_row(&count_sql, params_ref.as_slice(), |row| row.get(0))?;
+        let conn = self.conn();
+        let total: usize = conn.query_row(&count_sql, params_ref.as_slice(), |row| row.get(0))?;
 
         // Fetch page
         let sql = format!(
@@ -134,7 +136,7 @@ impl YantrikDB {
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_ref.as_slice(), |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -200,7 +202,8 @@ impl YantrikDB {
     #[tracing::instrument(skip(self))]
     pub fn decay(&self, threshold: f64) -> Result<Vec<DecayedMemory>> {
         let ts = now();
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT rid, text, importance, half_life, last_access, type FROM memories \
              WHERE consolidation_status = 'active'",
         )?;
@@ -241,14 +244,17 @@ impl YantrikDB {
     #[tracing::instrument(skip(self))]
     pub fn forget(&self, rid: &str) -> Result<bool> {
         let ts = now();
-        let changes = self.conn.execute(
-            "UPDATE memories SET consolidation_status = 'tombstoned', updated_at = ?1 WHERE rid = ?2",
-            params![ts, rid],
-        )?;
+        let changes = {
+            let conn = self.conn();
+            conn.execute(
+                "UPDATE memories SET consolidation_status = 'tombstoned', updated_at = ?1 WHERE rid = ?2",
+                params![ts, rid],
+            )?
+        }; // drop conn before acquiring vec_index/graph_index locks
 
         if changes > 0 {
-            self.vec_index.borrow_mut().remove(rid);
-            self.graph_index.borrow_mut().unlink_memory(rid);
+            self.vec_index.write().unwrap().remove(rid);
+            self.graph_index.write().unwrap().unlink_memory(rid);
             // Remove from scoring cache (tombstoned memories excluded)
             self.cache_remove(rid);
             self.log_op(
@@ -342,14 +348,15 @@ impl YantrikDB {
         )?;
 
         // Auto-resolve any open conflicts involving the original rid
-        let related_conflicts: Vec<String> = self
-            .conn
-            .prepare(
+        let related_conflicts: Vec<String> = {
+            let conn = self.conn();
+            let mut stmt = conn.prepare(
                 "SELECT conflict_id FROM conflicts
                  WHERE status = 'open' AND (memory_a = ?1 OR memory_b = ?1)",
-            )?
-            .query_map(params![rid], |row| row.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            )?;
+            let rows = stmt.query_map(params![rid], |row| row.get::<_, String>(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        }; // drop conn before resolve_conflict which re-acquires it
 
         for cid in related_conflicts {
             let _ = self.resolve_conflict(

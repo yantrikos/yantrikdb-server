@@ -4,6 +4,8 @@ mod cognition;
 mod session_temporal;
 mod sync;
 
+use std::sync::Arc;
+
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -13,26 +15,23 @@ use yantrikdb_core::YantrikDB;
 use crate::py_types::*;
 
 /// Python wrapper for the YantrikDB engine.
-#[pyclass(name = "YantrikDB", unsendable)]
+#[pyclass(name = "YantrikDB")]
 pub struct PyYantrikDB {
-    pub(crate) inner: Option<YantrikDB>,
+    pub(crate) inner: Option<Arc<YantrikDB>>,
     pub(crate) embedder: Option<PyObject>,
 }
 
 /// A thin proxy exposing execute() and commit() on the underlying connection.
 /// This is needed because Python tests access db._conn.execute(...) directly.
+/// Stores an Arc<YantrikDB> and acquires the connection lock on each call.
 #[pyclass]
 pub struct ConnectionProxy {
-    /// We store a raw pointer to the YantrikDB so we can call conn() on it.
-    /// Safety: this proxy is only valid while the PyYantrikDB is alive.
-    /// PyO3 prevents the user from dropping PyYantrikDB while ConnectionProxy exists
-    /// because ConnectionProxy holds a Py<PyYantrikDB> reference.
-    parent: Py<PyYantrikDB>,
+    db: Arc<YantrikDB>,
 }
 
 /// A cursor-like object returned by ConnectionProxy.execute().
 /// Holds the result rows so fetchall()/fetchone() can return them.
-#[pyclass(unsendable)]
+#[pyclass]
 pub struct CursorProxy {
     rows: Vec<PyObject>,
     rowcount: usize,
@@ -58,11 +57,7 @@ impl CursorProxy {
 impl ConnectionProxy {
     #[pyo3(signature = (sql, params=None))]
     fn execute(&self, py: Python<'_>, sql: &str, params: Option<&Bound<'_, PyTuple>>) -> PyResult<CursorProxy> {
-        let parent_ref = self.parent.borrow(py);
-        let db = parent_ref.inner.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err("YantrikDB is closed")
-        })?;
-        let conn = db.conn();
+        let conn = self.db.conn();
 
         let is_select = sql.trim_start().to_uppercase().starts_with("SELECT");
 
@@ -109,21 +104,13 @@ impl ConnectionProxy {
         }
     }
 
-    fn executescript(&self, py: Python<'_>, sql: &str) -> PyResult<()> {
-        let parent_ref = self.parent.borrow(py);
-        let db = parent_ref.inner.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err("YantrikDB is closed")
-        })?;
-        db.conn().execute_batch(sql)
+    fn executescript(&self, _py: Python<'_>, sql: &str) -> PyResult<()> {
+        self.db.conn().execute_batch(sql)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(())
     }
 
-    fn commit(&self, py: Python<'_>) -> PyResult<()> {
-        let parent_ref = self.parent.borrow(py);
-        let _db = parent_ref.inner.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err("YantrikDB is closed")
-        })?;
+    fn commit(&self, _py: Python<'_>) -> PyResult<()> {
         // In rusqlite auto-commit mode, commit is a no-op
         Ok(())
     }
@@ -214,7 +201,7 @@ impl PyYantrikDB {
         }
 
         Ok(Self {
-            inner: Some(inner),
+            inner: Some(Arc::new(inner)),
             embedder,
         })
     }
@@ -226,14 +213,18 @@ impl PyYantrikDB {
         Ok(db.is_encrypted())
     }
 
-    fn set_embedder(&mut self, embedder: PyObject) {
+    fn set_embedder(&mut self, embedder: PyObject) -> PyResult<()> {
         self.embedder = Some(embedder);
+        Ok(())
     }
 
     /// The _conn property — returns a ConnectionProxy for test compatibility.
     #[getter]
-    fn _conn(slf: Py<Self>, _py: Python<'_>) -> PyResult<ConnectionProxy> {
-        Ok(ConnectionProxy { parent: slf })
+    fn _conn(&self) -> PyResult<ConnectionProxy> {
+        let db = self.inner.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err("YantrikDB is closed")
+        })?;
+        Ok(ConnectionProxy { db: Arc::clone(db) })
     }
 
     /// The actor_id of this YantrikDB instance (read-only).
@@ -264,8 +255,15 @@ impl PyYantrikDB {
     }
 
     fn close(&mut self) -> PyResult<()> {
-        if let Some(db) = self.inner.take() {
-            db.close().map_err(map_err)?;
+        if let Some(arc) = self.inner.take() {
+            // If we hold the only reference, unwrap and close explicitly.
+            // Otherwise just drop our reference (closes on last drop).
+            match Arc::try_unwrap(arc) {
+                Ok(db) => db.close().map_err(map_err)?,
+                Err(_arc) => {
+                    // Other references still exist; dropping our ref is fine.
+                }
+            }
         }
         Ok(())
     }
@@ -274,7 +272,7 @@ impl PyYantrikDB {
 impl PyYantrikDB {
     /// Get a reference to the inner YantrikDB engine (for use by consolidation/trigger wrappers).
     pub fn get_inner(&self) -> PyResult<&YantrikDB> {
-        self.inner.as_ref().ok_or_else(|| {
+        self.inner.as_deref().ok_or_else(|| {
             PyRuntimeError::new_err("YantrikDB is closed")
         })
     }

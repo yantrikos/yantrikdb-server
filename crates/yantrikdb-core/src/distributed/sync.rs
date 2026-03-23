@@ -28,14 +28,14 @@ pub fn sync_bidirectional(a: &YantrikDB, b: &YantrikDB) -> Result<SyncResult> {
     let b_actor = b.actor_id().to_string();
 
     // ── Phase 1: A pulls from B ──
-    let a_watermark = get_peer_watermark(a.conn(), &b_actor)?;
+    let a_watermark = get_peer_watermark(&*a.conn(), &b_actor)?;
     let (since_hlc, since_op_id) = match &a_watermark {
         Some((hlc, op_id)) => (Some(hlc.as_slice()), Some(op_id.as_str())),
         None => (None, None),
     };
 
     let b_ops = extract_ops_since(
-        b.conn(),
+        &*b.conn(),
         since_hlc,
         since_op_id,
         Some(&a_actor), // exclude A's own ops that were previously synced to B
@@ -47,7 +47,7 @@ pub fn sync_bidirectional(a: &YantrikDB, b: &YantrikDB) -> Result<SyncResult> {
 
         // Update A's watermark for B using the last op received
         if let Some(last_op) = b_ops.last() {
-            set_peer_watermark(a.conn(), &b_actor, &last_op.hlc, &last_op.op_id)?;
+            set_peer_watermark(&*a.conn(), &b_actor, &last_op.hlc, &last_op.op_id)?;
         }
 
         stats.ops_applied
@@ -56,14 +56,14 @@ pub fn sync_bidirectional(a: &YantrikDB, b: &YantrikDB) -> Result<SyncResult> {
     };
 
     // ── Phase 2: B pulls from A ──
-    let b_watermark = get_peer_watermark(b.conn(), &a_actor)?;
+    let b_watermark = get_peer_watermark(&*b.conn(), &a_actor)?;
     let (since_hlc, since_op_id) = match &b_watermark {
         Some((hlc, op_id)) => (Some(hlc.as_slice()), Some(op_id.as_str())),
         None => (None, None),
     };
 
     let a_ops = extract_ops_since(
-        a.conn(),
+        &*a.conn(),
         since_hlc,
         since_op_id,
         Some(&b_actor), // exclude B's own ops that were previously synced to A
@@ -75,7 +75,7 @@ pub fn sync_bidirectional(a: &YantrikDB, b: &YantrikDB) -> Result<SyncResult> {
 
         // Update B's watermark for A using the last op received
         if let Some(last_op) = a_ops.last() {
-            set_peer_watermark(b.conn(), &a_actor, &last_op.hlc, &last_op.op_id)?;
+            set_peer_watermark(&*b.conn(), &a_actor, &last_op.hlc, &last_op.op_id)?;
         }
 
         stats.ops_applied

@@ -25,7 +25,7 @@ impl YantrikDB {
 
     /// Load the perspective store from the database.
     pub fn load_perspective_store(&self) -> Result<PerspectiveStore> {
-        match Self::get_meta(&self.conn, PERSPECTIVE_STORE_META_KEY)? {
+        match Self::get_meta(&self.conn(), PERSPECTIVE_STORE_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -42,7 +42,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![PERSPECTIVE_STORE_META_KEY, json],
         )?;
@@ -51,7 +51,7 @@ impl YantrikDB {
 
     /// Load the active perspective stack from the database.
     pub fn load_perspective_stack(&self) -> Result<PerspectiveStack> {
-        match Self::get_meta(&self.conn, PERSPECTIVE_STACK_META_KEY)? {
+        match Self::get_meta(&self.conn(), PERSPECTIVE_STACK_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -68,7 +68,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![PERSPECTIVE_STACK_META_KEY, json],
         )?;

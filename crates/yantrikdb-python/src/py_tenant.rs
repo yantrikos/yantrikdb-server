@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -24,7 +25,7 @@ struct TenantEntry {
 ///     mgr.register_tenant("acme", encryption_key=os.urandom(32))
 ///     db = mgr.get("acme", embedder=my_embedder)
 ///     db.record(...)
-#[pyclass(name = "TenantManager", unsendable)]
+#[pyclass(name = "TenantManager")]
 pub struct PyTenantManager {
     base_dir: PathBuf,
     default_embedding_dim: usize,
@@ -102,7 +103,7 @@ impl PyTenantManager {
         };
 
         Ok(PyYantrikDB {
-            inner: Some(inner),
+            inner: Some(Arc::new(inner)),
             embedder,
         })
     }

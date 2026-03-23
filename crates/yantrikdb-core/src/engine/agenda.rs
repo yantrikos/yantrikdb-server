@@ -20,7 +20,7 @@ impl YantrikDB {
 
     /// Load the agenda from the database (or create a new one).
     pub fn load_agenda(&self) -> Result<Agenda> {
-        match Self::get_meta(&self.conn, AGENDA_META_KEY)? {
+        match Self::get_meta(&self.conn(), AGENDA_META_KEY)? {
             Some(json) => {
                 serde_json::from_str(&json).map_err(|e| {
                     crate::error::YantrikDbError::Database(
@@ -39,7 +39,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![AGENDA_META_KEY, json],
         )?;

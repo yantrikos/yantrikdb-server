@@ -25,7 +25,7 @@ impl YantrikDB {
 
     /// Load surfacing preferences from the database.
     pub fn load_surfacing_preferences(&self) -> Result<SurfacingPreferences> {
-        match Self::get_meta(&self.conn, SURFACING_PREFS_META_KEY)? {
+        match Self::get_meta(&self.conn(), SURFACING_PREFS_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -42,7 +42,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![SURFACING_PREFS_META_KEY, json],
         )?;
@@ -51,7 +51,7 @@ impl YantrikDB {
 
     /// Load the rate limiter state.
     pub fn load_surface_rate_limiter(&self) -> Result<SurfaceRateLimiter> {
-        match Self::get_meta(&self.conn, SURFACING_RATE_META_KEY)? {
+        match Self::get_meta(&self.conn(), SURFACING_RATE_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -68,7 +68,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![SURFACING_RATE_META_KEY, json],
         )?;
@@ -77,7 +77,7 @@ impl YantrikDB {
 
     /// Load surfacing configuration.
     pub fn load_surfacing_config(&self) -> Result<SurfacingConfig> {
-        match Self::get_meta(&self.conn, SURFACING_CONFIG_META_KEY)? {
+        match Self::get_meta(&self.conn(), SURFACING_CONFIG_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -94,7 +94,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![SURFACING_CONFIG_META_KEY, json],
         )?;

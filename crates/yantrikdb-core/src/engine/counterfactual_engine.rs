@@ -22,7 +22,7 @@ impl YantrikDB {
 
     /// Load counterfactual configuration.
     pub fn load_counterfactual_config(&self) -> Result<CounterfactualConfig> {
-        match Self::get_meta(&self.conn, COUNTERFACTUAL_CONFIG_META_KEY)? {
+        match Self::get_meta(&self.conn(), COUNTERFACTUAL_CONFIG_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -39,7 +39,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![COUNTERFACTUAL_CONFIG_META_KEY, json],
         )?;
@@ -48,7 +48,7 @@ impl YantrikDB {
 
     /// Load regret history.
     pub fn load_regret_history(&self) -> Result<Vec<RegretReport>> {
-        match Self::get_meta(&self.conn, REGRET_HISTORY_META_KEY)? {
+        match Self::get_meta(&self.conn(), REGRET_HISTORY_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -65,7 +65,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![REGRET_HISTORY_META_KEY, json],
         )?;

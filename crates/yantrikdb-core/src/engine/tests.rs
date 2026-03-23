@@ -115,7 +115,7 @@ fn test_oplog_has_hlc() {
     let db = YantrikDB::new(":memory:", 8).unwrap();
     db.record("test", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
 
-    let hlc_bytes: Vec<u8> = db.conn.query_row(
+    let hlc_bytes: Vec<u8> = db.conn().query_row(
         "SELECT hlc FROM oplog ORDER BY rowid DESC LIMIT 1",
         [],
         |row| row.get(0),
@@ -132,7 +132,7 @@ fn test_oplog_has_embedding_hash() {
     db.record("test", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
 
     // The record op should have an embedding_hash
-    let hash: Vec<u8> = db.conn.query_row(
+    let hash: Vec<u8> = db.conn().query_row(
         "SELECT embedding_hash FROM oplog WHERE op_type = 'record' LIMIT 1",
         [],
         |row| row.get(0),
@@ -145,7 +145,7 @@ fn test_oplog_enriched_payload() {
     let db = YantrikDB::new(":memory:", 8).unwrap();
     db.record("test payload", "semantic", 0.7, 0.3, 1000.0, &serde_json::json!({"key": "val"}), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
 
-    let payload_str: String = db.conn.query_row(
+    let payload_str: String = db.conn().query_row(
         "SELECT payload FROM oplog WHERE op_type = 'record' LIMIT 1",
         [],
         |row| row.get(0),
@@ -420,32 +420,32 @@ fn test_entity_type_stored_on_relate() {
     // Tech blocklist still works
     db.relate("FAISS", "recommendation engine", "used_in", 1.0).unwrap();
 
-    let etype: String = db.conn.query_row(
+    let etype: String = db.conn().query_row(
         "SELECT entity_type FROM entities WHERE name = 'Sarah'", [], |r| r.get(0),
     ).unwrap();
     assert_eq!(etype, "person");
 
-    let etype: String = db.conn.query_row(
+    let etype: String = db.conn().query_row(
         "SELECT entity_type FROM entities WHERE name = 'Mike'", [], |r| r.get(0),
     ).unwrap();
     assert_eq!(etype, "person");
 
-    let etype: String = db.conn.query_row(
+    let etype: String = db.conn().query_row(
         "SELECT entity_type FROM entities WHERE name = 'Flipkart'", [], |r| r.get(0),
     ).unwrap();
     assert_eq!(etype, "organization");
 
-    let etype: String = db.conn.query_row(
+    let etype: String = db.conn().query_row(
         "SELECT entity_type FROM entities WHERE name = 'Bangalore'", [], |r| r.get(0),
     ).unwrap();
     assert_eq!(etype, "place");
 
-    let etype: String = db.conn.query_row(
+    let etype: String = db.conn().query_row(
         "SELECT entity_type FROM entities WHERE name = 'FAISS'", [], |r| r.get(0),
     ).unwrap();
     assert_eq!(etype, "tech");
 
-    let etype: String = db.conn.query_row(
+    let etype: String = db.conn().query_row(
         "SELECT entity_type FROM entities WHERE name = 'recommendation engine'", [], |r| r.get(0),
     ).unwrap();
     assert_eq!(etype, "unknown");
@@ -552,7 +552,7 @@ fn test_backfill_uses_word_boundaries() {
     let _count = db.backfill_memory_entities().unwrap();
 
     // Check: r1 should be linked to "data", r2 should NOT
-    let linked_to_data: Vec<String> = db.conn.prepare(
+    let linked_to_data: Vec<String> = db.conn().prepare(
         "SELECT memory_rid FROM memory_entities WHERE entity_name = 'data'"
     ).unwrap().query_map([], |row| row.get(0)).unwrap()
         .collect::<std::result::Result<Vec<_>, _>>().unwrap();
@@ -593,7 +593,7 @@ fn test_link_memory_entity_idempotent() {
     db.link_memory_entity(&rid, "Alice").unwrap();
     db.link_memory_entity(&rid, "Alice").unwrap();
 
-    let count: i64 = db.conn.query_row(
+    let count: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM memory_entities WHERE memory_rid = ?1 AND entity_name = 'Alice'",
         params![rid], |r| r.get(0),
     ).unwrap();

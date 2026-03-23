@@ -97,7 +97,7 @@ impl YantrikDB {
         outcome: f64,   // 1.0 = fully successful, 0.0 = not useful
     ) -> Result<bool> {
         let ts = now();
-        let conn = &self.conn;
+        let conn = self.conn();
 
         // Get current importance
         let current_importance: f64 = match conn.query_row(
@@ -124,9 +124,10 @@ impl YantrikDB {
              WHERE rid = ?4",
             params![new_importance, new_certainty, ts, rid],
         )?;
+        drop(conn);
 
         // Update scoring cache
-        if let Some(cached) = self.scoring_cache.borrow_mut().get_mut(rid) {
+        if let Some(cached) = self.scoring_cache.write().unwrap().get_mut(rid) {
             cached.importance = new_importance;
             cached.certainty = new_certainty;
             cached.last_access = ts;
@@ -164,7 +165,8 @@ impl YantrikDB {
              GROUP BY domain ORDER BY COUNT(*) DESC"
         };
 
-        let mut stmt = self.conn.prepare(sql)?;
+        let conn = self.conn();
+        let mut stmt = conn.prepare(sql)?;
         let rows = if let Some(ns) = namespace {
             stmt.query_map(params![ns], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, f64>(2)?))

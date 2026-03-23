@@ -22,7 +22,8 @@ impl YantrikDB {
         let ts = now();
         let emb_blob = query_embedding.map(|e| crate::serde_helpers::serialize_f32(e));
 
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO recall_feedback (query_text, query_embedding, rid, feedback, \
              score_at_retrieval, rank_at_retrieval, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -38,7 +39,7 @@ impl YantrikDB {
         )?;
 
         // Update feedback count in learned_weights
-        self.conn.execute(
+        conn.execute(
             "UPDATE learned_weights SET feedback_count = feedback_count + 1 WHERE id = 1",
             [],
         )?;
@@ -48,7 +49,8 @@ impl YantrikDB {
 
     /// Load the current learned weights from the database.
     pub fn load_learned_weights(&self) -> Result<LearnedWeights> {
-        let result = self.conn.query_row(
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
             "SELECT w_sim, w_decay, w_recency, gate_tau, alpha_imp, keyword_boost, generation \
              FROM learned_weights WHERE id = 1",
             [],
@@ -74,7 +76,8 @@ impl YantrikDB {
 
     /// Get the current feedback count.
     pub fn feedback_count(&self) -> Result<i64> {
-        let count: i64 = self.conn.query_row(
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
             "SELECT COALESCE(feedback_count, 0) FROM learned_weights WHERE id = 1",
             [],
             |row| row.get(0),

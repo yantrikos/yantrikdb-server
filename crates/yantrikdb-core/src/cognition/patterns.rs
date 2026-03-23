@@ -482,7 +482,7 @@ fn mine_cross_domain_patterns(db: &YantrikDB, config: &PatternConfig) -> Result<
     candidates.retain(|(rid, _, _)| seen.insert(rid.clone()));
 
     // For each candidate, query HNSW for K=10 global neighbors
-    let vi = db.vec_index.borrow();
+    let vi = db.vec_index.read().unwrap();
     let mut patterns = Vec::new();
     let mut pair_counts: std::collections::HashMap<(String, String), usize> =
         std::collections::HashMap::new();
@@ -769,6 +769,9 @@ fn upsert_pattern(db: &YantrikDB, raw: &RawPattern, ts: f64) -> Result<bool> {
                 params![pattern_id, entity_name],
             )?;
         }
+
+        // Drop conn before log_op (which also acquires the conn lock)
+        drop(conn);
 
         // Log to oplog for replication
         db.log_op(

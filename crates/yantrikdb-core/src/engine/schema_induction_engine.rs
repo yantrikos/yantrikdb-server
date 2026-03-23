@@ -18,7 +18,7 @@ impl YantrikDB {
 
     /// Load the induced schema store.
     pub fn load_induced_schema_store(&self) -> Result<SchemaStore> {
-        match Self::get_meta(&self.conn, SCHEMA_STORE_META_KEY)? {
+        match Self::get_meta(&self.conn(), SCHEMA_STORE_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -35,7 +35,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![SCHEMA_STORE_META_KEY, json],
         )?;

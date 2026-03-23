@@ -20,7 +20,7 @@ impl YantrikDB {
 
     /// Load the autonomous belief store from the database.
     pub fn load_belief_store(&self) -> Result<BeliefStore> {
-        match Self::get_meta(&self.conn, BELIEF_STORE_META_KEY)? {
+        match Self::get_meta(&self.conn(), BELIEF_STORE_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -37,7 +37,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![BELIEF_STORE_META_KEY, json],
         )?;
@@ -46,7 +46,7 @@ impl YantrikDB {
 
     /// Load the flywheel configuration.
     pub fn load_flywheel_config(&self) -> Result<FlywheelConfig> {
-        match Self::get_meta(&self.conn, FLYWHEEL_CONFIG_META_KEY)? {
+        match Self::get_meta(&self.conn(), FLYWHEEL_CONFIG_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -63,7 +63,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![FLYWHEEL_CONFIG_META_KEY, json],
         )?;

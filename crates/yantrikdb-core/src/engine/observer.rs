@@ -25,7 +25,7 @@ impl YantrikDB {
 
     /// Load the observer state from the database.
     pub fn load_observer_state(&self) -> Result<ObserverState> {
-        match Self::get_meta(&self.conn, OBSERVER_STATE_META_KEY)? {
+        match Self::get_meta(&self.conn(), OBSERVER_STATE_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -42,7 +42,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![OBSERVER_STATE_META_KEY, json],
         )?;
@@ -51,7 +51,7 @@ impl YantrikDB {
 
     /// Load the event buffer from the database.
     pub fn load_event_buffer(&self) -> Result<EventBuffer> {
-        match Self::get_meta(&self.conn, OBSERVER_BUFFER_META_KEY)? {
+        match Self::get_meta(&self.conn(), OBSERVER_BUFFER_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -68,7 +68,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![OBSERVER_BUFFER_META_KEY, json],
         )?;
@@ -77,7 +77,7 @@ impl YantrikDB {
 
     /// Load the observer configuration.
     pub fn load_observer_config(&self) -> Result<ObserverConfig> {
-        match Self::get_meta(&self.conn, OBSERVER_CONFIG_META_KEY)? {
+        match Self::get_meta(&self.conn(), OBSERVER_CONFIG_META_KEY)? {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -94,7 +94,7 @@ impl YantrikDB {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
             )
         })?;
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
             rusqlite::params![OBSERVER_CONFIG_META_KEY, json],
         )?;

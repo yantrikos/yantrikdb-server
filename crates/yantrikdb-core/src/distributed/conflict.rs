@@ -349,8 +349,7 @@ pub fn create_conflict(
     let hlc_bytes = hlc_ts.to_bytes().to_vec();
     let actor_id = db.actor_id().to_string();
 
-    let conn = db.conn();
-    conn.execute(
+    db.conn().execute(
         "INSERT OR IGNORE INTO conflicts
          (conflict_id, conflict_type, priority, status, memory_a, memory_b,
           entity, rel_type, detected_at, detected_by, detection_reason,
@@ -420,7 +419,6 @@ pub fn detect_edge_conflicts(
     rel_type: &str,
     incoming_target_rid: Option<&str>,
 ) -> Result<Vec<Conflict>> {
-    let conn = db.conn();
     let mut conflicts = Vec::new();
 
     // Only check identity and preference rel_types
@@ -430,26 +428,32 @@ pub fn detect_edge_conflicts(
         return Ok(conflicts);
     }
 
-    // Find existing edges with same (src, rel_type) but different dst
-    let mut stmt = conn.prepare(
-        "SELECT edge_id, dst FROM edges
-         WHERE src = ?1 AND rel_type = ?2 AND dst != ?3 AND tombstoned = 0",
-    )?;
+    // Collect data while holding the conn lock, then release before calling
+    // conflict_exists/create_conflict (which also acquire the lock).
+    let edge_data: Vec<(String, Option<String>, Option<String>)> = {
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
+            "SELECT edge_id, dst FROM edges
+             WHERE src = ?1 AND rel_type = ?2 AND dst != ?3 AND tombstoned = 0",
+        )?;
 
-    let existing: Vec<(String, String)> = stmt
-        .query_map(params![src, rel_type, dst], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        let existing: Vec<(String, String)> = stmt
+            .query_map(params![src, rel_type, dst], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    for (_edge_id, existing_dst) in existing {
+        existing.into_iter().map(|(_edge_id, existing_dst)| {
+            let memory_a = find_memory_for_edge(&conn, src, &existing_dst, rel_type).ok().flatten();
+            let memory_b = incoming_target_rid
+                .map(String::from)
+                .or_else(|| find_memory_for_edge(&conn, src, dst, rel_type).ok().flatten());
+            (existing_dst, memory_a, memory_b)
+        }).collect()
+    }; // conn lock released here
+
+    for (existing_dst, memory_a, memory_b) in edge_data {
         let conflict_type = classify_conflict(rel_type);
-
-        // Find memory rids for the edges via oplog
-        let memory_a = find_memory_for_edge(conn, src, &existing_dst, rel_type)?;
-        let memory_b = incoming_target_rid
-            .map(String::from)
-            .or_else(|| find_memory_for_edge(conn, src, dst, rel_type).ok().flatten());
 
         if let (Some(ref mem_a), Some(ref mem_b)) = (&memory_a, &memory_b) {
             if !conflict_exists(db, mem_a, mem_b)? {
@@ -476,78 +480,60 @@ pub fn detect_edge_conflicts(
 /// Full-database conflict scan. Finds all edge-based contradictions
 /// and concurrent consolidation conflicts.
 pub fn scan_conflicts(db: &YantrikDB) -> Result<Vec<Conflict>> {
-    let conn = db.conn();
     let mut conflicts = Vec::new();
 
-    // Scan for contradicting edges: same (src, rel_type) with different dst values
-    let mut stmt = conn.prepare(
-        "SELECT src, rel_type, GROUP_CONCAT(DISTINCT dst) as dsts, COUNT(DISTINCT dst) as cnt
-         FROM edges
-         WHERE tombstoned = 0
-         GROUP BY src, rel_type
-         HAVING cnt > 1",
-    )?;
+    // Phase 1: Collect edge-based conflict candidates while holding conn lock.
+    // Each candidate: (src, rel_type, dst_i, dst_j, mem_a, mem_b)
+    let edge_candidates: Vec<(String, String, String, String, Option<String>, Option<String>)>;
+    let entity_groups: std::collections::HashMap<String, Vec<(String, String, Vec<u8>)>>;
+    let cm_rows: Vec<(String, String, String)>;
 
-    let rows: Vec<(String, String, String)> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    {
+        let conn = db.conn();
 
-    for (src, rel_type, dsts_csv) in rows {
-        let is_identity = IDENTITY_REL_TYPES.contains(&rel_type.as_str());
-        let is_preference = PREFERENCE_REL_TYPES.contains(&rel_type.as_str());
-        if !is_identity && !is_preference {
-            continue;
-        }
+        // Scan for contradicting edges: same (src, rel_type) with different dst values
+        let mut stmt = conn.prepare(
+            "SELECT src, rel_type, GROUP_CONCAT(DISTINCT dst) as dsts, COUNT(DISTINCT dst) as cnt
+             FROM edges
+             WHERE tombstoned = 0
+             GROUP BY src, rel_type
+             HAVING cnt > 1",
+        )?;
 
-        let dsts: Vec<&str> = dsts_csv.split(',').collect();
-        if dsts.len() < 2 {
-            continue;
-        }
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        // Create pairwise conflicts
-        for i in 0..dsts.len() {
-            for j in (i + 1)..dsts.len() {
-                let mem_a = find_memory_for_edge(conn, &src, dsts[i].trim(), &rel_type)?;
-                let mem_b = find_memory_for_edge(conn, &src, dsts[j].trim(), &rel_type)?;
+        let mut candidates = Vec::new();
+        for (src, rel_type, dsts_csv) in rows {
+            let is_identity = IDENTITY_REL_TYPES.contains(&rel_type.as_str());
+            let is_preference = PREFERENCE_REL_TYPES.contains(&rel_type.as_str());
+            if !is_identity && !is_preference {
+                continue;
+            }
 
-                if let (Some(ref a), Some(ref b)) = (&mem_a, &mem_b) {
-                    if !conflict_exists(db, a, b)? {
-                        let conflict_type = classify_conflict(&rel_type);
-                        let conflict = create_conflict(
-                            db,
-                            &conflict_type,
-                            a,
-                            b,
-                            Some(&src),
-                            Some(&rel_type),
-                            &format!(
-                                "Entity '{}' has conflicting {} values: '{}' vs '{}'",
-                                src,
-                                rel_type,
-                                dsts[i].trim(),
-                                dsts[j].trim()
-                            ),
-                        )?;
-                        conflicts.push(conflict);
-                    }
+            let dsts: Vec<String> = dsts_csv.split(',').map(|s| s.trim().to_string()).collect();
+            if dsts.len() < 2 {
+                continue;
+            }
+
+            for i in 0..dsts.len() {
+                for j in (i + 1)..dsts.len() {
+                    let mem_a = find_memory_for_edge(&conn, &src, &dsts[i], &rel_type).ok().flatten();
+                    let mem_b = find_memory_for_edge(&conn, &src, &dsts[j], &rel_type).ok().flatten();
+                    candidates.push((src.clone(), rel_type.clone(), dsts[i].clone(), dsts[j].clone(), mem_a, mem_b));
                 }
             }
         }
-    }
+        edge_candidates = candidates;
 
-    // Scan for entity-based semantic conflicts:
-    // Memories sharing entities that are semantically similar but textually different.
-    // This catches contradictions like "works at Google" vs "works at Meta" even
-    // without explicit relate() calls, as long as entities exist and memory_entities
-    // are populated (auto-linked on record).
-    {
-        // Group active memories by shared entities
+        // Scan for entity-based semantic conflicts
         let mut entity_mem_stmt = conn.prepare(
             "SELECT me.entity_name, m.rid, m.text, m.embedding
              FROM memory_entities me
@@ -557,7 +543,7 @@ pub fn scan_conflicts(db: &YantrikDB) -> Result<Vec<Conflict>> {
              ORDER BY me.entity_name",
         )?;
 
-        let rows: Vec<(String, String, String, Vec<u8>)> = entity_mem_stmt
+        let em_rows: Vec<(String, String, String, Vec<u8>)> = entity_mem_stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -568,18 +554,61 @@ pub fn scan_conflicts(db: &YantrikDB) -> Result<Vec<Conflict>> {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        // Group by entity
-        let mut entity_groups: std::collections::HashMap<String, Vec<(String, String, Vec<u8>)>> =
+        let mut groups: std::collections::HashMap<String, Vec<(String, String, Vec<u8>)>> =
             std::collections::HashMap::new();
-        for (entity, rid, text, emb) in rows {
+        for (entity, rid, text, emb) in em_rows {
             let text = db.decrypt_text(&text).unwrap_or(text);
             let emb = db.decrypt_embedding(&emb).unwrap_or(emb);
-            entity_groups
-                .entry(entity)
-                .or_default()
-                .push((rid, text, emb));
+            groups.entry(entity).or_default().push((rid, text, emb));
         }
+        entity_groups = groups;
 
+        // Scan for concurrent consolidation conflicts
+        let mut cm_stmt = conn.prepare(
+            "SELECT cm1.consolidation_rid, cm2.consolidation_rid, cm1.source_rid
+             FROM consolidation_members cm1
+             JOIN consolidation_members cm2
+               ON cm1.source_rid = cm2.source_rid
+              AND cm1.consolidation_rid < cm2.consolidation_rid",
+        )?;
+
+        cm_rows = cm_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    } // conn lock released here
+
+    // Phase 2: Create conflicts (these functions acquire conn lock internally).
+
+    // Edge-based conflicts
+    for (src, rel_type, dst_i, dst_j, mem_a, mem_b) in &edge_candidates {
+        if let (Some(a), Some(b)) = (mem_a, mem_b) {
+            if !conflict_exists(db, a, b)? {
+                let conflict_type = classify_conflict(rel_type);
+                let conflict = create_conflict(
+                    db,
+                    &conflict_type,
+                    a,
+                    b,
+                    Some(src),
+                    Some(rel_type),
+                    &format!(
+                        "Entity '{}' has conflicting {} values: '{}' vs '{}'",
+                        src, rel_type, dst_i, dst_j
+                    ),
+                )?;
+                conflicts.push(conflict);
+            }
+        }
+    }
+
+    // Entity-based semantic conflicts
+    {
         let mut seen_pairs: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
 
         for (entity, memories) in &entity_groups {
@@ -624,7 +653,7 @@ pub fn scan_conflicts(db: &YantrikDB) -> Result<Vec<Conflict>> {
                                 // Run entity substitution classifier to determine
                                 // conflict type and generate a specific reason
                                 let (conflict_type, substitution_desc) =
-                                    classify_entity_substitution(conn, text_a, text_b);
+                                    classify_entity_substitution(&*db.conn(), text_a, text_b);
 
                                 let reason = match substitution_desc {
                                     Some(ref desc) => format!(
@@ -657,25 +686,7 @@ pub fn scan_conflicts(db: &YantrikDB) -> Result<Vec<Conflict>> {
         }
     }
 
-    // Scan for concurrent consolidation conflicts
-    let mut cm_stmt = conn.prepare(
-        "SELECT cm1.consolidation_rid, cm2.consolidation_rid, cm1.source_rid
-         FROM consolidation_members cm1
-         JOIN consolidation_members cm2
-           ON cm1.source_rid = cm2.source_rid
-          AND cm1.consolidation_rid < cm2.consolidation_rid",
-    )?;
-
-    let cm_rows: Vec<(String, String, String)> = cm_stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
+    // Consolidation conflicts
     let mut seen_pairs = std::collections::HashSet::new();
     for (rid_a, rid_b, shared_source) in cm_rows {
         let pair = if rid_a < rid_b {

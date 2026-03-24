@@ -33,8 +33,8 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             manylinux: auto
-          # macOS Intel
-          - os: macos-13
+          # macOS Intel (cross-compile on ARM runner)
+          - os: macos-14
             target: x86_64-apple-darwin
             manylinux: auto
     steps:
@@ -55,7 +55,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          name: wheels-${{ matrix.target }}
           path: dist
 
   build-sdist:
@@ -109,4 +109,5 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish to crates.io
+        continue-on-error: true
         run: cargo publish -p yantrikdb --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

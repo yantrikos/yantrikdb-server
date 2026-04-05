@@ -21,7 +21,10 @@ use crate::server::AppState;
 use crate::tenant_pool::TenantPool;
 
 #[derive(Parser)]
-#[command(name = "yantrikdb", about = "YantrikDB — cognitive memory database server")]
+#[command(
+    name = "yantrikdb",
+    about = "YantrikDB — cognitive memory database server"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -113,16 +116,27 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { config: config_path, wire_port, http_port, data_dir } => {
+        Commands::Serve {
+            config: config_path,
+            wire_port,
+            http_port,
+            data_dir,
+        } => {
             let mut cfg = match config_path {
                 Some(ref path) => ServerConfig::load(path)?,
                 None => ServerConfig::default(),
             };
 
             // CLI overrides
-            if let Some(port) = wire_port { cfg.server.wire_port = port; }
-            if let Some(port) = http_port { cfg.server.http_port = port; }
-            if let Some(dir) = data_dir { cfg.server.data_dir = dir; }
+            if let Some(port) = wire_port {
+                cfg.server.wire_port = port;
+            }
+            if let Some(port) = http_port {
+                cfg.server.http_port = port;
+            }
+            if let Some(dir) = data_dir {
+                cfg.server.data_dir = dir;
+            }
 
             run_server(cfg).await
         }
@@ -162,7 +176,8 @@ async fn main() -> anyhow::Result<()> {
 
             match action {
                 TokenAction::Create { db, label } => {
-                    let db_record = control.get_database(&db)?
+                    let db_record = control
+                        .get_database(&db)?
                         .ok_or_else(|| anyhow::anyhow!("database '{}' not found", db))?;
 
                     let token = auth::generate_token();
@@ -170,7 +185,10 @@ async fn main() -> anyhow::Result<()> {
                     control.create_token(&hash, db_record.id, &label)?;
 
                     println!("{}", token);
-                    eprintln!("token created for database '{}' — save it now, it won't be shown again", db);
+                    eprintln!(
+                        "token created for database '{}' — save it now, it won't be shown again",
+                        db
+                    );
                 }
                 TokenAction::Revoke { token } => {
                     let hash = auth::hash_token(&token);
@@ -187,24 +205,21 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Export { name, data_dir } => {
             let control = ControlDb::open(&data_dir.join("control.db"))?;
-            let db_record = control.get_database(&name)?
+            let db_record = control
+                .get_database(&name)?
                 .ok_or_else(|| anyhow::anyhow!("database '{}' not found", name))?;
 
             let db_dir = data_dir.join(&db_record.path);
             let db_path = db_dir.join("yantrik.db");
-            let engine = yantrikdb::YantrikDB::new(
-                db_path.to_str().unwrap_or("yantrik.db"),
-                384,
-            )?;
+            let engine = yantrikdb::YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), 384)?;
 
             // Export memories in pages
             let page_size = 1000;
             let mut offset = 0;
             let mut total = 0;
             loop {
-                let (memories, count) = engine.list_memories(
-                    page_size, offset, None, None, None, "created_at",
-                )?;
+                let (memories, count) =
+                    engine.list_memories(page_size, offset, None, None, None, "created_at")?;
                 if memories.is_empty() {
                     break;
                 }
@@ -256,7 +271,10 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            eprintln!("exported {} memories, {} edges from '{}'", total, edge_count, name);
+            eprintln!(
+                "exported {} memories, {} edges from '{}'",
+                total, edge_count, name
+            );
             Ok(())
         }
 
@@ -272,16 +290,15 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("created database '{}'", name);
             }
 
-            let db_record = control.get_database(&name)?
+            let db_record = control
+                .get_database(&name)?
                 .ok_or_else(|| anyhow::anyhow!("database '{}' not found", name))?;
 
             let db_dir = data_dir.join(&db_record.path);
             std::fs::create_dir_all(&db_dir)?;
             let db_path = db_dir.join("yantrik.db");
-            let mut engine = yantrikdb::YantrikDB::new(
-                db_path.to_str().unwrap_or("yantrik.db"),
-                384,
-            )?;
+            let mut engine =
+                yantrikdb::YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), 384)?;
 
             // Set up embedder for re-embedding
             let embedder = embedder::FastEmbedder::new()?;
@@ -346,8 +363,10 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            eprintln!("imported {} memories, {} edges into '{}' ({} errors)",
-                mem_count, edge_count, name, errors);
+            eprintln!(
+                "imported {} memories, {} edges into '{}' ({} errors)",
+                mem_count, edge_count, name, errors
+            );
             Ok(())
         }
     }
@@ -365,9 +384,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
 
     // Initialize embedder based on config
     let embedder = match cfg.embedding.strategy {
-        config::EmbeddingStrategy::Builtin => {
-            Some(embedder::FastEmbedder::new()?)
-        }
+        config::EmbeddingStrategy::Builtin => Some(embedder::FastEmbedder::new()?),
         config::EmbeddingStrategy::ClientOnly => {
             tracing::info!("embedding strategy: client_only (no server-side embeddings)");
             None
@@ -378,7 +395,11 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     let pool = TenantPool::new(&cfg, embedder);
     let workers = background::WorkerRegistry::new(&cfg.background);
 
-    let state = Arc::new(AppState { control: Mutex::new(control), pool, workers });
+    let state = Arc::new(AppState {
+        control: Mutex::new(control),
+        pool,
+        workers,
+    });
 
     // Build TLS acceptor if configured
     let tls_acceptor = if cfg.tls.is_enabled() {

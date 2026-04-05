@@ -53,7 +53,7 @@ impl ControlDb {
             );
 
             CREATE INDEX IF NOT EXISTS idx_tokens_db ON tokens(database_id);
-            "
+            ",
         )?;
         Ok(())
     }
@@ -69,9 +69,9 @@ impl ControlDb {
 
     /// List all databases.
     pub fn list_databases(&self) -> anyhow::Result<Vec<DatabaseRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, created_at FROM databases ORDER BY id"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, path, created_at FROM databases ORDER BY id")?;
         let rows = stmt.query_map([], |row| {
             Ok(DatabaseRecord {
                 id: row.get(0)?,
@@ -85,9 +85,9 @@ impl ControlDb {
 
     /// Get a database by name.
     pub fn get_database(&self, name: &str) -> anyhow::Result<Option<DatabaseRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, created_at FROM databases WHERE name = ?1"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, path, created_at FROM databases WHERE name = ?1")?;
         let mut rows = stmt.query_map(params![name], |row| {
             Ok(DatabaseRecord {
                 id: row.get(0)?,
@@ -101,9 +101,9 @@ impl ControlDb {
 
     /// Get a database by ID.
     pub fn get_database_by_id(&self, id: i64) -> anyhow::Result<Option<DatabaseRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, created_at FROM databases WHERE id = ?1"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, path, created_at FROM databases WHERE id = ?1")?;
         let mut rows = stmt.query_map(params![id], |row| {
             Ok(DatabaseRecord {
                 id: row.get(0)?,
@@ -126,9 +126,9 @@ impl ControlDb {
 
     /// Validate a token hash. Returns the database ID if valid.
     pub fn validate_token(&self, hash: &str) -> anyhow::Result<Option<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT database_id FROM tokens WHERE hash = ?1 AND revoked_at IS NULL"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT database_id FROM tokens WHERE hash = ?1 AND revoked_at IS NULL")?;
         let mut rows = stmt.query_map(params![hash], |row| row.get::<_, i64>(0))?;
         Ok(rows.next().transpose()?)
     }
@@ -154,11 +154,9 @@ impl ControlDb {
 
     /// Count total databases.
     pub fn database_count(&self) -> anyhow::Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM databases",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM databases", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 }

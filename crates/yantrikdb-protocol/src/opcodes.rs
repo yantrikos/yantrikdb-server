@@ -134,25 +134,48 @@ mod tests {
     #[test]
     fn roundtrip_all_opcodes() {
         let all = [
-            OpCode::Auth, OpCode::AuthOk, OpCode::AuthFail,
-            OpCode::SelectDb, OpCode::CreateDb, OpCode::DbOk,
-            OpCode::ListDb, OpCode::ListDbResult,
-            OpCode::Remember, OpCode::RememberOk, OpCode::RememberBatch,
-            OpCode::Recall, OpCode::RecallResult, OpCode::RecallEnd,
-            OpCode::Relate, OpCode::RelateOk, OpCode::Edges, OpCode::EdgesResult,
-            OpCode::Forget, OpCode::ForgetOk,
-            OpCode::SessionStart, OpCode::SessionEnd, OpCode::SessionOk,
-            OpCode::Think, OpCode::ThinkResult,
-            OpCode::Subscribe, OpCode::Event, OpCode::Unsubscribe,
-            OpCode::Conflicts, OpCode::Resolve, OpCode::ConflictResult,
-            OpCode::Personality, OpCode::Stats, OpCode::InfoResult,
-            OpCode::Error, OpCode::Ping, OpCode::Pong,
+            OpCode::Auth,
+            OpCode::AuthOk,
+            OpCode::AuthFail,
+            OpCode::SelectDb,
+            OpCode::CreateDb,
+            OpCode::DbOk,
+            OpCode::ListDb,
+            OpCode::ListDbResult,
+            OpCode::Remember,
+            OpCode::RememberOk,
+            OpCode::RememberBatch,
+            OpCode::Recall,
+            OpCode::RecallResult,
+            OpCode::RecallEnd,
+            OpCode::Relate,
+            OpCode::RelateOk,
+            OpCode::Edges,
+            OpCode::EdgesResult,
+            OpCode::Forget,
+            OpCode::ForgetOk,
+            OpCode::SessionStart,
+            OpCode::SessionEnd,
+            OpCode::SessionOk,
+            OpCode::Think,
+            OpCode::ThinkResult,
+            OpCode::Subscribe,
+            OpCode::Event,
+            OpCode::Unsubscribe,
+            OpCode::Conflicts,
+            OpCode::Resolve,
+            OpCode::ConflictResult,
+            OpCode::Personality,
+            OpCode::Stats,
+            OpCode::InfoResult,
+            OpCode::Error,
+            OpCode::Ping,
+            OpCode::Pong,
         ];
         for op in all {
             let byte = op as u8;
-            let decoded = OpCode::from_u8(byte).unwrap_or_else(|| {
-                panic!("failed to decode opcode 0x{byte:02X}")
-            });
+            let decoded = OpCode::from_u8(byte)
+                .unwrap_or_else(|| panic!("failed to decode opcode 0x{byte:02X}"));
             assert_eq!(decoded, op);
         }
     }

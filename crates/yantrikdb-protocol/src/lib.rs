@@ -102,7 +102,8 @@ mod tests {
 
     #[test]
     fn make_error_frame() {
-        let frame = make_error(0, messages::error_codes::AUTH_REQUIRED, "not authenticated").unwrap();
+        let frame =
+            make_error(0, messages::error_codes::AUTH_REQUIRED, "not authenticated").unwrap();
         assert_eq!(frame.opcode, OpCode::Error);
 
         let err: messages::ErrorResponse = unpack(&frame.payload).unwrap();

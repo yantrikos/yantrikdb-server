@@ -1,7 +1,7 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-use crate::opcodes::OpCode;
 use crate::error::ProtocolError;
+use crate::opcodes::OpCode;
 
 /// Protocol version. Bit 7 = JSON payload mode (for debugging).
 pub const PROTOCOL_VERSION: u8 = 0x01;
@@ -104,8 +104,8 @@ impl Frame {
         let stream_id = frame_buf.get_u32();
         let payload = frame_buf.freeze();
 
-        let opcode = OpCode::from_u8(opcode_byte)
-            .ok_or(ProtocolError::UnknownOpCode(opcode_byte))?;
+        let opcode =
+            OpCode::from_u8(opcode_byte).ok_or(ProtocolError::UnknownOpCode(opcode_byte))?;
 
         Ok(Some(Frame {
             version,
@@ -122,11 +122,7 @@ mod tests {
 
     #[test]
     fn encode_decode_roundtrip() {
-        let frame = Frame::new(
-            OpCode::Remember,
-            42,
-            Bytes::from_static(b"hello world"),
-        );
+        let frame = Frame::new(OpCode::Remember, 42, Bytes::from_static(b"hello world"));
 
         let mut buf = BytesMut::new();
         frame.encode(&mut buf);

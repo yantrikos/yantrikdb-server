@@ -199,9 +199,9 @@ async fn run_test_server(
     data_dir: PathBuf,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    use axum::Router;
-    use axum::routing::{get, post, delete};
     use axum::extract::State;
+    use axum::routing::{delete, get, post};
+    use axum::Router;
 
     // Reconstruct AppState manually for the test
     // We need to replicate the server's internals here since it's a binary crate
@@ -231,7 +231,9 @@ async fn run_test_server(
         .with_state(state);
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(async { let _ = shutdown_rx.await; })
+        .with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        })
         .await
         .unwrap();
 }
@@ -350,16 +352,26 @@ async fn handle_remember(
     let rid = db
         .record(
             body["text"].as_str().unwrap_or(""),
-            body.get("memory_type").and_then(|v| v.as_str()).unwrap_or("semantic"),
-            body.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.5),
+            body.get("memory_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("semantic"),
+            body.get("importance")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.5),
             body.get("valence").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            body.get("half_life").and_then(|v| v.as_f64()).unwrap_or(168.0),
+            body.get("half_life")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(168.0),
             &body.get("metadata").cloned().unwrap_or(json!({})),
             &embedding,
             body.get("namespace").and_then(|v| v.as_str()).unwrap_or(""),
-            body.get("certainty").and_then(|v| v.as_f64()).unwrap_or(1.0),
+            body.get("certainty")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0),
             body.get("domain").and_then(|v| v.as_str()).unwrap_or(""),
-            body.get("source").and_then(|v| v.as_str()).unwrap_or("user"),
+            body.get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("user"),
             body.get("emotional_state").and_then(|v| v.as_str()),
         )
         .map_err(|e| {
@@ -546,7 +558,9 @@ async fn handle_session_start(
     let db = engine.lock().unwrap();
     let session_id = db
         .session_start(
-            body.get("namespace").and_then(|v| v.as_str()).unwrap_or("default"),
+            body.get("namespace")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default"),
             body.get("client_id").and_then(|v| v.as_str()).unwrap_or(""),
             &body.get("metadata").cloned().unwrap_or(json!({})),
         )
@@ -639,10 +653,7 @@ async fn test_remember_and_recall() {
     let results = resp["results"].as_array().unwrap();
     assert!(!results.is_empty());
     // First result should be Alice (same embedding = highest similarity)
-    assert!(results[0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("Alice"));
+    assert!(results[0]["text"].as_str().unwrap().contains("Alice"));
 }
 
 #[tokio::test]

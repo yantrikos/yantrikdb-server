@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures::SinkExt;
+use futures::StreamExt;
 use tokio::net::TcpListener;
 use tokio_util::codec::Framed;
-use futures::StreamExt;
 
-use yantrikdb_protocol::*;
 use yantrikdb_protocol::messages::*;
+use yantrikdb_protocol::*;
 
 use crate::auth;
 use crate::background::WorkerRegistry;
@@ -78,10 +78,7 @@ async fn handle_connection(
     handle_connection_inner(stream, state).await
 }
 
-async fn handle_connection_inner<S>(
-    stream: S,
-    state: Arc<AppState>,
-) -> anyhow::Result<()>
+async fn handle_connection_inner<S>(stream: S, state: Arc<AppState>) -> anyhow::Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -97,12 +94,18 @@ where
     };
 
     // Get the engine for this database
-    let db_record = state.control.lock().unwrap().get_database_by_id(db_id)?
+    let db_record = state
+        .control
+        .lock()
+        .unwrap()
+        .get_database_by_id(db_id)?
         .ok_or_else(|| anyhow::anyhow!("database not found"))?;
     let engine = state.pool.get_engine(&db_record)?;
 
     // Start background workers if not already running
-    state.workers.start_for_database(db_id, db_record.name.clone(), Arc::clone(&engine));
+    state
+        .workers
+        .start_for_database(db_id, db_record.name.clone(), Arc::clone(&engine));
 
     // Phase 2: Command loop
     while let Some(result) = framed.next().await {
@@ -118,9 +121,7 @@ where
 
         match frame_to_command(&frame) {
             Ok(cmd) => {
-                let response_frames = execute_and_respond(
-                    cmd, &engine, &state.control, stream_id,
-                );
+                let response_frames = execute_and_respond(cmd, &engine, &state.control, stream_id);
                 for f in response_frames {
                     framed.send(f).await?;
                 }
@@ -143,11 +144,17 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     // Wait for AUTH frame
-    let frame = framed.next().await
+    let frame = framed
+        .next()
+        .await
         .ok_or_else(|| anyhow::anyhow!("connection closed before auth"))??;
 
     if frame.opcode != OpCode::Auth {
-        let err = make_error(frame.stream_id, error_codes::AUTH_REQUIRED, "expected AUTH frame")?;
+        let err = make_error(
+            frame.stream_id,
+            error_codes::AUTH_REQUIRED,
+            "expected AUTH frame",
+        )?;
         framed.send(err).await?;
         anyhow::bail!("expected AUTH frame, got {:?}", frame.opcode);
     }
@@ -160,7 +167,8 @@ where
         let control = state.control.lock().unwrap();
         match control.validate_token(&token_hash)? {
             Some(db_id) => {
-                let db_record = control.get_database_by_id(db_id)?
+                let db_record = control
+                    .get_database_by_id(db_id)?
                     .ok_or_else(|| anyhow::anyhow!("database not found for token"))?;
                 Ok((db_record.id, db_record.name.clone()))
             }
@@ -210,20 +218,24 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
         }
         OpCode::RememberBatch => {
             let req: RememberBatchRequest = unpack(&frame.payload)?;
-            let memories = req.memories.into_iter().map(|m| RememberInput {
-                text: m.text,
-                memory_type: m.memory_type,
-                importance: m.importance,
-                valence: m.valence,
-                half_life: m.half_life,
-                metadata: m.metadata,
-                namespace: m.namespace,
-                certainty: m.certainty,
-                domain: m.domain,
-                source: m.source,
-                emotional_state: m.emotional_state,
-                embedding: m.embedding,
-            }).collect();
+            let memories = req
+                .memories
+                .into_iter()
+                .map(|m| RememberInput {
+                    text: m.text,
+                    memory_type: m.memory_type,
+                    importance: m.importance,
+                    valence: m.valence,
+                    half_life: m.half_life,
+                    metadata: m.metadata,
+                    namespace: m.namespace,
+                    certainty: m.certainty,
+                    domain: m.domain,
+                    source: m.source,
+                    emotional_state: m.emotional_state,
+                    embedding: m.embedding,
+                })
+                .collect();
             Ok(Command::RememberBatch { memories })
         }
         OpCode::Recall => {
@@ -350,12 +362,10 @@ fn execute_and_respond(
         Ok(CommandResult::Pong) => {
             vec![Frame::empty(OpCode::Pong, stream_id)]
         }
-        Err(e) => {
-            match make_error(stream_id, error_codes::INTERNAL_ERROR, e.to_string()) {
-                Ok(f) => vec![f],
-                Err(_) => vec![],
-            }
-        }
+        Err(e) => match make_error(stream_id, error_codes::INTERNAL_ERROR, e.to_string()) {
+            Ok(f) => vec![f],
+            Err(_) => vec![],
+        },
     }
 }
 

@@ -31,10 +31,7 @@ impl TenantPool {
     }
 
     /// Get or create an engine for the given database.
-    pub fn get_engine(
-        &self,
-        db_record: &DatabaseRecord,
-    ) -> anyhow::Result<Arc<Mutex<YantrikDB>>> {
+    pub fn get_engine(&self, db_record: &DatabaseRecord) -> anyhow::Result<Arc<Mutex<YantrikDB>>> {
         let mut engines = self.engines.lock().unwrap();
 
         if let Some(engine) = engines.get(&db_record.id) {
@@ -46,10 +43,8 @@ impl TenantPool {
         std::fs::create_dir_all(&db_dir)?;
 
         let db_path = db_dir.join("yantrik.db");
-        let mut engine = YantrikDB::new(
-            db_path.to_str().unwrap_or("yantrik.db"),
-            self.embedding_dim,
-        )?;
+        let mut engine =
+            YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), self.embedding_dim)?;
 
         // Set the shared embedder if available
         if let Some(ref emb) = self.embedder {

@@ -84,11 +84,21 @@ pub struct RememberRequest {
     pub embedding: Option<Vec<f32>>,
 }
 
-fn default_memory_type() -> String { "semantic".into() }
-fn default_importance() -> f64 { 0.5 }
-fn default_half_life() -> f64 { 168.0 } // 7 days in hours
-fn default_certainty() -> f64 { 1.0 }
-fn default_source() -> String { "user".into() }
+fn default_memory_type() -> String {
+    "semantic".into()
+}
+fn default_importance() -> f64 {
+    0.5
+}
+fn default_half_life() -> f64 {
+    168.0
+} // 7 days in hours
+fn default_certainty() -> f64 {
+    1.0
+}
+fn default_source() -> String {
+    "user".into()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RememberOkResponse {
@@ -129,8 +139,12 @@ pub struct RecallRequest {
     pub query_embedding: Option<Vec<f32>>,
 }
 
-fn default_top_k() -> usize { 10 }
-fn default_true() -> bool { true }
+fn default_top_k() -> usize {
+    10
+}
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecallResultMsg {
@@ -172,7 +186,9 @@ pub struct RelateRequest {
     pub weight: f64,
 }
 
-fn default_weight() -> f64 { 1.0 }
+fn default_weight() -> f64 {
+    1.0
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RelateOkResponse {
@@ -223,7 +239,9 @@ pub struct SessionStartRequest {
     pub metadata: serde_json::Value,
 }
 
-fn default_namespace() -> String { "default".into() }
+fn default_namespace() -> String {
+    "default".into()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionEndRequest {
@@ -259,7 +277,9 @@ pub struct ThinkRequest {
     pub consolidation_limit: usize,
 }
 
-fn default_consolidation_limit() -> usize { 50 }
+fn default_consolidation_limit() -> usize {
+    50
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ThinkResultMsg {
@@ -313,7 +333,9 @@ pub struct ConflictsRequest {
     pub limit: usize,
 }
 
-fn default_limit() -> usize { 50 }
+fn default_limit() -> usize {
+    50
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResolveRequest {

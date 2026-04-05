@@ -10,8 +10,8 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use yantrikdb::YantrikDB;
 use yantrikdb::types::ThinkConfig;
+use yantrikdb::YantrikDB;
 
 use crate::config::BackgroundSection;
 
@@ -36,12 +36,7 @@ impl WorkerRegistry {
 
     /// Start background workers for a database engine.
     /// Call this when an engine is first loaded into the pool.
-    pub fn start_for_database(
-        &self,
-        db_id: i64,
-        db_name: String,
-        engine: Arc<Mutex<YantrikDB>>,
-    ) {
+    pub fn start_for_database(&self, db_id: i64, db_name: String, engine: Arc<Mutex<YantrikDB>>) {
         let mut workers = self.workers.lock().unwrap();
         if workers.contains_key(&db_id) {
             return; // Already running

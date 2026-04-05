@@ -33,8 +33,7 @@ pub fn build_tls_acceptor(tls_config: &TlsSection) -> anyhow::Result<TlsAcceptor
 fn load_certs(path: &Path) -> anyhow::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
     let file = std::fs::File::open(path)?;
     let mut reader = BufReader::new(file);
-    let certs = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()?;
+    let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
     if certs.is_empty() {
         anyhow::bail!("no certificates found in {}", path.display());
     }

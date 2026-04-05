@@ -12,6 +12,12 @@ node_modules/
 target/
 Cargo.lock
 
+# Embeddings cache
+.fastembed_cache/
+
+# Server data
+data/
+
 # Python
 __pycache__/
 *.pyc

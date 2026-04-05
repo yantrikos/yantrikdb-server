@@ -1,0 +1,54 @@
+[package]
+name = "yantrikdb-server"
+version = "0.1.0"
+edition = "2021"
+description = "YantrikDB database server — wire protocol + HTTP gateway"
+license = "AGPL-3.0"
+
+[[bin]]
+name = "yantrikdb"
+path = "src/main.rs"
+
+[dependencies]
+yantrikdb = { path = "../yantrikdb-core" }
+yantrikdb-protocol = { path = "../yantrikdb-protocol" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+
+# HTTP gateway
+axum = { version = "0.8", features = ["json"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Data
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Auth
+sha2 = "0.10"
+hex = "0.4"
+rand = { version = "0.8", features = ["small_rng"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Config
+toml = "0.8"
+
+# Embeddings
+fastembed = { version = "5", default-features = false, features = ["ort-load-dynamic", "hf-hub-native-tls"] }
+
+# Misc
+anyhow = "1"
+thiserror = "2"
+uuid7 = "1"
+bytes = "1"

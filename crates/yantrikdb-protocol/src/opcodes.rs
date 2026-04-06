@@ -79,6 +79,8 @@ pub enum OpCode {
     ClusterStatus = 0xCB,   // Get cluster overview
     ClusterStatusResult = 0xCC,
     ReadOnlyError = 0xCD, // Sent when client tries to write to read-only replica
+    ClusterDatabaseList = 0xCE, // Request list of databases on peer
+    ClusterDatabaseListResult = 0xCF, // Database list response
 
     // --- Control (0xF0–0xF2) ---
     Error = 0xF0,
@@ -148,6 +150,8 @@ impl OpCode {
             0xCB => Some(Self::ClusterStatus),
             0xCC => Some(Self::ClusterStatusResult),
             0xCD => Some(Self::ReadOnlyError),
+            0xCE => Some(Self::ClusterDatabaseList),
+            0xCF => Some(Self::ClusterDatabaseListResult),
 
             0xF0 => Some(Self::Error),
             0xF1 => Some(Self::Ping),
@@ -210,6 +214,8 @@ mod tests {
             OpCode::ClusterStatus,
             OpCode::ClusterStatusResult,
             OpCode::ReadOnlyError,
+            OpCode::ClusterDatabaseList,
+            OpCode::ClusterDatabaseListResult,
             OpCode::Personality,
             OpCode::Stats,
             OpCode::InfoResult,

@@ -552,6 +552,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     // Create tenant pool and background worker registry
     let pool = Arc::new(TenantPool::new(&cfg, embedder));
     let workers = background::WorkerRegistry::new(&cfg.background);
+    let control = Arc::new(Mutex::new(control));
 
     // Initialize cluster context if clustering is enabled
     let cluster_ctx = if cfg.cluster.is_clustered() {
@@ -567,6 +568,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
             node_state,
             peer_registry,
             Arc::clone(&pool),
+            Some(Arc::clone(&control)),
         ));
         tracing::info!(
             node_id = cfg.cluster.node_id,
@@ -580,7 +582,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     };
 
     let state = Arc::new(AppState {
-        control: Mutex::new(control),
+        control,
         pool,
         workers,
         cluster: cluster_ctx.clone(),

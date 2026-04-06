@@ -37,6 +37,7 @@ pub struct ClusterContext {
     pub state: Arc<NodeState>,
     pub peers: Arc<PeerRegistry>,
     pub pool: Arc<TenantPool>,
+    pub control: Option<Arc<std::sync::Mutex<crate::control::ControlDb>>>,
 }
 
 impl ClusterContext {
@@ -45,12 +46,14 @@ impl ClusterContext {
         state: Arc<NodeState>,
         peers: Arc<PeerRegistry>,
         pool: Arc<TenantPool>,
+        control: Option<Arc<std::sync::Mutex<crate::control::ControlDb>>>,
     ) -> Self {
         Self {
             config,
             state,
             peers,
             pool,
+            control,
         }
     }
 
@@ -75,23 +78,63 @@ impl ClusterContext {
         }
     }
 
-    /// Get a default-database engine for replication ops.
-    /// For now we replicate the "default" database. Multi-db replication
-    /// will come in a follow-up.
-    pub fn default_engine(&self) -> anyhow::Result<Arc<std::sync::Mutex<yantrikdb::YantrikDB>>> {
-        // The default database always exists (created on server startup).
-        let db_record = crate::control::DatabaseRecord {
-            id: 1,
-            name: "default".into(),
-            path: "default".into(),
-            created_at: String::new(),
+    /// Get an engine for a named database. Loads it lazily if needed.
+    pub fn engine_for(
+        &self,
+        db_name: &str,
+    ) -> anyhow::Result<Arc<std::sync::Mutex<yantrikdb::YantrikDB>>> {
+        let db_record = if let Some(ref ctrl) = self.control {
+            ctrl.lock()
+                .unwrap()
+                .get_database(db_name)?
+                .ok_or_else(|| anyhow::anyhow!("database '{}' not found", db_name))?
+        } else {
+            // Fallback for tests / simple case
+            crate::control::DatabaseRecord {
+                id: 1,
+                name: db_name.into(),
+                path: db_name.into(),
+                created_at: String::new(),
+            }
         };
         self.pool.get_engine(&db_record)
     }
 
-    /// Get our last HLC position from the local oplog.
-    pub fn last_hlc(&self) -> anyhow::Result<Vec<u8>> {
-        let engine = self.default_engine()?;
+    /// Get a default-database engine for replication ops.
+    pub fn default_engine(&self) -> anyhow::Result<Arc<std::sync::Mutex<yantrikdb::YantrikDB>>> {
+        self.engine_for("default")
+    }
+
+    /// List all replicable databases known to this node.
+    pub fn list_databases(&self) -> Vec<String> {
+        if let Some(ref ctrl) = self.control {
+            if let Ok(dbs) = ctrl.lock().unwrap().list_databases() {
+                return dbs.into_iter().map(|d| d.name).collect();
+            }
+        }
+        vec!["default".to_string()]
+    }
+
+    /// Ensure a database exists locally (used by followers when leader creates a new one).
+    pub fn ensure_database(&self, name: &str) -> anyhow::Result<()> {
+        let Some(ref ctrl) = self.control else {
+            return Ok(()); // no control db, nothing to do
+        };
+        let ctrl = ctrl.lock().unwrap();
+        if ctrl.database_exists(name)? {
+            return Ok(());
+        }
+        // Create the directory and the control entry
+        let db_dir = self.pool.data_dir().join(name);
+        std::fs::create_dir_all(&db_dir)?;
+        ctrl.create_database(name, name)?;
+        tracing::info!(database = %name, "auto-created database from cluster sync");
+        Ok(())
+    }
+
+    /// Get our last HLC position from a specific database's oplog.
+    pub fn last_hlc_for(&self, db_name: &str) -> anyhow::Result<Vec<u8>> {
+        let engine = self.engine_for(db_name)?;
         let db = engine.lock().unwrap();
         let conn = db.conn();
         let result: Option<Vec<u8>> = conn
@@ -104,8 +147,13 @@ impl ClusterContext {
         Ok(result.unwrap_or_default())
     }
 
-    pub fn last_op_id(&self) -> anyhow::Result<String> {
-        let engine = self.default_engine()?;
+    /// Get our last HLC position from the default database (for cluster status).
+    pub fn last_hlc(&self) -> anyhow::Result<Vec<u8>> {
+        self.last_hlc_for("default")
+    }
+
+    pub fn last_op_id_for(&self, db_name: &str) -> anyhow::Result<String> {
+        let engine = self.engine_for(db_name)?;
         let db = engine.lock().unwrap();
         let conn = db.conn();
         let result: Option<String> = conn
@@ -116,5 +164,9 @@ impl ClusterContext {
             )
             .ok();
         Ok(result.unwrap_or_default())
+    }
+
+    pub fn last_op_id(&self) -> anyhow::Result<String> {
+        self.last_op_id_for("default")
     }
 }

@@ -21,7 +21,7 @@ use crate::handler::{self, CommandResult};
 use crate::tenant_pool::TenantPool;
 
 pub struct AppState {
-    pub control: Mutex<ControlDb>,
+    pub control: Arc<Mutex<ControlDb>>,
     pub pool: Arc<TenantPool>,
     pub workers: WorkerRegistry,
     /// Optional cluster context — None when running in single-node mode.

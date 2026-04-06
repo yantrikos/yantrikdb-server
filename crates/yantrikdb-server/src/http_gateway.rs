@@ -541,6 +541,101 @@ async fn cluster_promote(
     })))
 }
 
+/// GET /metrics — Prometheus-format metrics for monitoring.
+async fn metrics(State(state): State<Arc<AppState>>) -> String {
+    let mut out = String::new();
+
+    out.push_str("# HELP yantrikdb_engines_loaded Number of engine instances currently loaded\n");
+    out.push_str("# TYPE yantrikdb_engines_loaded gauge\n");
+    out.push_str(&format!(
+        "yantrikdb_engines_loaded {}\n",
+        state.pool.loaded_count()
+    ));
+
+    if let Some(ref cluster) = state.cluster {
+        out.push_str("# HELP yantrikdb_cluster_term Current Raft term\n");
+        out.push_str("# TYPE yantrikdb_cluster_term gauge\n");
+        out.push_str(&format!(
+            "yantrikdb_cluster_term {{node_id=\"{}\"}} {}\n",
+            cluster.node_id(),
+            cluster.state.current_term()
+        ));
+
+        out.push_str("# HELP yantrikdb_cluster_is_leader Whether this node is currently the leader (1) or not (0)\n");
+        out.push_str("# TYPE yantrikdb_cluster_is_leader gauge\n");
+        out.push_str(&format!(
+            "yantrikdb_cluster_is_leader {{node_id=\"{}\"}} {}\n",
+            cluster.node_id(),
+            if cluster.state.is_leader() { 1 } else { 0 }
+        ));
+
+        out.push_str("# HELP yantrikdb_cluster_healthy Whether this node has quorum (1) or not (0)\n");
+        out.push_str("# TYPE yantrikdb_cluster_healthy gauge\n");
+        out.push_str(&format!(
+            "yantrikdb_cluster_healthy {{node_id=\"{}\"}} {}\n",
+            cluster.node_id(),
+            if cluster.is_healthy() { 1 } else { 0 }
+        ));
+
+        out.push_str("# HELP yantrikdb_cluster_peer_reachable Whether each peer is reachable\n");
+        out.push_str("# TYPE yantrikdb_cluster_peer_reachable gauge\n");
+        for peer in cluster.peers.snapshot() {
+            out.push_str(&format!(
+                "yantrikdb_cluster_peer_reachable {{addr=\"{}\",role=\"{:?}\"}} {}\n",
+                peer.addr,
+                peer.configured_role,
+                if peer.reachable { 1 } else { 0 }
+            ));
+        }
+    }
+
+    // Per-database stats (default DB only for now)
+    if let Ok(db_record) = state.control.lock().unwrap().get_database("default") {
+        if let Some(rec) = db_record {
+            if let Ok(engine) = state.pool.get_engine(&rec) {
+                if let Ok(stats) = engine.lock().unwrap().stats(None) {
+                    out.push_str("# HELP yantrikdb_active_memories Number of active memories\n");
+                    out.push_str("# TYPE yantrikdb_active_memories gauge\n");
+                    out.push_str(&format!(
+                        "yantrikdb_active_memories {{db=\"default\"}} {}\n",
+                        stats.active_memories
+                    ));
+
+                    out.push_str("# HELP yantrikdb_consolidated_memories Number of consolidated memories\n");
+                    out.push_str("# TYPE yantrikdb_consolidated_memories gauge\n");
+                    out.push_str(&format!(
+                        "yantrikdb_consolidated_memories {{db=\"default\"}} {}\n",
+                        stats.consolidated_memories
+                    ));
+
+                    out.push_str("# HELP yantrikdb_edges Number of knowledge graph edges\n");
+                    out.push_str("# TYPE yantrikdb_edges gauge\n");
+                    out.push_str(&format!(
+                        "yantrikdb_edges {{db=\"default\"}} {}\n",
+                        stats.edges
+                    ));
+
+                    out.push_str("# HELP yantrikdb_open_conflicts Number of unresolved conflicts\n");
+                    out.push_str("# TYPE yantrikdb_open_conflicts gauge\n");
+                    out.push_str(&format!(
+                        "yantrikdb_open_conflicts {{db=\"default\"}} {}\n",
+                        stats.open_conflicts
+                    ));
+
+                    out.push_str("# HELP yantrikdb_operations_total Total operations\n");
+                    out.push_str("# TYPE yantrikdb_operations_total counter\n");
+                    out.push_str(&format!(
+                        "yantrikdb_operations_total {{db=\"default\"}} {}\n",
+                        stats.operations
+                    ));
+                }
+            }
+        }
+    }
+
+    out
+}
+
 async fn cluster_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let Some(ref ctx) = state.cluster else {
         return Json(json!({
@@ -620,5 +715,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/databases", get(list_databases))
         .route("/v1/cluster", get(cluster_status))
         .route("/v1/cluster/promote", post(cluster_promote))
+        .route("/metrics", get(metrics))
         .with_state(state)
 }

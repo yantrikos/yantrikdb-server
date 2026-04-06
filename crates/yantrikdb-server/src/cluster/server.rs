@@ -121,7 +121,7 @@ async fn dispatch_cluster_op(
     match frame.opcode {
         OpCode::OplogPull => {
             let req: OplogPullRequest = unpack(&frame.payload)?;
-            let engine = ctx.default_engine()?;
+            let engine = ctx.engine_for(&req.database)?;
             let result = handle_oplog_pull(&engine, req)?;
             let resp = make_frame(OpCode::OplogPullResult, stream_id, &result)?;
             Ok(Some(resp))
@@ -129,7 +129,7 @@ async fn dispatch_cluster_op(
 
         OpCode::OplogPush => {
             let req: OplogPushRequest = unpack(&frame.payload)?;
-            let engine = ctx.default_engine()?;
+            let engine = ctx.engine_for(&req.database)?;
             let apply = handle_oplog_apply(&engine, req.ops)?;
             let resp = OplogPushOkResponse {
                 applied: apply.applied,
@@ -137,6 +137,15 @@ async fn dispatch_cluster_op(
                 last_op_id: apply.last_op_id,
             };
             let resp_frame = make_frame(OpCode::OplogPushOk, stream_id, &resp)?;
+            Ok(Some(resp_frame))
+        }
+
+        OpCode::ClusterDatabaseList => {
+            let _req: ClusterDatabaseListRequest = unpack(&frame.payload)?;
+            let resp = ClusterDatabaseListResponse {
+                databases: ctx.list_databases(),
+            };
+            let resp_frame = make_frame(OpCode::ClusterDatabaseListResult, stream_id, &resp)?;
             Ok(Some(resp_frame))
         }
 

@@ -431,10 +431,17 @@ pub struct ClusterHelloOk {
 /// Request operations from a peer's oplog since a watermark.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OplogPullRequest {
+    /// Database name to pull from. Defaults to "default" if missing.
+    #[serde(default = "default_db_name")]
+    pub database: String,
     pub since_hlc: Option<Vec<u8>>, // 16-byte HLC timestamp, None for "from beginning"
     pub since_op_id: Option<String>,
     pub limit: usize,                  // max ops per batch
     pub exclude_actor: Option<String>, // skip ops from this actor (avoid loops)
+}
+
+fn default_db_name() -> String {
+    "default".into()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -460,7 +467,18 @@ pub struct OplogEntryWire {
 /// Push ops to a peer (used by primary → secondary push).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OplogPushRequest {
+    #[serde(default = "default_db_name")]
+    pub database: String,
     pub ops: Vec<OplogEntryWire>,
+}
+
+/// Request the list of databases on a peer (so we can create matching ones).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClusterDatabaseListRequest {}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClusterDatabaseListResponse {
+    pub databases: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

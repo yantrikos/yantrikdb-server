@@ -78,6 +78,18 @@ impl WorkerRegistry {
             }));
         }
 
+        // Oplog GC — keep oplog bounded for long-running clusters
+        {
+            let interval = Duration::from_secs(60 * 60); // every hour
+            let keep_recent = 100_000;
+            let engine = Arc::clone(&engine);
+            let token = cancel.clone();
+            let name = db_name.clone();
+            handles.push(tokio::spawn(async move {
+                run_oplog_gc_loop(engine, interval, keep_recent, token, name).await;
+            }));
+        }
+
         tracing::info!(
             db_id,
             db_name = %db_name,
@@ -269,6 +281,80 @@ async fn session_cleanup_loop(
         if let Ok(Some(count)) = result {
             if count > 0 {
                 tracing::info!(db = %db_name, abandoned = count, "stale sessions cleaned up");
+            }
+        }
+    }
+}
+
+/// Oplog garbage collection — prune old applied entries to bound storage growth.
+///
+/// Keeps the most recent N entries per database (default 100k), only deleting
+/// entries that have been marked applied=1.
+pub async fn run_oplog_gc_loop(
+    engine: Arc<Mutex<YantrikDB>>,
+    interval: Duration,
+    keep_recent: usize,
+    cancel: CancellationToken,
+    db_name: String,
+) {
+    // Initial delay
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(300)) => {}
+        _ = cancel.cancelled() => return,
+    }
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = cancel.cancelled() => {
+                tracing::debug!(db = %db_name, "oplog GC worker shutting down");
+                return;
+            }
+        }
+
+        let result = tokio::task::spawn_blocking({
+            let engine = Arc::clone(&engine);
+            let db_name = db_name.clone();
+            move || {
+                let db = engine.lock().unwrap();
+                let conn = db.conn();
+
+                // Count current oplog
+                let total: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM oplog WHERE applied = 1", [], |r| r.get(0))
+                    .unwrap_or(0);
+
+                if (total as usize) <= keep_recent {
+                    return Some(0);
+                }
+
+                // Delete oldest applied entries beyond keep_recent
+                // Use HLC ordering since op_ids are time-sortable UUIDv7
+                let to_delete = total as usize - keep_recent;
+                let result = conn.execute(
+                    "DELETE FROM oplog WHERE op_id IN (
+                        SELECT op_id FROM oplog
+                        WHERE applied = 1
+                        ORDER BY hlc ASC, op_id ASC
+                        LIMIT ?1
+                    )",
+                    rusqlite::params![to_delete as i64],
+                );
+
+                match result {
+                    Ok(deleted) => Some(deleted),
+                    Err(e) => {
+                        tracing::error!(db = %db_name, error = %e, "oplog GC failed");
+                        None
+                    }
+                }
+            }
+        })
+        .await;
+
+        if let Ok(Some(count)) = result {
+            if count > 0 {
+                tracing::info!(db = %db_name, pruned = count, "oplog GC complete");
             }
         }
     }

@@ -184,6 +184,16 @@ async fn pull_db_from_leader(
         update_local_watermark(&engine, &watermark_key, &last_hlc, &last_op_id)?;
     }
 
+    // After applying replicated ops, the memories rows exist in SQLite but
+    // their embedding columns are NULL (the oplog only carries embedding_hash,
+    // not the full vector). Re-embed locally and populate both the column
+    // and the in-memory HNSW index so recall() works on the follower.
+    if apply.applied > 0 {
+        if let Err(e) = backfill_embeddings(&engine).await {
+            tracing::warn!(error = %e, "embedding backfill failed");
+        }
+    }
+
     if apply.applied > 0 {
         tracing::info!(
             leader = %leader_addr,
@@ -195,5 +205,98 @@ async fn pull_db_from_leader(
         );
     }
 
+    Ok(())
+}
+
+/// After replicated record ops are materialized, the memories rows have
+/// no embedding (the oplog doesn't carry vectors). Re-embed each missing
+/// row using the local embedder and update both the SQLite column and
+/// the in-memory HNSW vector index.
+async fn backfill_embeddings(
+    engine: &std::sync::Arc<std::sync::Mutex<yantrikdb::YantrikDB>>,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    // Collect rids + texts that need embedding
+    let pending: Vec<(String, String)> = {
+        let db = engine.lock().unwrap();
+        if !db.has_embedder() {
+            return Ok(()); // no embedder, nothing we can do
+        }
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
+            "SELECT rid, text FROM memories \
+             WHERE embedding IS NULL \
+             AND consolidation_status IN ('active', 'consolidated') \
+             LIMIT 500",
+        )?;
+        let rows: Vec<_> = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<Result<_, _>>()?;
+        rows
+    };
+
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let count = pending.len();
+    tracing::debug!(count, "backfilling embeddings for replicated memories");
+
+    // Embed + write back, one at a time to keep lock duration short
+    for (rid, text) in &pending {
+        let embedding = {
+            let db = engine.lock().unwrap();
+            match db.embed(text) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(rid = %rid, error = %e, "embed failed during backfill");
+                    continue;
+                }
+            }
+        };
+
+        // Use the canonical f32 serialization from the core crate so the
+        // bytes match exactly what record() would write.
+        let blob = yantrikdb::serde_helpers::serialize_f32(&embedding);
+
+        let db = engine.lock().unwrap();
+
+        // NOTE: if encryption is enabled, the engine's encrypt_embedding()
+        // method is pub(crate) — we can't call it from here. For encrypted
+        // clusters, the workaround is rebuild_vec_index from the (encrypted)
+        // SQLite table will fail and recall on followers won't work until
+        // encrypt_embedding is exposed in core. TODO: expose it.
+        if db.is_encrypted() {
+            tracing::warn!(
+                rid = %rid,
+                "skipping embedding backfill: encrypted databases need encrypt_embedding exposed in core"
+            );
+            continue;
+        }
+
+        let conn = db.conn();
+        if let Err(e) = conn.execute(
+            "UPDATE memories SET embedding = ?1 WHERE rid = ?2",
+            params![blob, rid],
+        ) {
+            tracing::warn!(rid = %rid, error = %e, "embedding update failed");
+            continue;
+        }
+        drop(conn);
+        drop(db);
+    }
+
+    // Now rebuild the HNSW index from the SQLite table (which has all embeddings now).
+    // This is the only way to get vectors into HNSW since the index API isn't public
+    // for piecewise insertion through YantrikDB.
+    {
+        let db = engine.lock().unwrap();
+        if let Err(e) = db.rebuild_vec_index() {
+            tracing::warn!(error = %e, "rebuild_vec_index failed during backfill");
+        }
+    }
+
+    tracing::info!(count, "backfilled embeddings for replicated memories");
     Ok(())
 }

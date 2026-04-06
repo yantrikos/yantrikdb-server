@@ -1,7 +1,7 @@
 # YantrikDB Witness image
 # Tiny vote-only daemon — no embedding model, no ONNX, no SQLite.
 
-FROM rust:1.84-slim-bookworm AS builder
+FROM rust:1.90-slim-trixie AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config build-essential \

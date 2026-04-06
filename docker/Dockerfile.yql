@@ -1,7 +1,7 @@
 # yql interactive client image
 # Pure binary, no runtime dependencies beyond glibc.
 
-FROM rust:1.84-slim-bookworm AS builder
+FROM rust:1.90-slim-trixie AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev build-essential \

@@ -1,17 +1,24 @@
 [package]
 name = "yantrikdb-server"
-version = "0.1.0"
+version = "0.5.2"
 edition = "2021"
-description = "YantrikDB database server — wire protocol + HTTP gateway"
-license = "AGPL-3.0"
+description = "YantrikDB database server — multi-tenant cognitive memory with wire protocol, HTTP gateway, replication, auto-failover, and at-rest encryption"
+license = "AGPL-3.0-only"
+repository = "https://github.com/yantrikos/yantrikdb-server"
+homepage = "https://github.com/yantrikos/yantrikdb-server"
+documentation = "https://docs.rs/yantrikdb-server"
+readme = "README.md"
+keywords = ["database", "memory", "ai", "replication", "raft"]
+categories = ["database", "database-implementations"]
+authors = ["Pranab Sarkar <developer@pranab.co.in>"]
 
 [[bin]]
 name = "yantrikdb"
 path = "src/main.rs"
 
 [dependencies]
-yantrikdb = { path = "../yantrikdb-core" }
-yantrikdb-protocol = { path = "../yantrikdb-protocol" }
+yantrikdb = { version = "0.4.2", path = "../yantrikdb-core" }
+yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

@@ -2,15 +2,21 @@
 name = "yantrikdb-witness"
 version = "0.1.0"
 edition = "2021"
-description = "YantrikDB cluster witness — vote-only daemon for 2-node failover"
-license = "AGPL-3.0"
+description = "YantrikDB cluster witness — vote-only daemon for 2-node Raft failover (tiny tiebreaker)"
+license = "AGPL-3.0-only"
+repository = "https://github.com/yantrikos/yantrikdb-server"
+homepage = "https://github.com/yantrikos/yantrikdb-server"
+readme = "README.md"
+keywords = ["yantrikdb", "raft", "witness", "failover", "cluster"]
+categories = ["database", "command-line-utilities"]
+authors = ["Pranab Sarkar <developer@pranab.co.in>"]
 
 [[bin]]
 name = "yantrikdb-witness"
 path = "src/main.rs"
 
 [dependencies]
-yantrikdb-protocol = { path = "../yantrikdb-protocol" }
+yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

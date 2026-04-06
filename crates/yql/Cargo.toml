@@ -2,8 +2,14 @@
 name = "yql"
 version = "0.1.0"
 edition = "2021"
-description = "Interactive client for YantrikDB — like psql for cognitive memory"
+description = "Interactive REPL client for YantrikDB cognitive memory database — like psql for AI memory"
 license = "MIT"
+repository = "https://github.com/yantrikos/yantrikdb-server"
+homepage = "https://github.com/yantrikos/yantrikdb-server"
+readme = "README.md"
+keywords = ["yantrikdb", "cli", "repl", "client", "database"]
+categories = ["command-line-utilities", "database"]
+authors = ["Pranab Sarkar <developer@pranab.co.in>"]
 
 [[bin]]
 name = "yql"

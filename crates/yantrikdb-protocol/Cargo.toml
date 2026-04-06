@@ -2,8 +2,15 @@
 name = "yantrikdb-protocol"
 version = "0.1.0"
 edition = "2021"
-description = "Wire protocol codec for YantrikDB — frames, opcodes, messages"
-license = "AGPL-3.0"
+description = "Wire protocol codec for YantrikDB — binary frames, opcodes, MessagePack messages, Tokio codec"
+license = "AGPL-3.0-only"
+repository = "https://github.com/yantrikos/yantrikdb-server"
+homepage = "https://github.com/yantrikos/yantrikdb-server"
+documentation = "https://docs.rs/yantrikdb-protocol"
+readme = "README.md"
+keywords = ["yantrikdb", "wire-protocol", "messagepack", "codec", "tokio"]
+categories = ["network-programming", "encoding"]
+authors = ["Pranab Sarkar <developer@pranab.co.in>"]
 
 [dependencies]
 bytes = "1"

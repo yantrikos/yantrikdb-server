@@ -85,6 +85,27 @@ enum Commands {
         #[command(subcommand)]
         action: ClusterAction,
     },
+    /// Encryption key management
+    Encryption {
+        #[command(subcommand)]
+        action: EncryptionAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum EncryptionAction {
+    /// Generate a fresh 32-byte master key file
+    GenKey {
+        /// Output file path
+        #[arg(short, long, default_value = "./master.key")]
+        output: PathBuf,
+    },
+    /// Print the hex encoding of an existing key file (for use with key_hex env var)
+    ShowKey {
+        /// Key file path
+        #[arg(short, long, default_value = "./master.key")]
+        input: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -269,7 +290,24 @@ async fn main() -> anyhow::Result<()> {
 
             let db_dir = data_dir.join(&db_record.path);
             let db_path = db_dir.join("yantrik.db");
-            let engine = yantrikdb::YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), 384)?;
+
+            // Try to load encryption key from data dir if present
+            let key_file = data_dir.join("master.key");
+            let engine = if key_file.exists() {
+                let key_bytes = std::fs::read(&key_file)?;
+                if key_bytes.len() != 32 {
+                    anyhow::bail!("master.key must be 32 bytes");
+                }
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&key_bytes);
+                yantrikdb::YantrikDB::new_encrypted(
+                    db_path.to_str().unwrap_or("yantrik.db"),
+                    384,
+                    &key,
+                )?
+            } else {
+                yantrikdb::YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), 384)?
+            };
 
             // Export memories in pages
             let page_size = 1000;
@@ -355,8 +393,24 @@ async fn main() -> anyhow::Result<()> {
             let db_dir = data_dir.join(&db_record.path);
             std::fs::create_dir_all(&db_dir)?;
             let db_path = db_dir.join("yantrik.db");
-            let mut engine =
-                yantrikdb::YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), 384)?;
+
+            // Use encryption if a master.key exists in data_dir
+            let key_file = data_dir.join("master.key");
+            let mut engine = if key_file.exists() {
+                let key_bytes = std::fs::read(&key_file)?;
+                if key_bytes.len() != 32 {
+                    anyhow::bail!("master.key must be 32 bytes");
+                }
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&key_bytes);
+                yantrikdb::YantrikDB::new_encrypted(
+                    db_path.to_str().unwrap_or("yantrik.db"),
+                    384,
+                    &key,
+                )?
+            } else {
+                yantrikdb::YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), 384)?
+            };
 
             // Set up embedder for re-embedding
             let embedder = embedder::FastEmbedder::new()?;
@@ -520,6 +574,55 @@ cluster_secret = "{secret}"
                 }
             }
         }
+
+        Commands::Encryption { action } => match action {
+            EncryptionAction::GenKey { output } => {
+                use rand::RngCore;
+                if output.exists() {
+                    eprintln!(
+                        "key file {} already exists — refusing to overwrite",
+                        output.display()
+                    );
+                    std::process::exit(1);
+                }
+                if let Some(parent) = output.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut key = [0u8; 32];
+                rand::thread_rng().fill_bytes(&mut key);
+                std::fs::write(&output, key)?;
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &output,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
+                }
+
+                println!("master key written to {}", output.display());
+                println!();
+                println!("hex: {}", hex::encode(key));
+                println!();
+                println!("next steps:");
+                println!("  1. Add to yantrikdb.toml:");
+                println!("       [encryption]");
+                println!("       key_path = \"{}\"", output.display());
+                println!("  2. Or set env var: YANTRIKDB_ENCRYPTION_KEY_HEX=<hex>");
+                println!("  3. ⚠️  In a cluster, ALL nodes must use the SAME key");
+                println!("  4. ⚠️  Backup this key — losing it = losing all data");
+                Ok(())
+            }
+            EncryptionAction::ShowKey { input } => {
+                let bytes = std::fs::read(&input)?;
+                if bytes.len() != 32 {
+                    anyhow::bail!("key file must be exactly 32 bytes (got {})", bytes.len());
+                }
+                println!("{}", hex::encode(&bytes));
+                Ok(())
+            }
+        },
     }
 }
 
@@ -549,8 +652,16 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         }
     };
 
+    // Resolve master encryption key (auto-generates if needed)
+    let master_key = cfg.encryption.resolve_key(&cfg.server.data_dir)?;
+    if master_key.is_some() {
+        tracing::info!("encryption: enabled (AES-256-GCM)");
+    } else {
+        tracing::warn!("encryption: disabled — set [encryption] to enable at-rest encryption");
+    }
+
     // Create tenant pool and background worker registry
-    let pool = Arc::new(TenantPool::new(&cfg, embedder));
+    let pool = Arc::new(TenantPool::new(&cfg, embedder, master_key));
     let workers = background::WorkerRegistry::new(&cfg.background);
     let control = Arc::new(Mutex::new(control));
 

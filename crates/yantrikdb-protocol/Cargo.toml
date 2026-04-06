@@ -12,3 +12,4 @@ serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"
 serde_json = "1"
 thiserror = "2"
+zstd = "0.13"

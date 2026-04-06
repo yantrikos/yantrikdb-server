@@ -34,3 +34,4 @@ build/
 *.so
 *.dylib
 *.dll
+control.db

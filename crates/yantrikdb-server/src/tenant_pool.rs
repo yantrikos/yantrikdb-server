@@ -18,16 +18,27 @@ pub struct TenantPool {
     data_dir: PathBuf,
     embedding_dim: usize,
     embedder: Option<FastEmbedder>,
+    master_key: Option<[u8; 32]>,
 }
 
 impl TenantPool {
-    pub fn new(config: &ServerConfig, embedder: Option<FastEmbedder>) -> Self {
+    pub fn new(
+        config: &ServerConfig,
+        embedder: Option<FastEmbedder>,
+        master_key: Option<[u8; 32]>,
+    ) -> Self {
         Self {
             engines: Mutex::new(HashMap::new()),
             data_dir: config.server.data_dir.clone(),
             embedding_dim: config.embedding.dim,
             embedder,
+            master_key,
         }
+    }
+
+    /// Whether encryption is enabled for engines created by this pool.
+    pub fn is_encrypted(&self) -> bool {
+        self.master_key.is_some()
     }
 
     /// Get or create an engine for the given database.
@@ -43,8 +54,15 @@ impl TenantPool {
         std::fs::create_dir_all(&db_dir)?;
 
         let db_path = db_dir.join("yantrik.db");
-        let mut engine =
-            YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), self.embedding_dim)?;
+        let mut engine = if let Some(ref key) = self.master_key {
+            YantrikDB::new_encrypted(
+                db_path.to_str().unwrap_or("yantrik.db"),
+                self.embedding_dim,
+                key,
+            )?
+        } else {
+            YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), self.embedding_dim)?
+        };
 
         // Set the shared embedder if available
         if let Some(ref emb) = self.embedder {

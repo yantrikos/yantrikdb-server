@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub struct ServerConfig {
     pub server: ServerSection,
     pub tls: TlsSection,
+    pub encryption: EncryptionSection,
     pub embedding: EmbeddingSection,
     pub background: BackgroundSection,
     pub limits: LimitsSection,
@@ -46,6 +47,102 @@ impl Default for TlsSection {
 impl TlsSection {
     pub fn is_enabled(&self) -> bool {
         self.cert_path.is_some() && self.key_path.is_some()
+    }
+}
+
+// ── Encryption ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct EncryptionSection {
+    /// Path to a 32-byte master key file (raw bytes).
+    /// If unset and `auto_generate` is true, one is created on first startup.
+    pub key_path: Option<PathBuf>,
+
+    /// If true, generate a fresh key file at `key_path` (or `data_dir/master.key`)
+    /// when none exists. Default true for ease of setup.
+    pub auto_generate: bool,
+
+    /// Master key value as hex string (64 chars). Takes precedence over key_path.
+    /// Useful for env-driven config.
+    pub key_hex: Option<String>,
+}
+
+impl Default for EncryptionSection {
+    fn default() -> Self {
+        Self {
+            key_path: None,
+            auto_generate: true,
+            key_hex: None,
+        }
+    }
+}
+
+impl EncryptionSection {
+    /// Whether encryption is enabled (any key source configured).
+    pub fn is_enabled(&self) -> bool {
+        self.key_path.is_some() || self.key_hex.is_some() || self.auto_generate
+    }
+
+    /// Resolve the master key from this configuration. Generates one if needed.
+    pub fn resolve_key(&self, data_dir: &Path) -> anyhow::Result<Option<[u8; 32]>> {
+        // Priority 1: explicit hex value
+        if let Some(ref hex_str) = self.key_hex {
+            let bytes = hex::decode(hex_str)
+                .map_err(|e| anyhow::anyhow!("invalid encryption.key_hex: {}", e))?;
+            if bytes.len() != 32 {
+                anyhow::bail!("encryption.key_hex must decode to exactly 32 bytes");
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            return Ok(Some(key));
+        }
+
+        // Priority 2: explicit key file
+        let path = match &self.key_path {
+            Some(p) => p.clone(),
+            None if self.auto_generate => data_dir.join("master.key"),
+            None => return Ok(None),
+        };
+
+        if path.exists() {
+            let bytes = std::fs::read(&path)?;
+            if bytes.len() != 32 {
+                anyhow::bail!(
+                    "key file at {} must be exactly 32 bytes (got {})",
+                    path.display(),
+                    bytes.len()
+                );
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            return Ok(Some(key));
+        }
+
+        // Auto-generate
+        if self.auto_generate {
+            use rand::RngCore;
+            let mut key = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut key);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, key)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+
+            tracing::info!(
+                path = %path.display(),
+                "auto-generated encryption master key"
+            );
+            return Ok(Some(key));
+        }
+
+        Ok(None)
     }
 }
 
@@ -194,6 +291,7 @@ impl Default for ServerConfig {
         Self {
             server: ServerSection::default(),
             tls: TlsSection::default(),
+            encryption: EncryptionSection::default(),
             embedding: EmbeddingSection::default(),
             background: BackgroundSection::default(),
             limits: LimitsSection::default(),

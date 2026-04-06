@@ -120,15 +120,16 @@ async fn dispatch_cluster_op(
 
     match frame.opcode {
         OpCode::OplogPull => {
-            let req: OplogPullRequest = unpack(&frame.payload)?;
+            let req: OplogPullRequest = unpack_frame(frame)?;
             let engine = ctx.engine_for(&req.database)?;
             let result = handle_oplog_pull(&engine, req)?;
-            let resp = make_frame(OpCode::OplogPullResult, stream_id, &result)?;
+            // Auto-compress payloads >4KB (typical oplog batch is 50-500KB)
+            let resp = make_frame_auto_compress(OpCode::OplogPullResult, stream_id, &result, 4096)?;
             Ok(Some(resp))
         }
 
         OpCode::OplogPush => {
-            let req: OplogPushRequest = unpack(&frame.payload)?;
+            let req: OplogPushRequest = unpack_frame(frame)?;
             let engine = ctx.engine_for(&req.database)?;
             let apply = handle_oplog_apply(&engine, req.ops)?;
             let resp = OplogPushOkResponse {

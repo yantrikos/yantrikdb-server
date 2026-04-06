@@ -3,9 +3,13 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crate::error::ProtocolError;
 use crate::opcodes::OpCode;
 
-/// Protocol version. Bit 7 = JSON payload mode (for debugging).
+/// Protocol version. The high bits are flags:
+///   Bit 7 (0x80) = JSON payload mode (debug)
+///   Bit 6 (0x40) = zstd-compressed payload
 pub const PROTOCOL_VERSION: u8 = 0x01;
 pub const JSON_MODE_FLAG: u8 = 0x80;
+pub const ZSTD_FLAG: u8 = 0x40;
+pub const VERSION_MASK: u8 = 0x3F;
 
 /// Minimum frame header size: 4 (length) + 1 (version) + 1 (opcode) + 4 (stream_id) = 10
 pub const HEADER_SIZE: usize = 10;
@@ -49,6 +53,17 @@ impl Frame {
     /// Whether payloads should be JSON (debug mode).
     pub fn is_json_mode(&self) -> bool {
         self.version & JSON_MODE_FLAG != 0
+    }
+
+    /// Whether the payload is zstd-compressed.
+    pub fn is_compressed(&self) -> bool {
+        self.version & ZSTD_FLAG != 0
+    }
+
+    /// Mark this frame as having a compressed payload.
+    pub fn with_compression(mut self) -> Self {
+        self.version |= ZSTD_FLAG;
+        self
     }
 
     /// Total wire size of this frame (including the 4-byte length prefix).

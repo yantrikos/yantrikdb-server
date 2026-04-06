@@ -164,7 +164,7 @@ async fn pull_db_from_leader(
         anyhow::bail!("unexpected opcode: {:?}", resp.opcode);
     }
 
-    let result: OplogPullResult = unpack(&resp.payload)?;
+    let result: OplogPullResult = unpack_frame(&resp)?;
     if result.ops.is_empty() {
         return Ok(());
     }

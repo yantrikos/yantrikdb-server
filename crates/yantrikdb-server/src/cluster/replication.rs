@@ -9,7 +9,11 @@ use yantrikdb::replication::{
     apply_ops, extract_ops_since, get_peer_watermark, set_peer_watermark, OplogEntry,
 };
 use yantrikdb::YantrikDB;
+#[allow(unused_imports)]
+use yantrikdb_protocol::messages::*;
 use yantrikdb_protocol::messages::{OplogEntryWire, OplogPullRequest, OplogPullResult};
+#[allow(unused_imports)]
+use yantrikdb_protocol::*;
 
 /// Convert a core `OplogEntry` to wire-friendly form.
 pub fn entry_to_wire(e: &OplogEntry) -> OplogEntryWire {

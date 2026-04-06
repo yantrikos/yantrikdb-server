@@ -128,6 +128,15 @@ enum ClusterAction {
         #[arg(short, long, env = "YQL_TOKEN")]
         token: Option<String>,
     },
+    /// Manually trigger an election on a node (force failover)
+    Promote {
+        /// Server HTTP URL of the node to promote
+        #[arg(long, default_value = "http://localhost:7438")]
+        url: String,
+        /// Auth token (or YQL_TOKEN env)
+        #[arg(short, long, env = "YQL_TOKEN")]
+        token: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -492,6 +501,21 @@ cluster_secret = "{secret}"
                     }
                     let value: serde_json::Value = serde_json::from_str(&text)?;
                     println!("{}", serde_json::to_string_pretty(&value)?);
+                    Ok(())
+                }
+                ClusterAction::Promote { url, token } => {
+                    let url = format!("{}/v1/cluster/promote", url.trim_end_matches('/'));
+                    let resp = reqwest::blocking::Client::new()
+                        .post(&url)
+                        .header("Authorization", format!("Bearer {}", token))
+                        .send()?;
+                    let status = resp.status();
+                    let text = resp.text()?;
+                    if !status.is_success() {
+                        eprintln!("error {}: {}", status, text);
+                        std::process::exit(1);
+                    }
+                    println!("{}", text);
                     Ok(())
                 }
             }

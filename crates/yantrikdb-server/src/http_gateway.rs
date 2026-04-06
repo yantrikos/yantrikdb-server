@@ -7,7 +7,6 @@ use std::sync::Arc;
 use axum::{
     extract::{Path as AxumPath, State},
     http::StatusCode,
-    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -493,6 +492,55 @@ async fn create_database(
     })))
 }
 
+/// POST /v1/cluster/promote — manually trigger an election from this node.
+/// Useful for forced failover during ops. Requires the node to be a voter.
+async fn cluster_promote(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    // Auth check (any valid token works)
+    let _ = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+
+    let Some(ref ctx) = state.cluster else {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "single-node mode — nothing to promote",
+        ));
+    };
+
+    if !matches!(ctx.state.configured_role, crate::config::NodeRole::Voter) {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "this node is not a voter — cannot become leader",
+        ));
+    }
+
+    if ctx.state.is_leader() {
+        return Ok(Json(json!({
+            "status": "already_leader",
+            "node_id": ctx.node_id(),
+            "term": ctx.state.current_term(),
+        })));
+    }
+
+    let ctx_clone = std::sync::Arc::clone(ctx);
+    tokio::spawn(async move {
+        if let Err(e) = crate::cluster::election::start_election(ctx_clone).await {
+            tracing::error!(error = %e, "manual promotion failed");
+        }
+    });
+
+    Ok(Json(json!({
+        "status": "election_started",
+        "node_id": ctx.node_id(),
+        "current_term": ctx.state.current_term(),
+        "message": "check /v1/cluster in a few seconds to see the new leader"
+    })))
+}
+
 async fn cluster_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let Some(ref ctx) = state.cluster else {
         return Json(json!({
@@ -571,5 +619,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/databases", post(create_database))
         .route("/v1/databases", get(list_databases))
         .route("/v1/cluster", get(cluster_status))
+        .route("/v1/cluster/promote", post(cluster_promote))
         .with_state(state)
 }

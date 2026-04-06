@@ -10,6 +10,10 @@
 //! - **Witness** — Vote-only, no data storage (separate binary)
 //! - **Single** — Standalone, no replication
 
+#![allow(dead_code)]
+//! Cluster module — intentionally exposes some methods for future use
+//! and operational tooling, even when not currently called.
+
 pub mod client;
 pub mod election;
 pub mod heartbeat;

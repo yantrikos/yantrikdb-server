@@ -5,7 +5,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use bytes::Bytes;
 use futures::SinkExt;
 use futures::StreamExt;
 use tokio::net::TcpListener;
@@ -87,7 +86,7 @@ where
     let mut framed = Framed::new(stream, YantrikCodec::new());
 
     // Phase 1: Authenticate
-    let (db_id, db_name) = match authenticate(&mut framed, &state).await {
+    let (db_id, _db_name) = match authenticate(&mut framed, &state).await {
         Ok(result) => result,
         Err(e) => {
             tracing::warn!(error = %e, "auth failed");

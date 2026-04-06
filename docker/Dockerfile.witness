@@ -1,0 +1,36 @@
+# YantrikDB Witness image
+# Tiny vote-only daemon — no embedding model, no ONNX, no SQLite.
+
+FROM rust:1.84-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . .
+
+RUN cargo build --release -p yantrikdb-witness
+
+# ── Runtime stage ────────────────────────────────────────────────
+FROM debian:trixie-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r yantrikdb && useradd -r -g yantrikdb -m -d /var/lib/yantrikdb-witness yantrikdb
+
+COPY --from=builder /build/target/release/yantrikdb-witness /usr/local/bin/yantrikdb-witness
+
+VOLUME /var/lib/yantrikdb-witness
+
+USER yantrikdb
+WORKDIR /var/lib/yantrikdb-witness
+
+EXPOSE 7440
+
+# Required env: YANTRIKDB_CLUSTER_SECRET
+# Optional: --node-id (default required), --port (default 7440)
+ENTRYPOINT ["yantrikdb-witness"]
+CMD ["--node-id", "99", "--port", "7440", "--state-file", "/var/lib/yantrikdb-witness/state.json"]

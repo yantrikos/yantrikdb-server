@@ -1,0 +1,57 @@
+# YantrikDB Server image
+# Multi-stage: build static-ish binary, then minimal runtime with ONNX Runtime
+#
+# Build context expected: workspace root (so the build stage can access all crates)
+
+# ── Build stage ──────────────────────────────────────────────────
+FROM rust:1.84-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev clang cmake build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . .
+
+RUN cargo build --release -p yantrikdb-server
+
+# ── Runtime stage ────────────────────────────────────────────────
+FROM debian:trixie-slim AS runtime
+
+# ONNX Runtime version (must match the ort crate version yantrikdb-server uses)
+ARG ORT_VERSION=1.24.4
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ONNX Runtime shared libraries
+RUN curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+    -o /tmp/ort.tgz \
+    && tar -xzf /tmp/ort.tgz -C /tmp \
+    && cp /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime*.so* /usr/local/lib/ \
+    && ldconfig 2>/dev/null || true \
+    && rm -rf /tmp/ort.tgz /tmp/onnxruntime-linux-x64-${ORT_VERSION}
+
+ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so.${ORT_VERSION}
+
+# Create unprivileged user
+RUN groupadd -r yantrikdb && useradd -r -g yantrikdb -m -d /var/lib/yantrikdb yantrikdb
+
+COPY --from=builder /build/target/release/yantrikdb /usr/local/bin/yantrikdb
+
+# Data + config volumes
+VOLUME /var/lib/yantrikdb
+VOLUME /etc/yantrikdb
+
+USER yantrikdb
+WORKDIR /var/lib/yantrikdb
+
+# Wire protocol, HTTP gateway, cluster port
+EXPOSE 7437 7438 7440
+
+# Default: single-node serve, mounted /var/lib/yantrikdb data dir
+CMD ["yantrikdb", "serve", "--data-dir", "/var/lib/yantrikdb"]
+
+# Override with: docker run -v ./yantrikdb.toml:/etc/yantrikdb/yantrikdb.toml \
+#                yantrikos/yantrikdb yantrikdb serve --config /etc/yantrikdb/yantrikdb.toml

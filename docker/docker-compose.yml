@@ -1,0 +1,59 @@
+# Three-node YantrikDB cluster — example for local testing.
+#
+# Two voters + one witness, all on one machine via docker-compose.
+# For production, run each container on a separate host so a single
+# host failure doesn't take down quorum.
+#
+# Usage:
+#   YANTRIKDB_CLUSTER_SECRET=$(openssl rand -hex 32) docker compose up
+#
+# Then connect from yql:
+#   yql --host localhost -p 17438 -t $YANTRIKDB_CLUSTER_SECRET
+
+services:
+  yantrikdb-1:
+    image: ghcr.io/yantrikos/yantrikdb:latest
+    container_name: yantrikdb-1
+    restart: unless-stopped
+    ports:
+      - "17437:7437"   # wire protocol
+      - "17438:7438"   # HTTP gateway
+      - "17440:7440"   # cluster port
+    volumes:
+      - yantrikdb-1-data:/var/lib/yantrikdb
+      - ./node1.toml:/etc/yantrikdb/yantrikdb.toml:ro
+    environment:
+      - RUST_LOG=yantrikdb_server=info
+    command: yantrikdb serve --config /etc/yantrikdb/yantrikdb.toml
+
+  yantrikdb-2:
+    image: ghcr.io/yantrikos/yantrikdb:latest
+    container_name: yantrikdb-2
+    restart: unless-stopped
+    ports:
+      - "27437:7437"
+      - "27438:7438"
+      - "27440:7440"
+    volumes:
+      - yantrikdb-2-data:/var/lib/yantrikdb
+      - ./node2.toml:/etc/yantrikdb/yantrikdb.toml:ro
+    environment:
+      - RUST_LOG=yantrikdb_server=info
+    command: yantrikdb serve --config /etc/yantrikdb/yantrikdb.toml
+
+  yantrikdb-witness:
+    image: ghcr.io/yantrikos/yantrikdb-witness:latest
+    container_name: yantrikdb-witness
+    restart: unless-stopped
+    ports:
+      - "37440:7440"
+    volumes:
+      - witness-state:/var/lib/yantrikdb-witness
+    environment:
+      - YANTRIKDB_CLUSTER_SECRET=${YANTRIKDB_CLUSTER_SECRET:?set YANTRIKDB_CLUSTER_SECRET in env}
+    command: ["--node-id", "99", "--port", "7440", "--state-file", "/var/lib/yantrikdb-witness/state.json"]
+
+volumes:
+  yantrikdb-1-data:
+  yantrikdb-2-data:
+  witness-state:

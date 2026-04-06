@@ -18,14 +18,22 @@ jobs:
             target: x86_64-unknown-linux-gnu
             ext: ""
             os_label: linux-amd64
+            target_dir: target/release
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
             os_label: windows-amd64
-          - os: macos-latest
+            target_dir: target/release
+          - os: macos-14
             target: aarch64-apple-darwin
             ext: ""
             os_label: macos-arm64
+            target_dir: target/aarch64-apple-darwin/release
+          - os: macos-14  # Apple Silicon runner cross-compiling for Intel
+            target: x86_64-apple-darwin
+            ext: ""
+            os_label: macos-amd64
+            target_dir: target/x86_64-apple-darwin/release
 
     runs-on: ${{ matrix.os }}
 
@@ -34,6 +42,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -42,24 +52,24 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-release-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.toml') }}
 
       - name: Build server release binary
-        run: cargo build -p yantrikdb-server --release
+        run: cargo build -p yantrikdb-server --release --target ${{ matrix.target }}
 
       - name: Build yql release binary
-        run: cargo build -p yql --release
+        run: cargo build -p yql --release --target ${{ matrix.target }}
 
       - name: Build witness release binary
-        run: cargo build -p yantrikdb-witness --release
+        run: cargo build -p yantrikdb-witness --release --target ${{ matrix.target }}
 
       - name: Stage binaries
         shell: bash
         run: |
           mkdir -p staging
-          cp target/release/yantrikdb${{ matrix.ext }} staging/yantrikdb-${{ matrix.os_label }}${{ matrix.ext }}
-          cp target/release/yql${{ matrix.ext }} staging/yql-${{ matrix.os_label }}${{ matrix.ext }}
-          cp target/release/yantrikdb-witness${{ matrix.ext }} staging/yantrikdb-witness-${{ matrix.os_label }}${{ matrix.ext }}
+          cp target/${{ matrix.target }}/release/yantrikdb${{ matrix.ext }} staging/yantrikdb-${{ matrix.os_label }}${{ matrix.ext }}
+          cp target/${{ matrix.target }}/release/yql${{ matrix.ext }} staging/yql-${{ matrix.os_label }}${{ matrix.ext }}
+          cp target/${{ matrix.target }}/release/yantrikdb-witness${{ matrix.ext }} staging/yantrikdb-witness-${{ matrix.os_label }}${{ matrix.ext }}
 
       - name: Upload yantrikdb artifact
         uses: actions/upload-artifact@v4
@@ -99,9 +109,12 @@ jobs:
             artifacts/yantrikdb-linux-amd64/yantrikdb-linux-amd64
             artifacts/yantrikdb-windows-amd64.exe/yantrikdb-windows-amd64.exe
             artifacts/yantrikdb-macos-arm64/yantrikdb-macos-arm64
+            artifacts/yantrikdb-macos-amd64/yantrikdb-macos-amd64
             artifacts/yql-linux-amd64/yql-linux-amd64
             artifacts/yql-windows-amd64.exe/yql-windows-amd64.exe
             artifacts/yql-macos-arm64/yql-macos-arm64
+            artifacts/yql-macos-amd64/yql-macos-amd64
             artifacts/yantrikdb-witness-linux-amd64/yantrikdb-witness-linux-amd64
             artifacts/yantrikdb-witness-windows-amd64.exe/yantrikdb-witness-windows-amd64.exe
             artifacts/yantrikdb-witness-macos-arm64/yantrikdb-witness-macos-arm64
+            artifacts/yantrikdb-witness-macos-amd64/yantrikdb-witness-macos-amd64

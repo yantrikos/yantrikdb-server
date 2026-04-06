@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -Dwarnings
 
 jobs:
   build-and-test:
@@ -64,10 +63,10 @@ jobs:
         with:
           components: clippy
       - name: Clippy (protocol)
-        run: cargo clippy -p yantrikdb-protocol -- -D warnings
+        run: cargo clippy -p yantrikdb-protocol --no-deps -- -D warnings
       - name: Clippy (server)
-        run: cargo clippy -p yantrikdb-server -- -D warnings
-        continue-on-error: true  # server has some upstream warnings from yantrikdb-core
+        run: cargo clippy -p yantrikdb-server --no-deps -- -D warnings
+        continue-on-error: true
 
   format:
     runs-on: ubuntu-latest

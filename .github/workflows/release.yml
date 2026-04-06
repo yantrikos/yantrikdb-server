@@ -22,10 +22,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             ext: ".exe"
             os_label: windows-amd64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            ext: ""
-            os_label: macos-amd64
           - os: macos-latest
             target: aarch64-apple-darwin
             ext: ""
@@ -102,13 +98,10 @@ jobs:
           files: |
             artifacts/yantrikdb-linux-amd64/yantrikdb-linux-amd64
             artifacts/yantrikdb-windows-amd64.exe/yantrikdb-windows-amd64.exe
-            artifacts/yantrikdb-macos-amd64/yantrikdb-macos-amd64
             artifacts/yantrikdb-macos-arm64/yantrikdb-macos-arm64
             artifacts/yql-linux-amd64/yql-linux-amd64
             artifacts/yql-windows-amd64.exe/yql-windows-amd64.exe
-            artifacts/yql-macos-amd64/yql-macos-amd64
             artifacts/yql-macos-arm64/yql-macos-arm64
             artifacts/yantrikdb-witness-linux-amd64/yantrikdb-witness-linux-amd64
             artifacts/yantrikdb-witness-windows-amd64.exe/yantrikdb-witness-windows-amd64.exe
-            artifacts/yantrikdb-witness-macos-amd64/yantrikdb-witness-macos-amd64
             artifacts/yantrikdb-witness-macos-arm64/yantrikdb-witness-macos-arm64

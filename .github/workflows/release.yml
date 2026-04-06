@@ -54,12 +54,16 @@ jobs:
       - name: Build yql release binary
         run: cargo build -p yql --release
 
+      - name: Build witness release binary
+        run: cargo build -p yantrikdb-witness --release
+
       - name: Stage binaries
         shell: bash
         run: |
           mkdir -p staging
           cp target/release/yantrikdb${{ matrix.ext }} staging/yantrikdb-${{ matrix.os_label }}${{ matrix.ext }}
           cp target/release/yql${{ matrix.ext }} staging/yql-${{ matrix.os_label }}${{ matrix.ext }}
+          cp target/release/yantrikdb-witness${{ matrix.ext }} staging/yantrikdb-witness-${{ matrix.os_label }}${{ matrix.ext }}
 
       - name: Upload yantrikdb artifact
         uses: actions/upload-artifact@v4
@@ -72,6 +76,12 @@ jobs:
         with:
           name: yql-${{ matrix.os_label }}${{ matrix.ext }}
           path: staging/yql-${{ matrix.os_label }}${{ matrix.ext }}
+
+      - name: Upload witness artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yantrikdb-witness-${{ matrix.os_label }}${{ matrix.ext }}
+          path: staging/yantrikdb-witness-${{ matrix.os_label }}${{ matrix.ext }}
 
   release:
     needs: build
@@ -98,3 +108,7 @@ jobs:
             artifacts/yql-windows-amd64.exe/yql-windows-amd64.exe
             artifacts/yql-macos-amd64/yql-macos-amd64
             artifacts/yql-macos-arm64/yql-macos-arm64
+            artifacts/yantrikdb-witness-linux-amd64/yantrikdb-witness-linux-amd64
+            artifacts/yantrikdb-witness-windows-amd64.exe/yantrikdb-witness-windows-amd64.exe
+            artifacts/yantrikdb-witness-macos-amd64/yantrikdb-witness-macos-amd64
+            artifacts/yantrikdb-witness-macos-arm64/yantrikdb-witness-macos-arm64

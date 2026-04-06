@@ -40,6 +40,9 @@ jobs:
       - name: Build server crate
         run: cargo build -p yantrikdb-server
 
+      - name: Build yql crate
+        run: cargo build -p yql
+
       - name: Test protocol crate
         run: cargo test -p yantrikdb-protocol
 

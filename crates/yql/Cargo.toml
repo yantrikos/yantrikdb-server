@@ -1,0 +1,35 @@
+[package]
+name = "yql"
+version = "0.1.0"
+edition = "2021"
+description = "Interactive client for YantrikDB — like psql for cognitive memory"
+license = "MIT"
+
+[[bin]]
+name = "yql"
+path = "src/main.rs"
+
+[dependencies]
+# REPL
+rustyline = "14"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+# CLI args
+clap = { version = "4", features = ["derive", "env"] }
+
+# Data
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Output
+comfy-table = "7"
+colored = "2"
+
+# Errors
+anyhow = "1"
+
+# Misc
+dirs = "5"
+shell-words = "1"

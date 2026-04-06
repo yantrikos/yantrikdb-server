@@ -15,10 +15,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: yantrikdb-linux-amd64
+            ext: ""
+            os_label: linux-amd64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: yantrikdb-windows-amd64.exe
+            ext: ".exe"
+            os_label: windows-amd64
 
     runs-on: ${{ matrix.os }}
 
@@ -37,22 +39,30 @@ jobs:
             target
           key: ${{ runner.os }}-release-${{ hashFiles('**/Cargo.toml') }}
 
-      - name: Build release binary
+      - name: Build server release binary
         run: cargo build -p yantrikdb-server --release
 
-      - name: Rename binary (Linux)
-        if: runner.os == 'Linux'
-        run: cp target/release/yantrikdb ${{ matrix.artifact }}
+      - name: Build yql release binary
+        run: cargo build -p yql --release
 
-      - name: Rename binary (Windows)
-        if: runner.os == 'Windows'
-        run: cp target/release/yantrikdb.exe ${{ matrix.artifact }}
+      - name: Stage binaries
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp target/release/yantrikdb${{ matrix.ext }} staging/yantrikdb-${{ matrix.os_label }}${{ matrix.ext }}
+          cp target/release/yql${{ matrix.ext }} staging/yql-${{ matrix.os_label }}${{ matrix.ext }}
 
-      - name: Upload artifact
+      - name: Upload yantrikdb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: yantrikdb-${{ matrix.os_label }}${{ matrix.ext }}
+          path: staging/yantrikdb-${{ matrix.os_label }}${{ matrix.ext }}
+
+      - name: Upload yql artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yql-${{ matrix.os_label }}${{ matrix.ext }}
+          path: staging/yql-${{ matrix.os_label }}${{ matrix.ext }}
 
   release:
     needs: build
@@ -73,3 +83,5 @@ jobs:
           files: |
             artifacts/yantrikdb-linux-amd64/yantrikdb-linux-amd64
             artifacts/yantrikdb-windows-amd64.exe/yantrikdb-windows-amd64.exe
+            artifacts/yql-linux-amd64/yql-linux-amd64
+            artifacts/yql-windows-amd64.exe/yql-windows-amd64.exe

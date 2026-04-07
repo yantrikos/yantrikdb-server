@@ -136,7 +136,21 @@ where
                     }
                 }
 
-                let response_frames = execute_and_respond(cmd, &engine, &state.control, stream_id);
+                // Run the engine call on a blocking thread so a slow op
+                // (think, consolidate, embed) cannot park the tokio worker
+                // serving this connection. Holding std::sync::Mutex across
+                // an await would be a deadlock footgun; spawn_blocking makes
+                // that structurally impossible.
+                let engine_clone = std::sync::Arc::clone(&engine);
+                let control_clone = std::sync::Arc::clone(&state.control);
+                let response_frames = tokio::task::spawn_blocking(move || {
+                    execute_and_respond(cmd, &engine_clone, &control_clone, stream_id)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(error = %e, "execute_and_respond join error");
+                    vec![]
+                });
                 for f in response_frames {
                     framed.send(f).await?;
                 }

@@ -86,12 +86,27 @@ fn resolve_engine(
     Ok((db_id, engine))
 }
 
-fn execute_cmd(
-    engine: &Arc<std::sync::Mutex<yantrikdb::YantrikDB>>,
+/// Execute a command on a blocking thread so a slow engine call (think,
+/// consolidate, embed) cannot park a tokio worker. The engine and control
+/// mutexes are `std::sync::Mutex`, which must NEVER be held across an await
+/// — running the whole call inside `spawn_blocking` makes that structurally
+/// impossible.
+async fn execute_cmd(
+    engine: Arc<std::sync::Mutex<yantrikdb::YantrikDB>>,
     cmd: Command,
-    control: &std::sync::Mutex<crate::control::ControlDb>,
+    control: Arc<std::sync::Mutex<crate::control::ControlDb>>,
 ) -> AppResult {
-    match handler::execute(engine, cmd, Some(control)) {
+    let result =
+        tokio::task::spawn_blocking(move || handler::execute(&engine, cmd, Some(control.as_ref())))
+            .await
+            .map_err(|e| {
+                app_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("join error: {e}"),
+                )
+            })?;
+
+    match result {
         Ok(CommandResult::Json(v)) => Ok(Json(v)),
         Ok(CommandResult::RecallResults { results, total }) => {
             Ok(Json(json!({ "results": results, "total": total })))
@@ -200,7 +215,7 @@ async fn remember(
             })
         }),
     };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn remember_batch(
@@ -283,7 +298,7 @@ async fn remember_batch(
     }
 
     let cmd = Command::RememberBatch { memories };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn recall(
@@ -333,7 +348,7 @@ async fn recall(
             })
         }),
     };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn forget(
@@ -350,7 +365,7 @@ async fn forget(
         .as_str()
         .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'rid'"))?
         .into();
-    execute_cmd(&engine, Command::Forget { rid }, &state.control)
+    execute_cmd(engine, Command::Forget { rid }, state.control.clone()).await
 }
 
 async fn relate(
@@ -378,7 +393,7 @@ async fn relate(
             .into(),
         weight: body.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0),
     };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn think(
@@ -413,7 +428,7 @@ async fn think(
             .and_then(|v| v.as_u64())
             .unwrap_or(50) as usize,
     };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn conflicts(
@@ -430,7 +445,7 @@ async fn conflicts(
         entity: None,
         limit: 50,
     };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn resolve_conflict(
@@ -463,7 +478,7 @@ async fn resolve_conflict(
             .and_then(|v| v.as_str())
             .map(String::from),
     };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn session_start(
@@ -489,7 +504,7 @@ async fn session_start(
             .into(),
         metadata: body.get("metadata").cloned().unwrap_or(json!({})),
     };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn session_end(
@@ -509,7 +524,7 @@ async fn session_end(
         session_id,
         summary,
     };
-    execute_cmd(&engine, cmd, &state.control)
+    execute_cmd(engine, cmd, state.control.clone()).await
 }
 
 async fn personality(
@@ -520,7 +535,7 @@ async fn personality(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
-    execute_cmd(&engine, Command::Personality, &state.control)
+    execute_cmd(engine, Command::Personality, state.control.clone()).await
 }
 
 async fn stats(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> AppResult {
@@ -528,7 +543,7 @@ async fn stats(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMa
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
-    execute_cmd(&engine, Command::Stats, &state.control)
+    execute_cmd(engine, Command::Stats, state.control.clone()).await
 }
 
 async fn create_database(

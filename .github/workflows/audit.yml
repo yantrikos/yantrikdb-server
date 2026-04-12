@@ -1,0 +1,32 @@
+name: Security Audit
+
+on:
+  schedule:
+    # Every Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit
+        run: cargo audit --json > audit-report.json 2>&1 || true
+
+      - name: Check for vulnerabilities
+        run: |
+          if cargo audit 2>&1 | grep -q "Crate:"; then
+            echo "::error::Security vulnerabilities found — see cargo audit output above"
+            cargo audit
+            exit 1
+          else
+            echo "No known vulnerabilities found"
+          fi

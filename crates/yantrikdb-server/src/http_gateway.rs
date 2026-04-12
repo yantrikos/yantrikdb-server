@@ -125,6 +125,7 @@ async fn execute_cmd(
 
 // ── Route handlers ──────────────────────────────────────────────
 
+/// Shallow health check — always returns 200. Use for TCP-level LB probes.
 async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut payload = json!({
         "status": "ok",
@@ -141,6 +142,131 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         });
     }
     Json(payload)
+}
+
+/// Deep health check — actively probes subsystems. Returns 200 if all
+/// checks pass, 503 if any fail. Use for K8s readiness / smart LB probes.
+///
+/// Checks:
+///   1. engine mutex acquirable within 100ms (via try_lock_for)
+///   2. control.db responsive to a trivial SELECT
+///   3. cluster quorum present (if clustered)
+///
+/// Each check reports pass/fail + latency in the response body.
+async fn health_deep(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Value>) {
+    let mut checks = Vec::new();
+    let mut all_pass = true;
+
+    // 1. Engine mutex — can we acquire the default engine's lock within 100ms?
+    //    A wedged engine would fail this check.
+    {
+        let engine_check = tokio::task::spawn_blocking({
+            let control = state.control.clone();
+            let pool = state.pool.clone();
+            move || {
+                let start = std::time::Instant::now();
+                let db_record = {
+                    let ctrl = control.lock();
+                    ctrl.get_database("default").ok().flatten()
+                };
+                if let Some(rec) = db_record {
+                    if let Ok(engine) = pool.get_engine(&rec) {
+                        let timeout = std::time::Duration::from_millis(100);
+                        if engine.try_lock_for(timeout).is_some() {
+                            let elapsed = start.elapsed();
+                            return json!({
+                                "check": "engine_lock",
+                                "pass": true,
+                                "latency_ms": elapsed.as_secs_f64() * 1000.0,
+                            });
+                        }
+                    }
+                }
+                let elapsed = start.elapsed();
+                json!({
+                    "check": "engine_lock",
+                    "pass": false,
+                    "latency_ms": elapsed.as_secs_f64() * 1000.0,
+                    "error": "could not acquire engine lock within 100ms",
+                })
+            }
+        })
+        .await
+        .unwrap_or_else(|e| json!({"check": "engine_lock", "pass": false, "error": e.to_string()}));
+
+        if !engine_check["pass"].as_bool().unwrap_or(false) {
+            all_pass = false;
+        }
+        checks.push(engine_check);
+    }
+
+    // 2. Control DB — trivial SELECT to verify SQLite is responsive
+    {
+        let control_check = tokio::task::spawn_blocking({
+            let control = state.control.clone();
+            move || {
+                let start = std::time::Instant::now();
+                let ctrl = control.lock();
+                match ctrl.list_databases() {
+                    Ok(dbs) => {
+                        let elapsed = start.elapsed();
+                        json!({
+                            "check": "control_db",
+                            "pass": true,
+                            "latency_ms": elapsed.as_secs_f64() * 1000.0,
+                            "databases": dbs.len(),
+                        })
+                    }
+                    Err(e) => {
+                        let elapsed = start.elapsed();
+                        json!({
+                            "check": "control_db",
+                            "pass": false,
+                            "latency_ms": elapsed.as_secs_f64() * 1000.0,
+                            "error": e.to_string(),
+                        })
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|e| json!({"check": "control_db", "pass": false, "error": e.to_string()}));
+
+        if !control_check["pass"].as_bool().unwrap_or(false) {
+            all_pass = false;
+        }
+        checks.push(control_check);
+    }
+
+    // 3. Cluster quorum (if clustered)
+    if let Some(ref cluster) = state.cluster {
+        let healthy = cluster.is_healthy();
+        if !healthy {
+            all_pass = false;
+        }
+        checks.push(json!({
+            "check": "cluster_quorum",
+            "pass": healthy,
+            "node_id": cluster.node_id(),
+            "role": format!("{:?}", cluster.state.leader_role()),
+            "term": cluster.state.current_term(),
+            "leader": cluster.state.current_leader(),
+        }));
+    }
+
+    let status = if all_pass {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (
+        status,
+        Json(json!({
+            "status": if all_pass { "healthy" } else { "degraded" },
+            "checks": checks,
+        })),
+    )
 }
 
 /// Reject if cluster is enabled and this node doesn't accept writes.
@@ -824,6 +950,7 @@ async fn list_databases(
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/health/deep", get(health_deep))
         .route("/v1/remember", post(remember))
         .route("/v1/remember/batch", post(remember_batch))
         .route("/v1/recall", post(recall))

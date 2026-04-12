@@ -77,3 +77,15 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --check -p yantrikdb-protocol -p yantrikdb-server
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: cargo deny check
+        run: cargo deny check

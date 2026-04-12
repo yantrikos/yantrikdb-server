@@ -1,0 +1,101 @@
+# Chaos test cluster — 2 voters + 1 witness on an isolated bridge network.
+#
+# Usage:
+#   docker compose -f tests/chaos/docker-compose.chaos.yml up -d
+#   python tests/chaos/run_chaos.py
+#   docker compose -f tests/chaos/docker-compose.chaos.yml down -v
+#
+# The images must be built first:
+#   docker build -f docker/Dockerfile.yantrikdb -t yantrikdb:chaos .
+#   docker build -f docker/Dockerfile.witness -t yantrikdb-witness:chaos .
+
+services:
+  voter1:
+    image: yantrikdb:chaos
+    container_name: chaos-voter1
+    command: >
+      yantrikdb serve
+        --wire-port 7437 --http-port 7438
+        --data-dir /data
+    environment:
+      YANTRIKDB_CONFIG: |
+        [cluster]
+        node_id = 1
+        role = "voter"
+        cluster_port = 7440
+        cluster_secret = "chaos-test-secret"
+        heartbeat_interval_ms = 500
+        election_timeout_ms = 2000
+        [[cluster.peers]]
+        addr = "voter2:7440"
+        role = "voter"
+        [[cluster.peers]]
+        addr = "witness:7440"
+        role = "witness"
+    ports:
+      - "17438:7438"
+    networks:
+      chaos-net:
+        ipv4_address: 172.28.0.10
+    volumes:
+      - voter1-data:/data
+    cap_add:
+      - NET_ADMIN  # for tc netem / iptables fault injection
+
+  voter2:
+    image: yantrikdb:chaos
+    container_name: chaos-voter2
+    command: >
+      yantrikdb serve
+        --wire-port 7437 --http-port 7438
+        --data-dir /data
+    environment:
+      YANTRIKDB_CONFIG: |
+        [cluster]
+        node_id = 2
+        role = "voter"
+        cluster_port = 7440
+        cluster_secret = "chaos-test-secret"
+        heartbeat_interval_ms = 500
+        election_timeout_ms = 2000
+        [[cluster.peers]]
+        addr = "voter1:7440"
+        role = "voter"
+        [[cluster.peers]]
+        addr = "witness:7440"
+        role = "witness"
+    ports:
+      - "17439:7438"
+    networks:
+      chaos-net:
+        ipv4_address: 172.28.0.11
+    volumes:
+      - voter2-data:/data
+    cap_add:
+      - NET_ADMIN
+
+  witness:
+    image: yantrikdb-witness:chaos
+    container_name: chaos-witness
+    command: >
+      yantrikdb-witness
+        --node-id 99
+        --cluster-port 7440
+        --cluster-secret chaos-test-secret
+        --peers voter1:7440,voter2:7440
+    ports:
+      - "17440:7440"
+    networks:
+      chaos-net:
+        ipv4_address: 172.28.0.12
+
+networks:
+  chaos-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  voter1-data:
+  voter2-data:

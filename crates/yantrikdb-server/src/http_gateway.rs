@@ -103,15 +103,20 @@ async fn execute_cmd(
     cmd: Command,
     control: Arc<parking_lot::Mutex<crate::control::ControlDb>>,
 ) -> AppResult {
-    let result =
-        tokio::task::spawn_blocking(move || handler::execute(&engine, cmd, Some(control.as_ref())))
-            .await
-            .map_err(|e| {
-                app_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("join error: {e}"),
-                )
-            })?;
+    let result = tokio::task::spawn_blocking(move || {
+        // Measure engine lock acquisition time for /metrics histograms
+        let lock_start = std::time::Instant::now();
+        let db = engine.lock();
+        crate::metrics::record_engine_lock_wait(lock_start.elapsed());
+        handler::execute_with_guard(db, cmd, Some(control.as_ref()))
+    })
+    .await
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("join error: {e}"),
+        )
+    })?;
 
     match result {
         Ok(CommandResult::Json(v)) => Ok(Json(v)),
@@ -292,6 +297,7 @@ async fn remember(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("remember");
     check_writable(&state)?;
     let (_, engine) = resolve_engine(
         &state,
@@ -356,6 +362,7 @@ async fn remember_batch(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("remember_batch");
     check_writable(&state)?;
     let (_, engine) = resolve_engine(
         &state,
@@ -439,6 +446,7 @@ async fn recall(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("recall");
     let (_, engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
@@ -489,6 +497,7 @@ async fn forget(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("forget");
     check_writable(&state)?;
     let (_, engine) = resolve_engine(
         &state,
@@ -506,6 +515,7 @@ async fn relate(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("relate");
     check_writable(&state)?;
     let (_, engine) = resolve_engine(
         &state,
@@ -534,6 +544,7 @@ async fn think(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("think");
     check_writable(&state)?;
     let (_, engine) = resolve_engine(
         &state,
@@ -568,6 +579,7 @@ async fn conflicts(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("conflicts");
     let (_, engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
@@ -587,6 +599,7 @@ async fn resolve_conflict(
     AxumPath(conflict_id): AxumPath<String>,
     Json(body): Json<Value>,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("resolve_conflict");
     check_writable(&state)?;
     let (_, engine) = resolve_engine(
         &state,
@@ -664,6 +677,7 @@ async fn personality(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
 ) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("personality");
     let (_, engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
@@ -672,6 +686,7 @@ async fn personality(
 }
 
 async fn stats(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("stats");
     let (_, engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
@@ -883,6 +898,9 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
             }
         }
     }
+
+    // Append per-handler histograms, lock-wait histograms, request counters
+    out.push_str(&crate::metrics::global().render_prometheus());
 
     out
 }

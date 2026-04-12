@@ -53,7 +53,13 @@ rand = { version = "0.8", features = ["small_rng"] }
 
 # Observability
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Metrics — lightweight Prometheus-compatible histograms and counters.
+# metrics is the facade; metrics-process gives us process-level gauges
+# (RSS, FDs, CPU). We render to Prometheus text format in /metrics by hand
+# rather than using a full exporter, keeping the dep tree small.
+metrics = "0.24"
 
 # Config
 toml = "0.8"
@@ -65,6 +71,11 @@ rustls-pemfile = "2"
 
 # Embeddings
 fastembed = { version = "5", default-features = false, features = ["ort-load-dynamic", "hf-hub-native-tls"] }
+
+# Optional: tokio-console for live runtime inspection.
+# Build with: cargo build --features tokio-console
+# Then attach: tokio-console http://127.0.0.1:6669
+console-subscriber = { version = "0.4", optional = true }
 
 # Misc
 anyhow = "1"
@@ -79,3 +90,11 @@ reqwest = { version = "0.12", features = ["json", "blocking"] }
 reqwest = { version = "0.12", features = ["json"] }
 tempfile = "3"
 tokio-test = "0.4"
+
+[features]
+default = []
+# Enable tokio-console subscriber for live task/resource inspection.
+# Build with: cargo build --features tokio-console
+# Then attach: tokio-console http://127.0.0.1:6669
+# Adds ~5% overhead — use for debugging, not production.
+tokio-console = ["dep:console-subscriber"]

@@ -7,6 +7,7 @@ mod control;
 mod embedder;
 mod handler;
 mod http_gateway;
+pub(crate) mod metrics;
 mod server;
 mod tenant_pool;
 mod tls;
@@ -186,12 +187,37 @@ enum TokenAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "yantrikdb_server=info".into()),
-        )
-        .init();
+    // Structured logging. Set YANTRIKDB_LOG_JSON=1 for newline-delimited JSON
+    // output (for log aggregators, grep-friendly ops). Default is human-readable.
+    //
+    // When built with --features tokio-console, the console-subscriber layer
+    // is added for live runtime inspection via `tokio-console`.
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "yantrikdb_server=info".into());
+
+    #[cfg(feature = "tokio-console")]
+    {
+        use tracing_subscriber::prelude::*;
+        let console_layer = console_subscriber::spawn();
+        let fmt_layer = tracing_subscriber::fmt::layer().with_filter(env_filter);
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(fmt_layer)
+            .init();
+        tracing::info!("tokio-console enabled — attach via: tokio-console http://127.0.0.1:6669");
+    }
+
+    #[cfg(not(feature = "tokio-console"))]
+    {
+        if std::env::var("YANTRIKDB_LOG_JSON").as_deref() == Ok("1") {
+            tracing_subscriber::fmt()
+                .json()
+                .with_env_filter(env_filter)
+                .init();
+        } else {
+            tracing_subscriber::fmt().with_env_filter(env_filter).init();
+        }
+    }
 
     let cli = Cli::parse();
 
@@ -745,6 +771,47 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         workers,
         cluster: cluster_ctx.clone(),
     });
+
+    // Built-in watchdog — periodically probes the engine lock and fires a
+    // metric if acquisition takes too long. Complement to the external bash
+    // watchdog: this one runs in-process and feeds /metrics directly, while
+    // the external one captures gdb backtraces and triggers ntfy alerts.
+    {
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let pool = state_clone.pool.clone();
+                let control = state_clone.control.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    // Probe engine lock on default db
+                    let db_record = {
+                        let ctrl = control.lock();
+                        ctrl.get_database("default").ok().flatten()
+                    };
+                    if let Some(rec) = db_record {
+                        if let Ok(engine) = pool.get_engine(&rec) {
+                            let start = std::time::Instant::now();
+                            let timeout = std::time::Duration::from_secs(5);
+                            if engine.try_lock_for(timeout).is_some() {
+                                crate::metrics::record_engine_lock_wait(start.elapsed());
+                            } else {
+                                crate::metrics::record_engine_lock_wait(timeout);
+                                tracing::warn!(
+                                    wait_secs = 5,
+                                    "built-in watchdog: engine lock not acquired within 5s"
+                                );
+                            }
+                        }
+                    }
+                })
+                .await;
+            }
+        });
+        tracing::info!("built-in watchdog started (15s cadence, 5s lock timeout)");
+    }
 
     // Build TLS acceptor if configured
     let tls_acceptor = if cfg.tls.is_enabled() {

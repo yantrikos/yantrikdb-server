@@ -83,6 +83,20 @@ impl WorkerRegistry {
             }));
         }
 
+        // WAL checkpoint — prevent unbounded WAL growth under steady writes.
+        // PRAGMA wal_autocheckpoint handles normal usage but can fall behind
+        // under sustained load. This explicit TRUNCATE checkpoint reclaims
+        // the WAL file space entirely.
+        {
+            let interval = Duration::from_secs(5 * 60); // every 5 minutes
+            let engine = Arc::clone(&engine);
+            let token = cancel.clone();
+            let name = db_name.clone();
+            handles.push(tokio::spawn(async move {
+                wal_checkpoint_loop(engine, interval, token, name).await;
+            }));
+        }
+
         // Oplog GC — keep oplog bounded for long-running clusters
         {
             let interval = Duration::from_secs(60 * 60); // every hour
@@ -370,6 +384,68 @@ pub async fn run_oplog_gc_loop(
         if let Ok(Some(count)) = result {
             if count > 0 {
                 tracing::info!(db = %db_name, pruned = count, "oplog GC complete");
+            }
+        }
+    }
+}
+
+/// WAL checkpoint — truncate the write-ahead log to reclaim disk space.
+///
+/// PRAGMA wal_autocheckpoint handles normal cases, but under sustained write
+/// load the WAL can grow faster than auto-checkpointing reclaims. This
+/// explicit TRUNCATE checkpoint resets the WAL file to zero size.
+async fn wal_checkpoint_loop(
+    engine: Arc<Mutex<YantrikDB>>,
+    interval: Duration,
+    cancel: CancellationToken,
+    db_name: String,
+) {
+    // Initial delay — let the engine stabilize before first checkpoint
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+        _ = cancel.cancelled() => return,
+    }
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = cancel.cancelled() => {
+                tracing::debug!(db = %db_name, "WAL checkpoint worker shutting down");
+                return;
+            }
+        }
+
+        let result = tokio::task::spawn_blocking({
+            let engine = Arc::clone(&engine);
+            let db_name = db_name.clone();
+            move || {
+                let db = engine.lock();
+                let conn = db.conn();
+
+                // Query WAL size before checkpoint for metrics
+                let wal_pages: i64 = conn
+                    .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(1))
+                    .unwrap_or(0);
+
+                if wal_pages > 0 {
+                    tracing::debug!(
+                        db = %db_name,
+                        wal_pages,
+                        "WAL checkpoint: truncated"
+                    );
+                }
+                Some(wal_pages)
+            }
+        })
+        .await;
+
+        if let Ok(Some(pages)) = result {
+            if pages > 100 {
+                tracing::info!(
+                    db = %db_name,
+                    wal_pages = pages,
+                    "WAL checkpoint: large WAL truncated"
+                );
             }
         }
     }

@@ -410,6 +410,17 @@ pub struct ErrorResponse {
 
 // ── Cluster / Replication ─────────────────────────────────────────
 
+/// Oplog format version. Bumped when the oplog entry payload encoding
+/// changes in a backward-incompatible way. The invariant: newer code must
+/// always be able to apply entries from ANY older format version, via
+/// registered migration functions. The reverse is NOT required — old code
+/// may reject entries it doesn't understand.
+///
+/// Version history:
+///   1 — initial (v0.5.0 through v0.5.10). Payload is free-form JSON per
+///       op_type. No format constraints beyond valid JSON.
+pub const OPLOG_FORMAT_VERSION: u32 = 1;
+
 /// Wire protocol version. Bumped when the handshake, frame format, or oplog
 /// entry encoding changes in a backward-incompatible way.
 ///
@@ -481,6 +492,10 @@ pub struct OplogEntryWire {
     pub hlc: Vec<u8>,
     pub embedding_hash: Option<Vec<u8>>,
     pub origin_actor: String,
+    /// Oplog format version. Added in v0.5.11. Older entries without this
+    /// field default to 0, treated as version 1. See OPLOG_FORMAT_VERSION.
+    #[serde(default)]
+    pub format_version: u32,
 }
 
 /// Push ops to a peer (used by primary → secondary push).

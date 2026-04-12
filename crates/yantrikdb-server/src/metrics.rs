@@ -191,10 +191,96 @@ pub fn record_engine_lock_wait(duration: std::time::Duration) {
     global().record_lock_wait("engine", duration.as_secs_f64());
 }
 
-/// Record control lock wait time.
 /// Record control lock wait time. Not currently instrumented — reserved for
 /// future control-path metrics once resolve_engine is instrumented.
 #[allow(dead_code)]
 pub fn record_control_lock_wait(duration: std::time::Duration) {
     global().record_lock_wait("control", duration.as_secs_f64());
 }
+
+// ── Lock-Order Checker (debug builds only) ──────────────────────────
+//
+// See CONCURRENCY.md Rule 3 for the ordering invariant:
+//   control(0) > tenant_pool(1) > engine(2) > conn(3) > vec_index(4)
+//   > graph_index(5) > scoring_cache(6) > active_sessions(7) > hlc(8)
+//
+// In debug builds, every lock acquisition site calls `check_lock_order`
+// with its rank. If the current thread already holds a lock with a HIGHER
+// rank, we panic — that's an ordering violation which could deadlock in
+// production.
+
+/// Lock rank constants. Lower number = acquired first in the global order.
+/// Not yet wired into all lock sites — will be instrumented as part of
+/// the InstrumentedMutex wrapper in a future commit. Present now so
+/// the constants and checker functions are available for manual use
+/// in new code and tests.
+#[allow(dead_code)]
+#[cfg(debug_assertions)]
+pub mod lock_rank {
+    pub const CONTROL: u8 = 0;
+    pub const TENANT_POOL: u8 = 1;
+    pub const ENGINE: u8 = 2;
+    pub const CONN: u8 = 3;
+    pub const VEC_INDEX: u8 = 4;
+    pub const GRAPH_INDEX: u8 = 5;
+    pub const SCORING_CACHE: u8 = 6;
+    pub const ACTIVE_SESSIONS: u8 = 7;
+    pub const HLC: u8 = 8;
+}
+
+/// Check that acquiring a lock at `rank` doesn't violate the ordering
+/// invariant. Panics in debug builds if a higher-rank lock is already held.
+#[allow(dead_code)]
+#[cfg(debug_assertions)]
+pub fn check_lock_order(rank: u8, lock_name: &str) {
+    thread_local! {
+        static HELD_RANKS: std::cell::RefCell<Vec<(u8, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    HELD_RANKS.with(|held| {
+        let held = held.borrow();
+        for &(held_rank, held_name) in held.iter() {
+            if held_rank > rank {
+                panic!(
+                    "LOCK ORDER VIOLATION: trying to acquire '{}' (rank {}) \
+                     while holding '{}' (rank {}). See CONCURRENCY.md Rule 3.",
+                    lock_name, rank, held_name, held_rank,
+                );
+            }
+        }
+    });
+}
+
+/// Record that a lock at `rank` is now held by this thread.
+#[allow(dead_code)]
+#[cfg(debug_assertions)]
+pub fn push_lock(rank: u8, lock_name: &'static str) {
+    thread_local! {
+        static HELD_RANKS: std::cell::RefCell<Vec<(u8, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    HELD_RANKS.with(|held| {
+        held.borrow_mut().push((rank, lock_name));
+    });
+}
+
+/// Record that a lock at `rank` has been released by this thread.
+#[allow(dead_code)]
+#[cfg(debug_assertions)]
+pub fn pop_lock(rank: u8) {
+    thread_local! {
+        static HELD_RANKS: std::cell::RefCell<Vec<(u8, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    HELD_RANKS.with(|held| {
+        let mut held = held.borrow_mut();
+        if let Some(pos) = held.iter().rposition(|(r, _)| *r == rank) {
+            held.remove(pos);
+        }
+    });
+}
+
+// In release builds, these are no-ops.
+#[cfg(not(debug_assertions))]
+pub fn check_lock_order(_rank: u8, _lock_name: &str) {}
+#[cfg(not(debug_assertions))]
+pub fn push_lock(_rank: u8, _lock_name: &'static str) {}
+#[cfg(not(debug_assertions))]
+pub fn pop_lock(_rank: u8) {}

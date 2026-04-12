@@ -27,6 +27,7 @@ pub fn entry_to_wire(e: &OplogEntry) -> OplogEntryWire {
         hlc: e.hlc.clone(),
         embedding_hash: e.embedding_hash.clone(),
         origin_actor: e.origin_actor.clone(),
+        format_version: yantrikdb_protocol::messages::OPLOG_FORMAT_VERSION,
     }
 }
 

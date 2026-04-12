@@ -1,0 +1,24 @@
+[package]
+name = "yantrikdb-protocol-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+yantrikdb-protocol = { path = ".." }
+
+[[bin]]
+name = "fuzz_unpack_frame"
+path = "fuzz_targets/fuzz_unpack_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_messagepack_deser"
+path = "fuzz_targets/fuzz_messagepack_deser.rs"
+test = false
+doc = false

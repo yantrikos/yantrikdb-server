@@ -58,6 +58,9 @@ jobs:
       - name: Test server (crash recovery)
         run: cargo test -p yantrikdb-server --test crash_recovery_test
 
+      - name: Test server (CRDT convergence)
+        run: cargo test -p yantrikdb-server --test crdt_convergence_test
+
       - name: CLI smoke test
         run: cargo run -p yantrikdb-server -- --help
 

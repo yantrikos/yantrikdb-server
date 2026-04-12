@@ -48,10 +48,32 @@ pub async fn run_wire_server(
         "wire protocol server listening"
     );
 
+    // Per-IP connection counter for rate limiting (task #78).
+    // Simple HashMap<IpAddr, AtomicU32> with a max concurrent connections
+    // per IP. Prevents a single client from exhausting file descriptors.
+    let conn_counts: Arc<parking_lot::Mutex<std::collections::HashMap<std::net::IpAddr, u32>>> =
+        Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
+    const MAX_CONNS_PER_IP: u32 = 100;
+
     loop {
         let (stream, addr) = listener.accept().await?;
+        let ip = addr.ip();
+
+        // Rate limit: reject if this IP has too many open connections
+        {
+            let mut counts = conn_counts.lock();
+            let count = counts.entry(ip).or_insert(0);
+            if *count >= MAX_CONNS_PER_IP {
+                tracing::warn!(%addr, connections = *count, "connection rate limit exceeded");
+                drop(stream);
+                continue;
+            }
+            *count += 1;
+        }
+
         let state = Arc::clone(&state);
         let tls = tls_acceptor.clone();
+        let conn_counts_clone = Arc::clone(&conn_counts);
         tokio::spawn(async move {
             tracing::debug!(%addr, "new connection");
             let result = if let Some(acceptor) = tls {
@@ -67,6 +89,16 @@ pub async fn run_wire_server(
             };
             if let Err(e) = result {
                 tracing::error!(%addr, error = %e, "connection error");
+            }
+            // Decrement per-IP connection counter
+            {
+                let mut counts = conn_counts_clone.lock();
+                if let Some(count) = counts.get_mut(&ip) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        counts.remove(&ip);
+                    }
+                }
             }
             tracing::debug!(%addr, "connection closed");
         });

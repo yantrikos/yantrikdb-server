@@ -79,6 +79,7 @@ console-subscriber = { version = "0.4", optional = true }
 
 # Misc
 anyhow = "1"
+blake3 = "1"
 thiserror = "2"
 uuid7 = "1"
 bytes = "1"

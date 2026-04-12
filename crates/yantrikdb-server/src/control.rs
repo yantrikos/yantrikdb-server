@@ -25,6 +25,9 @@ pub struct TenantQuota {
     pub max_memories: i64,
     pub max_batch_size: i64,
     pub max_rps: i64,
+    /// Maximum oplog entries before writes are rejected until GC catches up.
+    /// Default 500k entries (~200MB at avg 400 bytes/entry).
+    pub max_oplog_entries: i64,
 }
 
 impl Default for TenantQuota {
@@ -33,6 +36,7 @@ impl Default for TenantQuota {
             max_memories: 1_000_000,
             max_batch_size: 10_000,
             max_rps: 1_000,
+            max_oplog_entries: 500_000,
         }
     }
 }
@@ -202,6 +206,7 @@ impl ControlDb {
                     max_memories: row.get(0)?,
                     max_batch_size: row.get(1)?,
                     max_rps: row.get(2)?,
+                    ..TenantQuota::default()
                 })
             },
         );

@@ -1104,6 +1104,117 @@ async fn control_snapshot(
     Ok(Json(serde_json::to_value(snapshot).unwrap_or_default()))
 }
 
+/// POST /v1/admin/snapshot — create an online backup of a tenant database.
+///
+/// Takes a consistent snapshot by WAL-checkpointing then copying the SQLite
+/// file while holding the engine lock. Returns the backup path + BLAKE3
+/// checksum. Authenticated by cluster master token.
+///
+/// Body: `{"database": "default", "output_dir": "/tmp/backups"}` (optional
+/// output_dir, defaults to data_dir/snapshots/).
+async fn admin_snapshot(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    // Require cluster master token
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "missing Bearer token"))?;
+
+    let is_master = state
+        .cluster
+        .as_ref()
+        .and_then(|c| c.config.cluster_secret.as_ref())
+        .map(|s| token == s.as_str())
+        .unwrap_or(false);
+
+    if !is_master {
+        return Err(app_error(
+            StatusCode::FORBIDDEN,
+            "snapshot requires cluster master token",
+        ));
+    }
+
+    let db_name = body
+        .get("database")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+
+    let output_dir = body
+        .get("output_dir")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| state.pool.data_dir().join("snapshots"));
+
+    let control = state.control.clone();
+    let pool = state.pool.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        let db_record = {
+            let ctrl = control.lock();
+            ctrl.get_database(&db_name)?
+                .ok_or_else(|| anyhow::anyhow!("database '{}' not found", db_name))?
+        };
+
+        let engine = pool.get_engine(&db_record)?;
+        let db = engine.lock();
+
+        // WAL checkpoint before snapshot for consistency
+        let conn = db.conn();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+        drop(conn);
+
+        // Source path
+        let src_dir = pool.data_dir().join(&db_record.path);
+        let src_db = src_dir.join("yantrik.db");
+
+        if !src_db.exists() {
+            anyhow::bail!("database file not found: {:?}", src_db);
+        }
+
+        // Destination
+        std::fs::create_dir_all(&output_dir)?;
+        let ts = chrono_ts();
+        let dest_name = format!("{}-{}.db", db_name, ts);
+        let dest_path = output_dir.join(&dest_name);
+
+        // Copy the database file
+        std::fs::copy(&src_db, &dest_path)?;
+
+        // Compute checksum
+        let data = std::fs::read(&dest_path)?;
+        let hash = blake3::hash(&data);
+        let size = data.len();
+
+        Ok(serde_json::json!({
+            "database": db_name,
+            "path": dest_path.to_str().unwrap_or(""),
+            "size_bytes": size,
+            "checksum_blake3": hash.to_hex().to_string(),
+            "timestamp": ts,
+        }))
+    })
+    .await
+    .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(result))
+}
+
+/// Simple timestamp for backup filenames.
+fn chrono_ts() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{}", secs)
+}
+
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -1126,6 +1237,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster", get(cluster_status))
         .route("/v1/cluster/promote", post(cluster_promote))
         .route("/v1/admin/control-snapshot", get(control_snapshot))
+        .route("/v1/admin/snapshot", post(admin_snapshot))
         .route("/metrics", get(metrics))
         .with_state(state)
 }

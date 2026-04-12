@@ -18,6 +18,25 @@ pub struct DatabaseRecord {
     pub created_at: String,
 }
 
+/// Per-tenant resource quotas. Generous defaults ensure existing tenants
+/// aren't broken; tighten per-database via the admin API.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TenantQuota {
+    pub max_memories: i64,
+    pub max_batch_size: i64,
+    pub max_rps: i64,
+}
+
+impl Default for TenantQuota {
+    fn default() -> Self {
+        Self {
+            max_memories: 1_000_000,
+            max_batch_size: 10_000,
+            max_rps: 1_000,
+        }
+    }
+}
+
 /// Metadata row for a token. Currently not returned by any code path —
 /// the control DB operates by token hash, not by record. Reserved for
 /// the `/v1/admin/tokens` listing endpoint (planned).
@@ -64,6 +83,14 @@ impl ControlDb {
             );
 
             CREATE INDEX IF NOT EXISTS idx_tokens_db ON tokens(database_id);
+
+            CREATE TABLE IF NOT EXISTS quotas (
+                database_id INTEGER PRIMARY KEY REFERENCES databases(id),
+                max_memories    INTEGER NOT NULL DEFAULT 1000000,
+                max_batch_size  INTEGER NOT NULL DEFAULT 10000,
+                max_rps         INTEGER NOT NULL DEFAULT 1000,
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             ",
         )?;
         Ok(())
@@ -161,6 +188,49 @@ impl ControlDb {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    // ── Quota management ────────────────────────────────────────────
+
+    /// Get the quota for a database. Returns defaults if no explicit quota set.
+    pub fn get_quota(&self, database_id: i64) -> anyhow::Result<TenantQuota> {
+        let result = self.conn.query_row(
+            "SELECT max_memories, max_batch_size, max_rps FROM quotas WHERE database_id = ?1",
+            params![database_id],
+            |row| {
+                Ok(TenantQuota {
+                    max_memories: row.get(0)?,
+                    max_batch_size: row.get(1)?,
+                    max_rps: row.get(2)?,
+                })
+            },
+        );
+        match result {
+            Ok(q) => Ok(q),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(TenantQuota::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Set or update the quota for a database.
+    #[allow(dead_code)]
+    pub fn set_quota(&self, database_id: i64, quota: &TenantQuota) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO quotas (database_id, max_memories, max_batch_size, max_rps, updated_at)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+             ON CONFLICT(database_id) DO UPDATE SET
+                max_memories = excluded.max_memories,
+                max_batch_size = excluded.max_batch_size,
+                max_rps = excluded.max_rps,
+                updated_at = excluded.updated_at",
+            params![
+                database_id,
+                quota.max_memories,
+                quota.max_batch_size,
+                quota.max_rps,
+            ],
+        )?;
+        Ok(())
     }
 
     /// Count total databases.

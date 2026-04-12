@@ -27,7 +27,14 @@ pub struct AppState {
     pub workers: WorkerRegistry,
     /// Optional cluster context — None when running in single-node mode.
     pub cluster: Option<Arc<crate::cluster::ClusterContext>>,
+    /// Inflight blocking operations counter for load shedding.
+    /// When this exceeds the max, new requests are rejected with 503.
+    pub inflight: std::sync::atomic::AtomicU32,
 }
+
+/// Maximum concurrent blocking operations before shedding load.
+/// Default: 256 (tokio's default blocking pool is 512, shed at 50%).
+pub const MAX_INFLIGHT: u32 = 256;
 
 pub async fn run_wire_server(
     listener: TcpListener,

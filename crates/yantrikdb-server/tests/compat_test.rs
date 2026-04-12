@@ -70,26 +70,21 @@ fn test_data_dir_survives_reopen() {
         let db = yantrikdb::YantrikDB::new(db_path.to_str().unwrap(), dim).unwrap();
 
         let stats = db.stats(None).unwrap();
-        assert_eq!(
-            stats.active_memories, 2,
-            "expected 2 memories after reopen"
-        );
+        assert_eq!(stats.active_memories, 2, "expected 2 memories after reopen");
         assert!(stats.edges >= 1, "expected at least 1 edge after reopen");
 
         // Recall should find memories
         let results = db
             .recall(
-                &emb,
-                10,
-                None,   // time_window
-                None,   // memory_type
-                false,  // include_consolidated
-                false,  // expand_entities
-                None,   // query_text
-                false,  // skip_reinforce
-                None,   // namespace
-                None,   // domain
-                None,   // source
+                &emb, 10, None,  // time_window
+                None,  // memory_type
+                false, // include_consolidated
+                false, // expand_entities
+                None,  // query_text
+                false, // skip_reinforce
+                None,  // namespace
+                None,  // domain
+                None,  // source
             )
             .unwrap();
         assert!(

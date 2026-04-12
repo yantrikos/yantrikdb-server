@@ -98,11 +98,31 @@ fn resolve_engine(
 /// mutexes are `parking_lot::Mutex`, which must NEVER be held across an await
 /// — running the whole call inside `spawn_blocking` makes that structurally
 /// impossible.
+///
+/// Load shedding: if the inflight count exceeds MAX_INFLIGHT, reject with
+/// 503 immediately instead of queuing. Better to fail fast than pile up.
 async fn execute_cmd(
     engine: Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>,
     cmd: Command,
     control: Arc<parking_lot::Mutex<crate::control::ControlDb>>,
+    inflight: &std::sync::atomic::AtomicU32,
 ) -> AppResult {
+    use std::sync::atomic::Ordering;
+
+    // Load shed: reject if too many ops in flight
+    let current = inflight.fetch_add(1, Ordering::Relaxed);
+    if current >= crate::server::MAX_INFLIGHT {
+        inflight.fetch_sub(1, Ordering::Relaxed);
+        return Err(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "server overloaded: {} inflight ops (max {}). Retry later.",
+                current,
+                crate::server::MAX_INFLIGHT,
+            ),
+        ));
+    }
+
     let result = tokio::task::spawn_blocking(move || {
         // Measure engine lock acquisition time for /metrics histograms
         let lock_start = std::time::Instant::now();
@@ -116,8 +136,11 @@ async fn execute_cmd(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("join error: {e}"),
         )
-    })?;
+    });
 
+    inflight.fetch_sub(1, Ordering::Relaxed);
+
+    let result = result?;
     match result {
         Ok(CommandResult::Json(v)) => Ok(Json(v)),
         Ok(CommandResult::RecallResults { results, total }) => {
@@ -274,6 +297,40 @@ async fn health_deep(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Va
     )
 }
 
+/// Reject if the tenant would exceed their max_memories quota after adding
+/// `count` new memories. Reads quota from control.db and current memory
+/// count from the engine's stats.
+fn check_memory_quota(
+    state: &AppState,
+    db_id: i64,
+    engine: &EngineHandle,
+    count: usize,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let quota = {
+        let ctrl = state.control.lock();
+        ctrl.get_quota(db_id).unwrap_or_default()
+    };
+
+    // Quick check via engine stats (no lock held across the check — we
+    // take a snapshot then drop).
+    let current = engine
+        .try_lock()
+        .and_then(|db| db.stats(None).ok())
+        .map(|s| s.active_memories)
+        .unwrap_or(0);
+
+    if current + count as i64 > quota.max_memories {
+        return Err(app_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "would exceed memory quota: current={}, adding={}, max={}",
+                current, count, quota.max_memories,
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Reject if cluster is enabled and this node doesn't accept writes.
 fn check_writable(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {
     if let Some(ref cluster) = state.cluster {
@@ -299,10 +356,14 @@ async fn remember(
 ) -> AppResult {
     let _timer = crate::metrics::HandlerTimer::new("remember");
     check_writable(&state)?;
-    let (_, engine) = resolve_engine(
+    let (db_id, engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
+
+    // Quota check: max_memories
+    check_memory_quota(&state, db_id, &engine, 1)?;
+
     let cmd = Command::Remember {
         text: body["text"]
             .as_str()
@@ -354,7 +415,7 @@ async fn remember(
             })
         }),
     };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn remember_batch(
@@ -364,7 +425,7 @@ async fn remember_batch(
 ) -> AppResult {
     let _timer = crate::metrics::HandlerTimer::new("remember_batch");
     check_writable(&state)?;
-    let (_, engine) = resolve_engine(
+    let (db_id, engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
@@ -377,6 +438,26 @@ async fn remember_batch(
     if memories_arr.is_empty() {
         return Ok(Json(json!({"rids": [], "count": 0})));
     }
+
+    // Quota checks: batch size + total memory count
+    let quota = {
+        let ctrl = state.control.lock();
+        ctrl.get_quota(db_id).unwrap_or_default()
+    };
+
+    if memories_arr.len() > quota.max_batch_size as usize {
+        return Err(app_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "batch size {} exceeds quota {} for this database",
+                memories_arr.len(),
+                quota.max_batch_size
+            ),
+        ));
+    }
+
+    check_memory_quota(&state, db_id, &engine, memories_arr.len())?;
+
     if memories_arr.len() > 10_000 {
         return Err(app_error(
             StatusCode::BAD_REQUEST,
@@ -438,7 +519,7 @@ async fn remember_batch(
     }
 
     let cmd = Command::RememberBatch { memories };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn recall(
@@ -489,7 +570,7 @@ async fn recall(
             })
         }),
     };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn forget(
@@ -507,7 +588,13 @@ async fn forget(
         .as_str()
         .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'rid'"))?
         .into();
-    execute_cmd(engine, Command::Forget { rid }, state.control.clone()).await
+    execute_cmd(
+        engine,
+        Command::Forget { rid },
+        state.control.clone(),
+        &state.inflight,
+    )
+    .await
 }
 
 async fn relate(
@@ -536,7 +623,7 @@ async fn relate(
             .into(),
         weight: body.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0),
     };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn think(
@@ -572,7 +659,7 @@ async fn think(
             .and_then(|v| v.as_u64())
             .unwrap_or(50) as usize,
     };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn conflicts(
@@ -590,7 +677,7 @@ async fn conflicts(
         entity: None,
         limit: 50,
     };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn resolve_conflict(
@@ -624,7 +711,7 @@ async fn resolve_conflict(
             .and_then(|v| v.as_str())
             .map(String::from),
     };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn session_start(
@@ -650,7 +737,7 @@ async fn session_start(
             .into(),
         metadata: body.get("metadata").cloned().unwrap_or(json!({})),
     };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn session_end(
@@ -670,7 +757,7 @@ async fn session_end(
         session_id,
         summary,
     };
-    execute_cmd(engine, cmd, state.control.clone()).await
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
 async fn personality(
@@ -682,7 +769,13 @@ async fn personality(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
-    execute_cmd(engine, Command::Personality, state.control.clone()).await
+    execute_cmd(
+        engine,
+        Command::Personality,
+        state.control.clone(),
+        &state.inflight,
+    )
+    .await
 }
 
 async fn stats(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> AppResult {
@@ -691,7 +784,13 @@ async fn stats(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMa
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
-    execute_cmd(engine, Command::Stats, state.control.clone()).await
+    execute_cmd(
+        engine,
+        Command::Stats,
+        state.control.clone(),
+        &state.inflight,
+    )
+    .await
 }
 
 async fn create_database(

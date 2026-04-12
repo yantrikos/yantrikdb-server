@@ -770,6 +770,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         pool,
         workers,
         cluster: cluster_ctx.clone(),
+        inflight: std::sync::atomic::AtomicU32::new(0),
     });
 
     // Built-in watchdog — periodically probes the engine lock and fires a

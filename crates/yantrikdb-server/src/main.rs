@@ -689,6 +689,16 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         }
     };
 
+    // Log ONNX Runtime version for debuggability. The 1.20.1 vs 1.24.4
+    // mismatch bit us on first Proxmox deploy; having the version in the
+    // startup log catches similar mismatches early. See task #86.
+    if std::env::var("ORT_DYLIB_PATH").is_ok() {
+        tracing::info!(
+            ort_dylib_path = %std::env::var("ORT_DYLIB_PATH").unwrap_or_default(),
+            "ONNX Runtime: using ORT_DYLIB_PATH"
+        );
+    }
+
     // Resolve master encryption key (auto-generates if needed)
     let master_key = cfg.encryption.resolve_key(&cfg.server.data_dir)?;
     if master_key.is_some() {

@@ -151,7 +151,7 @@ impl YantrikDB {
         let fetch_k = (top_k * 20).min(500);
         let vec_results = {
             let _span = tracing::debug_span!("hnsw_search", fetch_k).entered();
-            self.vec_index.read().unwrap().search(query_embedding, fetch_k)?
+            self.vec_index.read().search(query_embedding, fetch_k)?
         };
 
         if vec_results.is_empty() {
@@ -161,7 +161,7 @@ impl YantrikDB {
         // Step 2: Score from in-memory cache (replaces fetch_memories_by_rids)
         let mut scored: Vec<RecallResult> = Vec::new();
         {
-            let cache = self.scoring_cache.read().unwrap();
+            let cache = self.scoring_cache.read();
             for (rid, distance) in &vec_results {
                 let Some(row) = cache.get(rid) else { continue };
 
@@ -245,13 +245,13 @@ impl YantrikDB {
         // Thresholds adapt to database size: large databases need more aggressive
         // fallback because HNSW approximate search degrades with more vectors.
         {
-            let total_memories = self.scoring_cache.read().unwrap().len();
+            let total_memories = self.scoring_cache.read().len();
             let high_imp_threshold = if total_memories > 5000 { 0.5 } else { 0.7 };
             let min_sim_for_fallback = if total_memories > 5000 { 0.15 } else { 0.20 };
             let existing_rids: std::collections::HashSet<&str> =
                 scored.iter().map(|r| r.rid.as_str()).collect();
             let important_rids: Vec<String> = {
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 cache
                     .iter()
                     .filter(|(rid, row)| {
@@ -273,7 +273,7 @@ impl YantrikDB {
             if !important_rids.is_empty() {
                 let rid_refs: Vec<&str> = important_rids.iter().map(|r| r.as_str()).collect();
                 let emb_map = self.fetch_embeddings_by_rids(&rid_refs)?;
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 for rid in &important_rids {
                     let Some(row) = cache.get(rid) else { continue };
                     let Some(emb_blob) = emb_map.get(rid.as_str()) else { continue };
@@ -364,7 +364,7 @@ impl YantrikDB {
                     // Topic entities (e.g., "yoga", "reading") are kept — they're
                     // valuable FTS keywords that graph expansion may not cover.
                     let mut keywords: Vec<String> = {
-                        let gi = self.graph_index.read().unwrap();
+                        let gi = self.graph_index.read();
                         let query_tokens = crate::graph::tokenize(qt);
                         let matched = gi.entity_matches_query(&query_tokens);
                         // Only filter entities with type "person" — these are the
@@ -409,7 +409,7 @@ impl YantrikDB {
                         ];
                         let qt_lower = qt.to_lowercase();
                         if GROUP_FTS_WORDS.iter().any(|kw| qt_lower.contains(kw)) {
-                            let gi = self.graph_index.read().unwrap();
+                            let gi = self.graph_index.read();
                             let query_tokens = crate::graph::tokenize(qt);
                             let matched = gi.entity_matches_query(&query_tokens);
                             if !matched.is_empty() {
@@ -486,7 +486,7 @@ impl YantrikDB {
                         // Adaptive FTS limit: scales with database size.
                         // Small DBs (<3K): 30 is enough. Large DBs (15K+): need 150+
                         // to surface important memories above keyword noise.
-                        let total_memories = self.scoring_cache.read().unwrap().len();
+                        let total_memories = self.scoring_cache.read().len();
                         let fts_limit = (total_memories / 100).max(30).min(200);
 
                         // Dynamic importance threshold for Phase 2.
@@ -495,7 +495,7 @@ impl YantrikDB {
                         // Use 70% of mean to catch relevant anchors with modest importance
                         // (e.g., yoga at imp=0.30 when mean≈0.35).
                         let mean_importance = {
-                            let cache = self.scoring_cache.read().unwrap();
+                            let cache = self.scoring_cache.read();
                             if cache.is_empty() {
                                 0.5
                             } else {
@@ -538,7 +538,7 @@ impl YantrikDB {
 
                         // Helper closure to run an FTS query and collect RIDs.
                         let run_fts_phase1 = |q: &str| -> Vec<String> {
-                            let conn = self.conn.lock().unwrap();
+                            let conn = self.conn.lock();
                             let mut stmt = conn.prepare_cached(&fts_sql).ok();
                             if let Some(ref mut stmt) = stmt {
                                 let result: std::result::Result<Vec<String>, _> = if let Some(mt) = memory_type {
@@ -617,7 +617,7 @@ impl YantrikDB {
 
                             // Helper to run Phase 2 with a given FTS query string.
                             let run_fts_phase2 = |q: &str| -> Vec<String> {
-                                let conn = self.conn.lock().unwrap();
+                                let conn = self.conn.lock();
                                 let mut stmt = conn.prepare_cached(&imp_fts_sql).ok();
                                 if let Some(ref mut stmt) = stmt {
                                     let result: std::result::Result<Vec<String>, _> = if let Some(mt) = memory_type {
@@ -712,7 +712,7 @@ impl YantrikDB {
 
                             for group in &keyword_groups {
                                 let anchor_rids: Vec<String> = {
-                                    let conn = self.conn.lock().unwrap();
+                                    let conn = self.conn.lock();
                                     let mut stmt = conn.prepare_cached(&anchor_fts_sql).ok();
                                     if let Some(ref mut stmt) = stmt {
                                         let result: std::result::Result<Vec<String>, _> = if let Some(mt) = memory_type {
@@ -781,7 +781,7 @@ impl YantrikDB {
                             let rid_refs: Vec<&str> = new_fts_rids.iter().map(|r| r.as_str()).collect();
                             let emb_map = self.fetch_embeddings_by_rids(&rid_refs)?;
 
-                            let cache = self.scoring_cache.read().unwrap();
+                            let cache = self.scoring_cache.read();
                             for rid in &new_fts_rids {
                                 let Some(row) = cache.get(rid) else { continue };
 
@@ -866,7 +866,7 @@ impl YantrikDB {
 
             // Find strongly-valenced memories matching query sentiment direction
             let valence_rids: Vec<String> = {
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 let mut candidates: Vec<(String, f64)> = cache
                     .iter()
                     .filter(|(rid, row)| {
@@ -896,7 +896,7 @@ impl YantrikDB {
             if !valence_rids.is_empty() {
                 let rid_refs: Vec<&str> = valence_rids.iter().map(|r| r.as_str()).collect();
                 let emb_map = self.fetch_embeddings_by_rids(&rid_refs)?;
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 for rid in &valence_rids {
                     let Some(row) = cache.get(rid) else { continue };
                     let Some(emb_blob) = emb_map.get(rid.as_str()) else { continue };
@@ -1034,7 +1034,7 @@ impl YantrikDB {
                         };
 
                         let cold_rids: Vec<String> = {
-                            let conn = self.conn.lock().unwrap();
+                            let conn = self.conn.lock();
                             let mut stmt = conn.prepare_cached(&cold_sql).ok();
                             if let Some(ref mut stmt) = stmt {
                                 let result: std::result::Result<Vec<String>, _> = if let Some(mt) = memory_type {
@@ -1076,7 +1076,7 @@ impl YantrikDB {
                         if !new_cold.is_empty() {
                             let rid_refs: Vec<&str> = new_cold.iter().map(|r| r.as_str()).collect();
                             let emb_map = self.fetch_embeddings_by_rids(&rid_refs)?;
-                            let cache = self.scoring_cache.read().unwrap();
+                            let cache = self.scoring_cache.read();
 
                             for rid in &new_cold {
                                 let Some(row) = cache.get(rid) else { continue };
@@ -1139,7 +1139,7 @@ impl YantrikDB {
         // Step 3: Graph expansion (when enabled)
         if expand_entities {
             let _span = tracing::debug_span!("graph_expansion").entered();
-            let gi = self.graph_index.read().unwrap();
+            let gi = self.graph_index.read();
             let query_entities: Vec<(String, String, u32)> = if let Some(qt) = query_text {
                 let query_tokens = crate::graph::tokenize(qt);
                 gi.entity_matches_query(&query_tokens)
@@ -1254,7 +1254,7 @@ impl YantrikDB {
                         }
 
                         // Consolidation penalty: use consolidation_status as proxy
-                        let cache = self.scoring_cache.read().unwrap();
+                        let cache = self.scoring_cache.read();
                         let consolidation_factor = cache.get(&result.rid)
                             .map(|r| if r.consolidation_status == "consolidated" { 0.5 } else { 1.0 })
                             .unwrap_or(1.0);
@@ -1286,7 +1286,7 @@ impl YantrikDB {
                 // outrank memories linked through distant neighbors (prox≈0.25).
                 let preselect_pool = max_graph_only * 5; // fetch more, let full scoring pick best
                 let filtered_rids: Vec<String> = {
-                    let cache = self.scoring_cache.read().unwrap();
+                    let cache = self.scoring_cache.read();
                     let mut candidates: Vec<(String, f64)> = new_rids.into_iter()
                         .filter_map(|rid| {
                             let row = cache.get(&rid)?;
@@ -1319,7 +1319,7 @@ impl YantrikDB {
                     let rid_refs: Vec<&str> = filtered_rids.iter().map(|r| r.as_str()).collect();
                     let embeddings = self.fetch_embeddings_by_rids(&rid_refs)?;
 
-                    let cache = self.scoring_cache.read().unwrap();
+                    let cache = self.scoring_cache.read();
                     for rid in &filtered_rids {
                         let Some(row) = cache.get(rid) else { continue };
                         let Some(emb_blob_row) = embeddings.get(rid) else { continue };
@@ -1591,7 +1591,7 @@ impl YantrikDB {
 
         // Candidate count: approximate from scoring cache filtered by same criteria
         let candidate_count = {
-            let cache = self.scoring_cache.read().unwrap();
+            let cache = self.scoring_cache.read();
             cache.values().filter(|row| {
                 let status_ok = if include_consolidated {
                     row.consolidation_status == "active" || row.consolidation_status == "consolidated"
@@ -1746,7 +1746,7 @@ impl YantrikDB {
         // Hint 2: Entity hints — find entities in the graph near the query
         if let Some(qt) = query_text {
             let query_tokens = crate::graph::tokenize(qt);
-            let gi = self.graph_index.read().unwrap();
+            let gi = self.graph_index.read();
             let matched = gi.entity_matches_query(&query_tokens);
             // Suggest entities that matched the query but whose memories aren't in results
             let result_rids: std::collections::HashSet<&str> = results.iter().map(|r| r.rid.as_str()).collect();
@@ -1800,7 +1800,7 @@ impl YantrikDB {
                 results.iter().map(|r| r.domain.as_str()).collect();
             if result_domains.len() == 1 {
                 // Check if other domains exist in the DB
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 let all_domains: std::collections::HashSet<&str> =
                     cache.values().map(|r| r.domain.as_str()).collect();
                 let other_domains: Vec<&str> = all_domains
@@ -1837,7 +1837,7 @@ impl YantrikDB {
                 let has_procedural = results.iter().any(|r| r.memory_type == "procedural");
                 if !has_procedural {
                     // Check if procedural memories exist at all
-                    let cache = self.scoring_cache.read().unwrap();
+                    let cache = self.scoring_cache.read();
                     let procedural_count = cache.values()
                         .filter(|r| r.memory_type == "procedural")
                         .count();
@@ -1933,7 +1933,7 @@ impl YantrikDB {
         let t_vec = Instant::now();
         let ts = now();
         let fetch_k = (top_k * 20).min(500);
-        let vec_results = self.vec_index.read().unwrap().search(query_embedding, fetch_k)?;
+        let vec_results = self.vec_index.read().search(query_embedding, fetch_k)?;
         let vec_search_ms = t_vec.elapsed().as_secs_f64() * 1000.0;
         let candidate_count = vec_results.len();
 
@@ -1959,7 +1959,7 @@ impl YantrikDB {
         let t_cache_score = Instant::now();
         let mut scored: Vec<RecallResult> = Vec::new();
         {
-            let cache = self.scoring_cache.read().unwrap();
+            let cache = self.scoring_cache.read();
             for (rid, distance) in &vec_results {
                 let Some(row) = cache.get(rid) else { continue };
 
@@ -2027,13 +2027,13 @@ impl YantrikDB {
         // ── Phase 2.5: High-importance memory fallback (similarity-gated) ──
         let t_fallback = Instant::now();
         {
-            let total_memories = self.scoring_cache.read().unwrap().len();
+            let total_memories = self.scoring_cache.read().len();
             let high_imp_threshold = if total_memories > 5000 { 0.5 } else { 0.7 };
             let min_sim_for_fallback = if total_memories > 5000 { 0.15 } else { 0.20 };
             let existing_rids: std::collections::HashSet<&str> =
                 scored.iter().map(|r| r.rid.as_str()).collect();
             let important_rids: Vec<String> = {
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 cache
                     .iter()
                     .filter(|(rid, row)| {
@@ -2055,7 +2055,7 @@ impl YantrikDB {
             if !important_rids.is_empty() {
                 let rid_refs: Vec<&str> = important_rids.iter().map(|r| r.as_str()).collect();
                 let emb_map = self.fetch_embeddings_by_rids(&rid_refs)?;
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 for rid in &important_rids {
                     let Some(row) = cache.get(rid) else { continue };
                     let Some(emb_blob) = emb_map.get(rid.as_str()) else { continue };
@@ -2136,7 +2136,7 @@ impl YantrikDB {
 
                     // (mirrors recall() — see comments there for full rationale)
                     let mut keywords: Vec<String> = {
-                        let gi = self.graph_index.read().unwrap();
+                        let gi = self.graph_index.read();
                         let query_tokens = crate::graph::tokenize(qt);
                         let matched = gi.entity_matches_query(&query_tokens);
                         let person_matches: Vec<_> = matched
@@ -2173,7 +2173,7 @@ impl YantrikDB {
                         ];
                         let qt_lower = qt.to_lowercase();
                         if GROUP_FTS_WORDS.iter().any(|kw| qt_lower.contains(kw)) {
-                            let gi = self.graph_index.read().unwrap();
+                            let gi = self.graph_index.read();
                             let query_tokens = crate::graph::tokenize(qt);
                             let matched = gi.entity_matches_query(&query_tokens);
                             if !matched.is_empty() {
@@ -2232,11 +2232,11 @@ impl YantrikDB {
                         let fts_query = fts_query_and.as_deref()
                             .unwrap_or(&fts_query_or);
 
-                        let total_memories = self.scoring_cache.read().unwrap().len();
+                        let total_memories = self.scoring_cache.read().len();
                         let fts_limit = (total_memories / 100).max(30).min(200);
 
                         let mean_importance = {
-                            let cache = self.scoring_cache.read().unwrap();
+                            let cache = self.scoring_cache.read();
                             if cache.is_empty() {
                                 0.5
                             } else {
@@ -2274,7 +2274,7 @@ impl YantrikDB {
                         };
 
                         let run_fts_phase1 = |q: &str| -> Vec<String> {
-                            let conn = self.conn.lock().unwrap();
+                            let conn = self.conn.lock();
                             let mut stmt = conn.prepare_cached(&fts_sql).ok();
                             if let Some(ref mut stmt) = stmt {
                                 let result: std::result::Result<Vec<String>, _> = if let Some(mt) = memory_type {
@@ -2342,7 +2342,7 @@ impl YantrikDB {
                             };
 
                             let run_fts_phase2 = |q: &str| -> Vec<String> {
-                                let conn = self.conn.lock().unwrap();
+                                let conn = self.conn.lock();
                                 let mut stmt = conn.prepare_cached(&imp_fts_sql).ok();
                                 if let Some(ref mut stmt) = stmt {
                                     let result: std::result::Result<Vec<String>, _> = if let Some(mt) = memory_type {
@@ -2428,7 +2428,7 @@ impl YantrikDB {
 
                             for group in &keyword_groups {
                                 let anchor_rids: Vec<String> = {
-                                    let conn = self.conn.lock().unwrap();
+                                    let conn = self.conn.lock();
                                     let mut stmt = conn.prepare_cached(&anchor_fts_sql).ok();
                                     if let Some(ref mut stmt) = stmt {
                                         let result: std::result::Result<Vec<String>, _> = if let Some(mt) = memory_type {
@@ -2493,7 +2493,7 @@ impl YantrikDB {
                             let rid_refs: Vec<&str> = new_fts_rids.iter().map(|r| r.as_str()).collect();
                             let emb_map = self.fetch_embeddings_by_rids(&rid_refs)?;
 
-                            let cache = self.scoring_cache.read().unwrap();
+                            let cache = self.scoring_cache.read();
                             for rid in &new_fts_rids {
                                 let Some(row) = cache.get(rid) else { continue };
                                 let status_ok = if include_consolidated {
@@ -2574,7 +2574,7 @@ impl YantrikDB {
                 scored.iter().map(|r| r.rid.as_str()).collect();
 
             let valence_rids: Vec<String> = {
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 let mut candidates: Vec<(String, f64)> = cache
                     .iter()
                     .filter(|(rid, row)| {
@@ -2602,7 +2602,7 @@ impl YantrikDB {
             if !valence_rids.is_empty() {
                 let rid_refs: Vec<&str> = valence_rids.iter().map(|r| r.as_str()).collect();
                 let emb_map = self.fetch_embeddings_by_rids(&rid_refs)?;
-                let cache = self.scoring_cache.read().unwrap();
+                let cache = self.scoring_cache.read();
                 for rid in &valence_rids {
                     let Some(row) = cache.get(rid) else { continue };
                     let Some(emb_blob) = emb_map.get(rid.as_str()) else { continue };
@@ -2729,7 +2729,7 @@ impl YantrikDB {
                         };
 
                         let cold_rids: Vec<String> = {
-                            let conn = self.conn.lock().unwrap();
+                            let conn = self.conn.lock();
                             let mut stmt = conn.prepare_cached(&cold_sql).ok();
                             if let Some(ref mut stmt) = stmt {
                                 let result: std::result::Result<Vec<String>, _> = if let Some(mt) = memory_type {
@@ -2770,7 +2770,7 @@ impl YantrikDB {
                         if !new_cold.is_empty() {
                             let rid_refs: Vec<&str> = new_cold.iter().map(|r| r.as_str()).collect();
                             let emb_map = self.fetch_embeddings_by_rids(&rid_refs)?;
-                            let cache = self.scoring_cache.read().unwrap();
+                            let cache = self.scoring_cache.read();
 
                             for rid in &new_cold {
                                 let Some(row) = cache.get(rid) else { continue };
@@ -2833,7 +2833,7 @@ impl YantrikDB {
         let t_graph = Instant::now();
         let mut graph_expansion_count = 0usize;
         if expand_entities {
-            let gi = self.graph_index.read().unwrap();
+            let gi = self.graph_index.read();
             let query_entities: Vec<(String, String, u32)> = if let Some(qt) = query_text {
                 let query_tokens = crate::graph::tokenize(qt);
                 gi.entity_matches_query(&query_tokens)
@@ -2938,7 +2938,7 @@ impl YantrikDB {
                             }
                         }
                         let consolidation_factor = {
-                            let cache = self.scoring_cache.read().unwrap();
+                            let cache = self.scoring_cache.read();
                             cache.get(&result.rid)
                                 .map(|r| if r.consolidation_status == "consolidated" { 0.5 } else { 1.0 })
                                 .unwrap_or(1.0)
@@ -2959,7 +2959,7 @@ impl YantrikDB {
 
                 let preselect_pool = max_graph_only * 5;
                 let new_rids: Vec<String> = {
-                    let cache = self.scoring_cache.read().unwrap();
+                    let cache = self.scoring_cache.read();
                     let mut candidates: Vec<(String, f64)> = graph_rids
                         .into_iter()
                         .filter(|r| !existing_rids.contains(r.as_str()))
@@ -2994,7 +2994,7 @@ impl YantrikDB {
                     let new_rid_refs: Vec<&str> = new_rids.iter().map(|r| r.as_str()).collect();
                     let emb_map = self.fetch_embeddings_by_rids(&new_rid_refs)?;
 
-                    let cache = self.scoring_cache.read().unwrap();
+                    let cache = self.scoring_cache.read();
                     for rid in &new_rids {
                         if let (Some(row), Some(emb_blob)) = (cache.get(rid.as_str()), emb_map.get(rid.as_str())) {
                             let mem_embedding = crate::serde_helpers::deserialize_f32(emb_blob);
@@ -3216,7 +3216,7 @@ impl YantrikDB {
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map(params_ref.as_slice(), |row| {
@@ -3261,7 +3261,7 @@ impl YantrikDB {
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map(params_ref.as_slice(), |row| {
@@ -3286,7 +3286,7 @@ impl YantrikDB {
 
         // Read half_life from cache (eliminates SELECT query)
         let current_half_life = {
-            let cache = self.scoring_cache.read().unwrap();
+            let cache = self.scoring_cache.read();
             cache.get(rid).map(|r| r.half_life)
         };
         let new_half_life = match current_half_life {
@@ -3295,7 +3295,7 @@ impl YantrikDB {
         };
 
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock();
             conn.execute(
                 "UPDATE memories SET last_access = ?1, half_life = ?2, \
                  access_count = access_count + 1 WHERE rid = ?3",
@@ -3305,7 +3305,7 @@ impl YantrikDB {
 
         // Update cache with new values
         {
-            let mut cache = self.scoring_cache.write().unwrap();
+            let mut cache = self.scoring_cache.write();
             if let Some(row) = cache.get_mut(rid) {
                 row.last_access = ts;
                 row.half_life = new_half_life;

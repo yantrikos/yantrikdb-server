@@ -25,7 +25,11 @@ impl YantrikDB {
 
     /// Load the observer state from the database.
     pub fn load_observer_state(&self) -> Result<ObserverState> {
-        match Self::get_meta(&self.conn(), OBSERVER_STATE_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), OBSERVER_STATE_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -51,7 +55,11 @@ impl YantrikDB {
 
     /// Load the event buffer from the database.
     pub fn load_event_buffer(&self) -> Result<EventBuffer> {
-        match Self::get_meta(&self.conn(), OBSERVER_BUFFER_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), OBSERVER_BUFFER_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -77,7 +85,11 @@ impl YantrikDB {
 
     /// Load the observer configuration.
     pub fn load_observer_config(&self) -> Result<ObserverConfig> {
-        match Self::get_meta(&self.conn(), OBSERVER_CONFIG_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), OBSERVER_CONFIG_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),

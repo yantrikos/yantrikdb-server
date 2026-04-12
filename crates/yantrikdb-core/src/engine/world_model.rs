@@ -19,7 +19,11 @@ impl YantrikDB {
 
     /// Load the transition model from the database.
     pub fn load_transition_model(&self) -> Result<TransitionModel> {
-        match Self::get_meta(&self.conn(), TRANSITION_MODEL_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), TRANSITION_MODEL_META_KEY)?;
+        match meta {
             Some(json) => {
                 let mut model: TransitionModel = serde_json::from_str(&json).map_err(|e| {
                     crate::error::YantrikDbError::Database(

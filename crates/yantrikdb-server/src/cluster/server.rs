@@ -9,7 +9,6 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 
-use yantrikdb::YantrikDB;
 use yantrikdb_protocol::messages::*;
 use yantrikdb_protocol::*;
 

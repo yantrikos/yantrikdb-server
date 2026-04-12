@@ -643,11 +643,14 @@ fn test_schema_v6_has_storage_tier() {
 #[test]
 fn test_schema_v7_has_fts5_and_join_tables() {
     let db = YantrikDB::new(":memory:", 8).unwrap();
-    let conn = db.conn();
 
-    // FTS5 virtual table exists — insert then search
+    // FTS5 virtual table exists — insert then search.
+    // Must record BEFORE acquiring conn — db.record() internally takes
+    // conn, so holding conn across record() would self-deadlock.
     let _rid = db.record("The quick brown fox jumps over the lazy dog", "episodic",
         0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
+
+    let conn = db.conn();
 
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH 'quick brown'",
@@ -676,7 +679,6 @@ fn test_schema_v7_has_fts5_and_join_tables() {
 #[test]
 fn test_fts5_search_multiple_memories() {
     let db = YantrikDB::new(":memory:", 8).unwrap();
-    let conn = db.conn();
 
     db.record("Alice loves Rust programming", "semantic",
         0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
@@ -684,6 +686,11 @@ fn test_fts5_search_multiple_memories() {
         0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(0.5, 8), "default", 0.8, "general", "user", None).unwrap();
     db.record("Alice and Bob work on Rust projects", "episodic",
         0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(0.3, 8), "default", 0.8, "general", "user", None).unwrap();
+
+    // Acquire conn AFTER records are written — db.record() internally takes
+    // conn, and holding it across db.record() would self-deadlock (the
+    // Mutex<Connection> is non-reentrant). See CONCURRENCY.md Rule 4.
+    let conn = db.conn();
 
     // Search for "Rust" should match 2 memories
     let count: i64 = conn.query_row(

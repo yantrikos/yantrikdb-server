@@ -20,7 +20,11 @@ impl YantrikDB {
 
     /// Load the autonomous belief store from the database.
     pub fn load_belief_store(&self) -> Result<BeliefStore> {
-        match Self::get_meta(&self.conn(), BELIEF_STORE_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), BELIEF_STORE_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -46,7 +50,11 @@ impl YantrikDB {
 
     /// Load the flywheel configuration.
     pub fn load_flywheel_config(&self) -> Result<FlywheelConfig> {
-        match Self::get_meta(&self.conn(), FLYWHEEL_CONFIG_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), FLYWHEEL_CONFIG_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),

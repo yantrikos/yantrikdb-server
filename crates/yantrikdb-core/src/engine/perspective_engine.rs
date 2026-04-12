@@ -25,7 +25,11 @@ impl YantrikDB {
 
     /// Load the perspective store from the database.
     pub fn load_perspective_store(&self) -> Result<PerspectiveStore> {
-        match Self::get_meta(&self.conn(), PERSPECTIVE_STORE_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), PERSPECTIVE_STORE_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -51,7 +55,11 @@ impl YantrikDB {
 
     /// Load the active perspective stack from the database.
     pub fn load_perspective_stack(&self) -> Result<PerspectiveStack> {
-        match Self::get_meta(&self.conn(), PERSPECTIVE_STACK_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), PERSPECTIVE_STACK_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),

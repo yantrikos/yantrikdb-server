@@ -11,8 +11,9 @@ mod server;
 mod tenant_pool;
 mod tls;
 
+use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
@@ -240,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
                     if databases.is_empty() {
                         println!("no databases");
                     } else {
-                        println!("{:<6} {:<20} {}", "ID", "NAME", "CREATED");
+                        println!("{:<6} {:<20} CREATED", "ID", "NAME");
                         for db in databases {
                             println!("{:<6} {:<20} {}", db.id, db.name, db.created_at);
                         }
@@ -634,6 +635,44 @@ fn generate_cluster_secret() -> String {
 async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     // Ensure data directory exists
     std::fs::create_dir_all(&cfg.server.data_dir)?;
+
+    // Deadlock detector — parking_lot's `deadlock_detection` feature lets us
+    // ask at runtime whether any cycle of thread-held locks exists. We run
+    // this every 10 seconds. If a cycle is detected we log a structured
+    // ERROR per deadlocked thread with its backtrace. This would have caught
+    // the v0.5.7/0.5.8 cognition::triggers self-deadlock in ~10 seconds
+    // instead of hours. Low overhead: parking_lot only runs the cycle check
+    // when this function is called, it does not poll or instrument locks
+    // themselves.
+    std::thread::Builder::new()
+        .name("parking-lot-deadlock-detector".into())
+        .spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                let deadlocks = parking_lot::deadlock::check_deadlock();
+                if deadlocks.is_empty() {
+                    continue;
+                }
+                tracing::error!(
+                    deadlock_count = deadlocks.len(),
+                    "DEADLOCK DETECTED — parking_lot found circular lock dependency"
+                );
+                for (i, threads) in deadlocks.iter().enumerate() {
+                    for t in threads {
+                        tracing::error!(
+                            deadlock_id = i,
+                            thread_id = ?t.thread_id(),
+                            backtrace = ?t.backtrace(),
+                            "deadlocked thread"
+                        );
+                    }
+                }
+                // Do not auto-exit or restart on detection — let the ops
+                // watchdog + auto-restart policy decide. Logging is enough
+                // to break the "silent hang" failure mode.
+            }
+        })?;
+    tracing::info!("deadlock detector started (parking_lot::deadlock, 10s cadence)");
 
     // Open control database
     let control = ControlDb::open(&cfg.control_db_path())?;

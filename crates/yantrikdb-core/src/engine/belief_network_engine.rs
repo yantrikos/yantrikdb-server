@@ -26,7 +26,11 @@ impl YantrikDB {
     /// After deserialization the adjacency indices are rebuilt
     /// because they carry `#[serde(skip)]`.
     pub fn load_belief_network(&self) -> Result<BeliefNetwork> {
-        match Self::get_meta(&self.conn(), BELIEF_NETWORK_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), BELIEF_NETWORK_META_KEY)?;
+        match meta {
             Some(json) => {
                 let mut net: BeliefNetwork = serde_json::from_str(&json).map_err(|e| {
                     crate::error::YantrikDbError::Database(
@@ -56,7 +60,11 @@ impl YantrikDB {
 
     /// Load belief-propagation configuration.
     pub fn load_bp_config(&self) -> Result<BPConfig> {
-        match Self::get_meta(&self.conn(), BP_CONFIG_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), BP_CONFIG_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),

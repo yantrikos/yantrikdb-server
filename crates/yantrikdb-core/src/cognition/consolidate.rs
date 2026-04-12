@@ -135,21 +135,28 @@ pub fn find_consolidation_candidates(
     min_cluster_size: usize,
     limit: usize,
 ) -> Result<Vec<Vec<MemoryWithEmbedding>>> {
-    let conn = db.conn();
-    let sql = format!(
-        "SELECT rid, type, text, embedding, created_at, importance, valence, \
-         half_life, last_access, metadata, namespace \
-         FROM memories \
-         WHERE consolidation_status = 'active' \
-         AND storage_tier = 'hot' \
-         AND type IN ('episodic', 'semantic') \
-         LIMIT {}",
-        limit
-    );
-    let mut stmt = conn.prepare(&sql)?;
-
-    let raw_rows: Vec<(String, String, String, Vec<u8>, f64, f64, f64, f64, f64, String, String)> = stmt
-        .query_map([], |row| {
+    // Phase 1: query rows while holding the conn lock, then drop it.
+    // Scope is explicit so the guard CANNOT live across the subsequent
+    // calls to db.decrypt_text / db.decrypt_embedding in Phase 2. See
+    // CONCURRENCY.md Rule 4: never hold db.conn() across a call taking
+    // `&YantrikDB`. decrypt_text/decrypt_embedding don't currently take
+    // db.conn(), but a future refactor could, and that silent deadlock
+    // would be expensive to find.
+    type RawRow = (String, String, String, Vec<u8>, f64, f64, f64, f64, f64, String, String);
+    let raw_rows: Vec<RawRow> = {
+        let conn = db.conn();
+        let sql = format!(
+            "SELECT rid, type, text, embedding, created_at, importance, valence, \
+             half_life, last_access, metadata, namespace \
+             FROM memories \
+             WHERE consolidation_status = 'active' \
+             AND storage_tier = 'hot' \
+             AND type IN ('episodic', 'semantic') \
+             LIMIT {}",
+            limit
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mapped = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>("rid")?,
                 row.get::<_, String>("type")?,
@@ -163,10 +170,13 @@ pub fn find_consolidation_candidates(
                 row.get::<_, String>("metadata")?,
                 row.get::<_, String>("namespace")?,
             ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        })?;
+        let collected: std::result::Result<Vec<RawRow>, _> = mapped.collect();
+        collected?
+    }; // conn, stmt, mapped all dropped here before Phase 2
 
-    // Decrypt text, embedding, and metadata if encrypted
+    // Phase 2: decrypt. Safe to call `db.decrypt_*` now because no conn
+    // guard is held.
     let memories: Vec<MemoryWithEmbedding> = raw_rows.into_iter()
         .map(|(rid, memory_type, stored_text, stored_emb, created_at, importance, valence, half_life, last_access, stored_meta, namespace)| {
             let text = db.decrypt_text(&stored_text)?;

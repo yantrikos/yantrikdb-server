@@ -21,7 +21,11 @@ impl YantrikDB {
 
     /// Load the extraction template store from the database.
     pub fn load_template_store(&self) -> Result<TemplateStore> {
-        match Self::get_meta(&self.conn(), TEMPLATE_STORE_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), TEMPLATE_STORE_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -47,7 +51,11 @@ impl YantrikDB {
 
     /// Load the extractor configuration.
     pub fn load_extractor_config(&self) -> Result<ExtractorConfig> {
-        match Self::get_meta(&self.conn(), EXTRACTOR_CONFIG_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), EXTRACTOR_CONFIG_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),

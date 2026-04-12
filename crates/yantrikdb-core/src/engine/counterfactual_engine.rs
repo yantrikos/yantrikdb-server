@@ -22,7 +22,11 @@ impl YantrikDB {
 
     /// Load counterfactual configuration.
     pub fn load_counterfactual_config(&self) -> Result<CounterfactualConfig> {
-        match Self::get_meta(&self.conn(), COUNTERFACTUAL_CONFIG_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), COUNTERFACTUAL_CONFIG_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -48,7 +52,11 @@ impl YantrikDB {
 
     /// Load regret history.
     pub fn load_regret_history(&self) -> Result<Vec<RegretReport>> {
-        match Self::get_meta(&self.conn(), REGRET_HISTORY_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), REGRET_HISTORY_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),

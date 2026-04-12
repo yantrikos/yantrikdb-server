@@ -18,6 +18,10 @@ pub struct DatabaseRecord {
     pub created_at: String,
 }
 
+/// Metadata row for a token. Currently not returned by any code path —
+/// the control DB operates by token hash, not by record. Reserved for
+/// the `/v1/admin/tokens` listing endpoint (planned).
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TokenRecord {
     pub hash: String,
@@ -153,6 +157,10 @@ impl ControlDb {
     }
 
     /// Count total databases.
+    ///
+    /// Not currently called — reserved for startup banner and /metrics
+    /// surfacing of tenant count.
+    #[allow(dead_code)]
     pub fn database_count(&self) -> anyhow::Result<usize> {
         let count: i64 = self
             .conn

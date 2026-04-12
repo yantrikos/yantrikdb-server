@@ -3,7 +3,8 @@
 //! Accepts connections on the wire port, authenticates via AUTH frame,
 //! then dispatches commands to the handler.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use futures::SinkExt;
 use futures::StreamExt;
@@ -98,7 +99,6 @@ where
     let db_record = state
         .control
         .lock()
-        .unwrap()
         .get_database_by_id(db_id)?
         .ok_or_else(|| anyhow::anyhow!("database not found"))?;
     let engine = state.pool.get_engine(&db_record)?;
@@ -138,7 +138,7 @@ where
 
                 // Run the engine call on a blocking thread so a slow op
                 // (think, consolidate, embed) cannot park the tokio worker
-                // serving this connection. Holding std::sync::Mutex across
+                // serving this connection. Holding parking_lot::Mutex across
                 // an await would be a deadlock footgun; spawn_blocking makes
                 // that structurally impossible.
                 let engine_clone = std::sync::Arc::clone(&engine);
@@ -200,7 +200,6 @@ where
                 let db_record = state
                     .control
                     .lock()
-                    .unwrap()
                     .get_database("default")?
                     .ok_or_else(|| anyhow::anyhow!("default database not found"))?;
                 let resp = AuthOkResponse {
@@ -216,7 +215,7 @@ where
 
     // Scope the lock so MutexGuard is dropped before any .await
     let auth_result = {
-        let control = state.control.lock().unwrap();
+        let control = state.control.lock();
         match control.validate_token(&token_hash)? {
             Some(db_id) => {
                 let db_record = control
@@ -395,7 +394,7 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
 
 fn execute_and_respond(
     cmd: Command,
-    engine: &std::sync::Arc<std::sync::Mutex<yantrikdb::YantrikDB>>,
+    engine: &std::sync::Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>,
     control: &Mutex<ControlDb>,
     stream_id: u32,
 ) -> Vec<Frame> {
@@ -438,9 +437,9 @@ fn execute_and_respond(
 }
 
 fn response_opcode_for_json(value: &serde_json::Value) -> OpCode {
-    if value.get("rid").is_some() && value.get("found").is_none() {
-        OpCode::RememberOk
-    } else if value.get("rids").is_some() {
+    // Check in order of specificity. Groups of keys that map to the same
+    // opcode share a branch to satisfy clippy::if_same_then_else.
+    if (value.get("rid").is_some() && value.get("found").is_none()) || value.get("rids").is_some() {
         OpCode::RememberOk
     } else if value.get("found").is_some() {
         OpCode::ForgetOk
@@ -452,19 +451,15 @@ fn response_opcode_for_json(value: &serde_json::Value) -> OpCode {
         OpCode::SessionOk
     } else if value.get("consolidation_count").is_some() {
         OpCode::ThinkResult
-    } else if value.get("conflicts").is_some() {
+    } else if value.get("conflicts").is_some() || value.get("conflict_id").is_some() {
         OpCode::ConflictResult
-    } else if value.get("conflict_id").is_some() {
-        OpCode::ConflictResult
-    } else if value.get("traits").is_some() {
-        OpCode::InfoResult
-    } else if value.get("active_memories").is_some() {
-        OpCode::InfoResult
     } else if value.get("databases").is_some() {
         OpCode::ListDbResult
     } else if value.get("message").is_some() {
         OpCode::DbOk
     } else {
+        // Default catch-all for `traits`, `active_memories`, and other
+        // free-form info responses.
         OpCode::InfoResult
     }
 }

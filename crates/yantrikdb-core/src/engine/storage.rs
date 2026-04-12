@@ -39,7 +39,7 @@ impl YantrikDB {
             ts
         }; // drop conn before acquiring vec_index write lock
 
-        self.vec_index.write().unwrap().remove(rid);
+        self.vec_index.write().remove(rid);
 
         self.log_op(
             "archive",
@@ -87,7 +87,7 @@ impl YantrikDB {
             (ts, embedding)
         }; // drop conn before acquiring vec_index write lock
 
-        self.vec_index.write().unwrap().insert(rid, &embedding)?;
+        self.vec_index.write().insert(rid, &embedding)?;
 
         self.log_op(
             "hydrate",

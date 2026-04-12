@@ -157,7 +157,7 @@ impl YantrikDB {
 
     /// Load feedback rows from the database.
     fn load_feedback(&self) -> Result<Vec<FeedbackRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT query_text, rid, feedback, score_at_retrieval FROM recall_feedback \
              ORDER BY created_at DESC LIMIT 500",
@@ -191,7 +191,7 @@ impl YantrikDB {
         feedback: &[FeedbackRow],
         query_groups: &HashMap<String, usize>,
     ) -> Vec<FeedbackFeatures> {
-        let cache = self.scoring_cache.read().unwrap();
+        let cache = self.scoring_cache.read();
         let ts = now();
         let mut features = Vec::with_capacity(feedback.len());
 
@@ -237,7 +237,7 @@ impl YantrikDB {
     /// Save updated weights to the database.
     fn save_learned_weights(&self, weights: &LearnedWeights) -> Result<()> {
         let ts = now();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "UPDATE learned_weights SET \
              w_sim = ?1, w_decay = ?2, w_recency = ?3, \

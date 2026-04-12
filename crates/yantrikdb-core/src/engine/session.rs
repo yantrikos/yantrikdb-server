@@ -43,7 +43,6 @@ impl YantrikDB {
         // Cache the active session
         self.active_sessions
             .write()
-            .unwrap()
             .insert(namespace.to_string(), session_id.clone());
 
         self.log_op(
@@ -115,7 +114,7 @@ impl YantrikDB {
         }; // drop conn before acquiring active_sessions write lock
 
         // Clear from active_sessions cache
-        self.active_sessions.write().unwrap().retain(|_, sid| sid != session_id);
+        self.active_sessions.write().retain(|_, sid| sid != session_id);
 
         self.log_op(
             "session_end",
@@ -204,7 +203,7 @@ impl YantrikDB {
                 // Reload active_sessions cache while still holding conn
                 let new_cache = Self::load_active_sessions(&conn)?;
                 // conn < active_sessions in lock ordering, safe to hold both
-                *self.active_sessions.write().unwrap() = new_cache;
+                *self.active_sessions.write() = new_cache;
             }
             changes
         };

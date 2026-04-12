@@ -35,7 +35,7 @@ impl YantrikDB {
         let stored_emb = self.encrypt_embedding(&emb_blob)?;
 
         // Read active session for this namespace into a local before acquiring conn
-        let session_id = self.active_sessions.read().unwrap().get(namespace).cloned();
+        let session_id = self.active_sessions.read().get(namespace).cloned();
 
         // Acquire conn, do all SQL, then drop before other locks
         {
@@ -65,7 +65,7 @@ impl YantrikDB {
         // conn dropped here
 
         // Insert into vector index (lock ordering: conn already dropped)
-        self.vec_index.write().unwrap().insert(&rid, embedding)?;
+        self.vec_index.write().insert(&rid, embedding)?;
 
         // Insert into scoring cache (conn and vec_index dropped)
         self.cache_insert(rid.clone(), ScoringRow {
@@ -88,7 +88,7 @@ impl YantrikDB {
         {
             let text_tokens = crate::graph::tokenize(text);
             // Read graph_index to find matching entities, then drop read lock
-            let all_entities = self.graph_index.read().unwrap().all_entity_names();
+            let all_entities = self.graph_index.read().all_entity_names();
             let matching: Vec<String> = all_entities
                 .into_iter()
                 .filter(|entity| crate::graph::entity_matches_text(entity, &text_tokens))
@@ -106,7 +106,7 @@ impl YantrikDB {
                     }
                 }
                 // conn dropped, now acquire graph_index write lock
-                let mut gi = self.graph_index.write().unwrap();
+                let mut gi = self.graph_index.write();
                 for entity in &matching {
                     gi.link_memory(&rid, entity);
                 }
@@ -148,7 +148,7 @@ impl YantrikDB {
         }
 
         // Clone active sessions map before acquiring conn
-        let sessions = self.active_sessions.read().unwrap().clone();
+        let sessions = self.active_sessions.read().clone();
 
         let mut rids = Vec::with_capacity(inputs.len());
 
@@ -208,14 +208,14 @@ impl YantrikDB {
 
         // Insert into HNSW vec index + scoring cache after SQL commit
         {
-            let mut vi = self.vec_index.write().unwrap();
+            let mut vi = self.vec_index.write();
             for (rid, input) in rids.iter().zip(inputs.iter()) {
                 vi.insert(rid, &input.embedding)?;
             }
         }
         // vec_index dropped, now scoring_cache
         {
-            let mut cache = self.scoring_cache.write().unwrap();
+            let mut cache = self.scoring_cache.write();
             for (rid, input) in rids.iter().zip(inputs.iter()) {
                 let ts = now();
                 cache.insert(rid.clone(), ScoringRow {

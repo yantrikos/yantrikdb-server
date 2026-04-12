@@ -1,7 +1,7 @@
 //! Peer registry — tracks all known peers and their status.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::config::{NodeRole, PeerConfig};
@@ -56,17 +56,17 @@ impl PeerRegistry {
 
     /// Number of configured peers.
     pub fn count(&self) -> usize {
-        self.peers.lock().unwrap().len()
+        self.peers.lock().len()
     }
 
     /// Get a snapshot of all peer statuses.
     pub fn snapshot(&self) -> Vec<PeerStatus> {
-        self.peers.lock().unwrap().values().cloned().collect()
+        self.peers.lock().values().cloned().collect()
     }
 
     /// Mark a peer as reachable, update its state from a handshake.
     pub fn record_handshake(&self, addr: &str, node_id: u32, current_term: u64) {
-        let mut peers = self.peers.lock().unwrap();
+        let mut peers = self.peers.lock();
         if let Some(p) = peers.get_mut(addr) {
             p.node_id = Some(node_id);
             p.current_term = current_term;
@@ -77,7 +77,7 @@ impl PeerRegistry {
 
     /// Mark a peer as unreachable.
     pub fn mark_unreachable(&self, addr: &str) {
-        let mut peers = self.peers.lock().unwrap();
+        let mut peers = self.peers.lock();
         if let Some(p) = peers.get_mut(addr) {
             p.reachable = false;
         }
@@ -85,7 +85,7 @@ impl PeerRegistry {
 
     /// Update a peer's oplog position.
     pub fn update_oplog_position(&self, addr: &str, hlc: Vec<u8>, op_id: String) {
-        let mut peers = self.peers.lock().unwrap();
+        let mut peers = self.peers.lock();
         if let Some(p) = peers.get_mut(addr) {
             p.last_hlc = Some(hlc);
             p.last_op_id = Some(op_id);
@@ -98,7 +98,6 @@ impl PeerRegistry {
     pub fn voter_count(&self) -> usize {
         self.peers
             .lock()
-            .unwrap()
             .values()
             .filter(|p| p.configured_role == NodeRole::Voter)
             .count()
@@ -108,7 +107,6 @@ impl PeerRegistry {
     pub fn quorum_member_count(&self) -> usize {
         self.peers
             .lock()
-            .unwrap()
             .values()
             .filter(|p| matches!(p.configured_role, NodeRole::Voter | NodeRole::Witness))
             .count()
@@ -118,7 +116,6 @@ impl PeerRegistry {
     pub fn reachable_quorum_count(&self) -> usize {
         self.peers
             .lock()
-            .unwrap()
             .values()
             .filter(|p| {
                 matches!(p.configured_role, NodeRole::Voter | NodeRole::Witness) && p.reachable

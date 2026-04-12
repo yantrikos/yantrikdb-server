@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ServerConfig {
     pub server: ServerSection,
     pub tls: TlsSection,
@@ -30,18 +31,10 @@ pub struct EmbeddingSection {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct TlsSection {
     pub cert_path: Option<PathBuf>,
     pub key_path: Option<PathBuf>,
-}
-
-impl Default for TlsSection {
-    fn default() -> Self {
-        Self {
-            cert_path: None,
-            key_path: None,
-        }
-    }
 }
 
 impl TlsSection {
@@ -54,6 +47,7 @@ impl TlsSection {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct EncryptionSection {
     /// Path to a 32-byte master key file (raw bytes).
     /// If unset and `auto_generate` is true, one is created on first startup.
@@ -68,23 +62,12 @@ pub struct EncryptionSection {
     pub key_hex: Option<String>,
 }
 
-impl Default for EncryptionSection {
-    fn default() -> Self {
-        Self {
-            key_path: None,
-            // Default OFF: encryption is opt-in. Surprising users with
-            // silent encryption broke the v0.5.4 Proxmox deployment because
-            // the embedding backfill couldn't write through encrypt_embedding().
-            // To enable: set key_path or key_hex, OR set auto_generate = true
-            // explicitly in [encryption].
-            auto_generate: false,
-            key_hex: None,
-        }
-    }
-}
-
 impl EncryptionSection {
     /// Whether encryption is enabled (any key source configured).
+    ///
+    /// Not currently called — reserved for future startup banner /
+    /// /v1/admin/status surfacing of at-rest encryption state.
+    #[allow(dead_code)]
     pub fn is_enabled(&self) -> bool {
         self.key_path.is_some() || self.key_hex.is_some() || self.auto_generate
     }
@@ -263,6 +246,10 @@ impl ClusterSection {
     }
 
     /// Total voter count (this node + voter peers, excluding witness/read replicas).
+    ///
+    /// Not currently called — reserved for quorum diagnostics and config
+    /// validation on startup.
+    #[allow(dead_code)]
     pub fn voter_count(&self) -> usize {
         let self_voter = matches!(self.role, NodeRole::Voter) as usize;
         let peer_voters = self
@@ -288,20 +275,6 @@ impl ClusterSection {
     pub fn quorum_size(&self) -> usize {
         let total = self.quorum_members();
         total / 2 + 1
-    }
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerSection::default(),
-            tls: TlsSection::default(),
-            encryption: EncryptionSection::default(),
-            embedding: EmbeddingSection::default(),
-            background: BackgroundSection::default(),
-            limits: LimitsSection::default(),
-            cluster: ClusterSection::default(),
-        }
     }
 }
 

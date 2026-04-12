@@ -3,7 +3,8 @@
 //! Implements the yantrikdb-core `Embedder` trait so engines can
 //! auto-embed text without client-provided vectors.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
@@ -46,7 +47,7 @@ impl yantrikdb::types::Embedder for FastEmbedder {
         &self,
         text: &str,
     ) -> std::result::Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut model = self.inner.model.lock().unwrap();
+        let mut model = self.inner.model.lock();
         let results = model.embed(vec![text], None)?;
         results
             .into_iter()
@@ -58,7 +59,7 @@ impl yantrikdb::types::Embedder for FastEmbedder {
         &self,
         texts: &[&str],
     ) -> std::result::Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut model = self.inner.model.lock().unwrap();
+        let mut model = self.inner.model.lock();
         let owned: Vec<String> = texts.iter().map(|t| t.to_string()).collect();
         let results = model.embed(owned, None)?;
         Ok(results)

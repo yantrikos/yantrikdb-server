@@ -52,7 +52,14 @@ pub mod tenant;
 mod tests;
 
 use std::collections::HashMap;
-use std::sync::{Mutex, RwLock, MutexGuard};
+// parking_lot::Mutex and RwLock: non-poisoning (no PoisonError on panic),
+// smaller, faster, and integrate with parking_lot::deadlock::check_deadlock()
+// which the server runs on a background task. Critical property: if a thread
+// panics while holding an engine lock, subsequent acquirers do NOT see a
+// PoisonError and do NOT themselves panic — we can recover. With std::sync,
+// a single panic inside the engine can cascade into every other thread
+// panicking on lock(), which cascades the whole process.
+use parking_lot::{Mutex, MutexGuard, RwLock};
 
 use base64::Engine;
 use rand::Rng;
@@ -332,12 +339,12 @@ impl YantrikDB {
 
     /// Get a new HLC timestamp (ticks the clock forward).
     pub fn tick_hlc(&self) -> HLCTimestamp {
-        self.hlc.lock().unwrap().now()
+        self.hlc.lock().now()
     }
 
     /// Merge a remote HLC timestamp into the local clock.
     pub fn merge_hlc(&self, remote: HLCTimestamp) -> HLCTimestamp {
-        self.hlc.lock().unwrap().recv(remote)
+        self.hlc.lock().recv(remote)
     }
 
     /// Get the actor_id of this instance.
@@ -355,7 +362,7 @@ impl YantrikDB {
     /// Returns a `MutexGuard` that deref's to `&Connection`.
     /// The lock is released when the guard is dropped.
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap()
+        self.conn.lock()
     }
 
     /// Whether this instance has encryption enabled.
@@ -403,10 +410,12 @@ impl YantrikDB {
     }
 
     /// Close the database connection. After this, the engine cannot be used.
+    ///
+    /// parking_lot::Mutex::into_inner returns T directly (no PoisonError),
+    /// unlike std::sync::Mutex::into_inner which returns Result.
     pub fn close(self) -> Result<()> {
         self.conn
             .into_inner()
-            .unwrap()
             .close()
             .map_err(|(_, e)| YantrikDbError::Database(e))
     }

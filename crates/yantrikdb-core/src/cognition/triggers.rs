@@ -1064,4 +1064,138 @@ mod tests {
         let persisted = filter_and_persist_triggers(&db, vec![t1, t2], ts).unwrap();
         assert_eq!(persisted.len(), 1); // second is suppressed by cooldown
     }
+
+    /// Regression test for the v0.5.8 self-deadlock bug in check_redundancy.
+    ///
+    /// Before the fix (commit c4c2d9d), an `if let Some(...) =
+    /// check_substitution_category_pair(&*db.conn(), ...)` in the high-similarity
+    /// pass extended a `MutexGuard<Connection>` lifetime through the if-let body,
+    /// and the body called `conflict_exists(db, ...)` which tried to take
+    /// `db.conn()` again on the same thread. std::sync::Mutex is non-reentrant,
+    /// so the consolidation worker self-deadlocked while holding the outer
+    /// engine mutex, wedging every other worker on the next engine.lock().
+    ///
+    /// This test reproduces the exact trigger conditions:
+    ///   1. Two memories with cosine similarity > 0.85 (we use identical
+    ///      embeddings for determinism: similarity = 1.0)
+    ///   2. No shared entities (memories share no relate edges)
+    ///   3. Substitution-category membership for two of the differing tokens
+    ///      (we seed a `databases` category with `mysql` and `postgres`)
+    ///
+    /// Before v0.5.8 this test hangs forever on std::sync::Mutex.
+    /// After v0.5.8 + parking_lot (v0.5.9) it completes within milliseconds
+    /// AND a conflict record is written.
+    ///
+    /// A 5-second background timeout would be nicer but Rust's stdlib does
+    /// not expose cheap per-test timeouts. Tokio-style harnesses are
+    /// inappropriate here because this is a pure sync core test. If the
+    /// bug regresses, the entire test binary will hang and CI will catch
+    /// it via the 60-second default cargo test timeout.
+    #[test]
+    fn test_check_redundancy_no_self_deadlock_on_substitution_category() {
+        use rusqlite::params;
+
+        let db = YantrikDB::new(":memory:", 8).unwrap();
+
+        // Seed a substitution category: {test_deadlock_regression} with
+        // exclusive mode so a match triggers conflict creation (not just
+        // redundancy). We use a test-only name to avoid colliding with
+        // any default categories the schema may seed.
+        let hlc_bytes = db.tick_hlc().to_bytes().to_vec();
+        let ts = now();
+        db.conn()
+            .execute(
+                "INSERT INTO substitution_categories
+                 (id, name, conflict_mode, status, created_at, updated_at, hlc, origin_actor)
+                 VALUES ('cat-test-deadlock', 'test_deadlock_regression',
+                         'exclusive', 'active', ?1, ?1, ?2, 'test')",
+                params![ts, hlc_bytes],
+            )
+            .unwrap();
+
+        // Use fabricated tokens that cannot collide with any seeded members.
+        for (tok, suffix) in [("zyxqvtoken1", "a"), ("zyxqvtoken2", "b")] {
+            let hlc_bytes = db.tick_hlc().to_bytes().to_vec();
+            db.conn()
+                .execute(
+                    "INSERT INTO substitution_members
+                     (id, category_id, token_normalized, token_display,
+                      confidence, source, status, created_at, updated_at,
+                      hlc, origin_actor)
+                     VALUES (?1, 'cat-test-deadlock', ?2, ?2, 0.9, 'test', 'active',
+                             ?3, ?3, ?4, 'test')",
+                    params![format!("mem-{suffix}"), tok, ts, hlc_bytes],
+                )
+                .unwrap();
+        }
+
+        // Record two memories with identical embeddings (cosine sim = 1.0,
+        // well above the 0.85 redundancy threshold) and texts that share
+        // most words but differ on the substitution-category tokens.
+        let emb = vec_seed(1.0, 8);
+        let rid_a = db
+            .record(
+                "we store user profiles in zyxqvtoken1 for the auth service",
+                "semantic",
+                0.8,
+                0.0,
+                604800.0,
+                &serde_json::json!({}),
+                &emb,
+                "default",
+                0.9,
+                "general",
+                "user",
+                None,
+            )
+            .unwrap();
+        let rid_b = db
+            .record(
+                "we store user profiles in zyxqvtoken2 for the auth service",
+                "semantic",
+                0.8,
+                0.0,
+                604800.0,
+                &serde_json::json!({}),
+                &emb,
+                "default",
+                0.9,
+                "general",
+                "user",
+                None,
+            )
+            .unwrap();
+
+        // If the v0.5.8 self-deadlock regresses, this call hangs forever and
+        // the test times out. parking_lot (v0.5.9) would additionally trip
+        // the runtime deadlock detector.
+        let triggers = check_redundancy(&db, 0.85).unwrap();
+
+        // The pair should have been flagged — either as a redundancy/substitution
+        // trigger, or consumed into an actual conflict record by the body.
+        // At minimum, check_redundancy must have returned at all.
+        assert!(
+            !triggers.is_empty(),
+            "expected at least one trigger for mysql/postgres substitution pair"
+        );
+
+        // Verify conflict_exists path was reachable AND completed: a conflict
+        // row should have been written by create_conflict() inside the body.
+        // This confirms both memories and the substitution category were
+        // resolved through the previously-deadlocking code path.
+        let conflict_count: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM conflicts
+                 WHERE (memory_a = ?1 AND memory_b = ?2)
+                    OR (memory_a = ?2 AND memory_b = ?1)",
+                params![rid_a, rid_b],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            conflict_count, 1,
+            "expected exactly one conflict record between the substitution pair"
+        );
+    }
 }

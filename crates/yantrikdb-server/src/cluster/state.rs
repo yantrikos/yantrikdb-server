@@ -1,8 +1,8 @@
 //! Cluster node state machine — Raft-lite for leader election.
 
+use parking_lot::Mutex;
 #[allow(unused_imports)]
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -105,13 +105,13 @@ impl NodeState {
 
     /// Whether this node accepts writes (i.e. is the current leader OR standalone).
     pub fn accepts_writes(&self) -> bool {
-        let role = *self.leader_role.lock().unwrap();
+        let role = *self.leader_role.lock();
         matches!(role, LeaderRole::Leader | LeaderRole::Standalone)
     }
 
     /// Whether this node is currently the leader.
     pub fn is_leader(&self) -> bool {
-        *self.leader_role.lock().unwrap() == LeaderRole::Leader
+        *self.leader_role.lock() == LeaderRole::Leader
     }
 
     /// Whether this node participates in elections (Voter or Witness).
@@ -120,19 +120,19 @@ impl NodeState {
     }
 
     pub fn current_term(&self) -> u64 {
-        self.raft.lock().unwrap().current_term
+        self.raft.lock().current_term
     }
 
     pub fn voted_for(&self) -> Option<u32> {
-        self.raft.lock().unwrap().voted_for
+        self.raft.lock().voted_for
     }
 
     pub fn current_leader(&self) -> Option<u32> {
-        *self.current_leader.lock().unwrap()
+        *self.current_leader.lock()
     }
 
     pub fn leader_role(&self) -> LeaderRole {
-        *self.leader_role.lock().unwrap()
+        *self.leader_role.lock()
     }
 
     /// Transition this node to follower state for the given term.
@@ -146,7 +146,7 @@ impl NodeState {
             return Ok(());
         }
 
-        let mut raft = self.raft.lock().unwrap();
+        let mut raft = self.raft.lock();
         if term > raft.current_term {
             raft.current_term = term;
             raft.voted_for = None;
@@ -154,9 +154,9 @@ impl NodeState {
         }
         drop(raft);
 
-        *self.leader_role.lock().unwrap() = LeaderRole::Follower;
-        *self.current_leader.lock().unwrap() = leader_id;
-        *self.last_heartbeat.lock().unwrap() = Some(Instant::now());
+        *self.leader_role.lock() = LeaderRole::Follower;
+        *self.current_leader.lock() = leader_id;
+        *self.last_heartbeat.lock() = Some(Instant::now());
 
         tracing::info!(node_id = self.node_id, term, ?leader_id, "became follower");
         Ok(())
@@ -169,15 +169,15 @@ impl NodeState {
             anyhow::bail!("only voters can become candidates");
         }
 
-        let mut raft = self.raft.lock().unwrap();
+        let mut raft = self.raft.lock();
         raft.current_term += 1;
         raft.voted_for = Some(self.node_id);
         raft.save(&self.raft_state_path)?;
         let new_term = raft.current_term;
         drop(raft);
 
-        *self.leader_role.lock().unwrap() = LeaderRole::Candidate;
-        *self.current_leader.lock().unwrap() = None;
+        *self.leader_role.lock() = LeaderRole::Candidate;
+        *self.current_leader.lock() = None;
 
         tracing::info!(
             node_id = self.node_id,
@@ -193,8 +193,8 @@ impl NodeState {
             anyhow::bail!("only voters can become leaders");
         }
 
-        *self.leader_role.lock().unwrap() = LeaderRole::Leader;
-        *self.current_leader.lock().unwrap() = Some(self.node_id);
+        *self.leader_role.lock() = LeaderRole::Leader;
+        *self.current_leader.lock() = Some(self.node_id);
 
         tracing::info!(
             node_id = self.node_id,
@@ -207,7 +207,7 @@ impl NodeState {
     /// Record a vote granted to a candidate this term.
     /// Returns true if vote was granted, false if already voted differently.
     pub fn grant_vote(&self, term: u64, candidate_id: u32) -> anyhow::Result<bool> {
-        let mut raft = self.raft.lock().unwrap();
+        let mut raft = self.raft.lock();
 
         // Reject if our term is higher
         if term < raft.current_term {
@@ -240,19 +240,15 @@ impl NodeState {
         if term > self.current_term() {
             self.become_follower(term, Some(leader_id))?;
         } else {
-            *self.current_leader.lock().unwrap() = Some(leader_id);
-            *self.last_heartbeat.lock().unwrap() = Some(Instant::now());
+            *self.current_leader.lock() = Some(leader_id);
+            *self.last_heartbeat.lock() = Some(Instant::now());
         }
         Ok(())
     }
 
     /// How long since the last heartbeat from leader. None if never.
     pub fn time_since_heartbeat(&self) -> Option<std::time::Duration> {
-        self.last_heartbeat
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|t| t.elapsed())
+        self.last_heartbeat.lock().as_ref().map(|t| t.elapsed())
     }
 }
 

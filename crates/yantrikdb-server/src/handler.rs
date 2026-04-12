@@ -1,6 +1,7 @@
 //! Command handler — executes Commands against a YantrikDB engine instance.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 use yantrikdb::types::ThinkConfig;
@@ -41,7 +42,7 @@ pub fn execute(
             emotional_state,
             embedding,
         } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let rid = if let Some(emb) = embedding {
                 db.record(
                     &text,
@@ -76,7 +77,7 @@ pub fn execute(
         }
 
         Command::RememberBatch { memories } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let mut rids = Vec::with_capacity(memories.len());
             for m in memories {
                 let rid = if let Some(emb) = m.embedding {
@@ -125,7 +126,7 @@ pub fn execute(
             source,
             query_embedding,
         } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
 
             let results = if let Some(emb) = query_embedding {
                 db.recall(
@@ -179,7 +180,7 @@ pub fn execute(
         }
 
         Command::Forget { rid } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let found = db.forget(&rid)?;
             Ok(CommandResult::Json(json!({ "rid": rid, "found": found })))
         }
@@ -190,13 +191,13 @@ pub fn execute(
             relationship,
             weight,
         } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let edge_id = db.relate(&entity, &target, &relationship, weight)?;
             Ok(CommandResult::Json(json!({ "edge_id": edge_id })))
         }
 
         Command::Edges { entity } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let edges = db.get_edges(&entity)?;
             let edge_list: Vec<Value> = edges
                 .iter()
@@ -218,7 +219,7 @@ pub fn execute(
             client_id,
             metadata,
         } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let session_id = db.session_start(&namespace, &client_id, &metadata)?;
             Ok(CommandResult::Json(json!({ "session_id": session_id })))
         }
@@ -227,7 +228,7 @@ pub fn execute(
             session_id,
             summary,
         } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let result = db.session_end(&session_id, summary.as_deref())?;
             Ok(CommandResult::Json(json!({
                 "session_id": result.session_id,
@@ -244,7 +245,7 @@ pub fn execute(
             run_personality,
             consolidation_limit,
         } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let config = ThinkConfig {
                 run_consolidation,
                 run_conflict_scan,
@@ -284,7 +285,7 @@ pub fn execute(
             entity,
             limit,
         } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let conflicts = db.get_conflicts(
                 status.as_deref(),
                 conflict_type.as_deref(),
@@ -318,7 +319,7 @@ pub fn execute(
             new_text,
             resolution_note,
         } => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let _result = db.resolve_conflict(
                 &conflict_id,
                 &strategy,
@@ -333,7 +334,7 @@ pub fn execute(
         }
 
         Command::Personality => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let profile = db.get_personality()?;
             let traits: Vec<Value> = profile
                 .traits
@@ -344,7 +345,7 @@ pub fn execute(
         }
 
         Command::Stats => {
-            let db = engine.lock().unwrap();
+            let db = engine.lock();
             let s = db.stats(None)?;
             Ok(CommandResult::Json(json!({
                 "active_memories": s.active_memories,
@@ -360,7 +361,7 @@ pub fn execute(
 
         Command::CreateDb { name } => {
             let ctrl = control.ok_or_else(|| anyhow::anyhow!("no control db"))?;
-            let c = ctrl.lock().unwrap();
+            let c = ctrl.lock();
             if c.database_exists(&name)? {
                 anyhow::bail!("database '{}' already exists", name);
             }
@@ -374,7 +375,7 @@ pub fn execute(
 
         Command::ListDb => {
             let ctrl = control.ok_or_else(|| anyhow::anyhow!("no control db"))?;
-            let c = ctrl.lock().unwrap();
+            let c = ctrl.lock();
             let databases = c.list_databases()?;
             let list: Vec<Value> = databases
                 .iter()

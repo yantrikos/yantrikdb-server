@@ -49,20 +49,20 @@ impl YantrikDB {
 
     /// Rebuild the HNSW vector index from scratch. Called after replication.
     pub fn rebuild_vec_index(&self) -> Result<usize> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let new_index = Self::build_vec_index_with_enc(&conn, self.embedding_dim, self.enc.as_ref())?;
         let count = new_index.len();
         drop(conn);
-        *self.vec_index.write().unwrap() = new_index;
+        *self.vec_index.write() = new_index;
         Ok(count)
     }
 
     pub fn rebuild_graph_index(&self) -> Result<usize> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let new_index = crate::graph_index::GraphIndex::build_from_db(&conn)?;
         let count = new_index.entity_count();
         drop(conn);
-        *self.graph_index.write().unwrap() = new_index;
+        *self.graph_index.write() = new_index;
         Ok(count)
     }
 }

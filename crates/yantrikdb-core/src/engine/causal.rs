@@ -24,7 +24,11 @@ impl YantrikDB {
 
     /// Load the causal store from the database.
     pub fn load_causal_store(&self) -> Result<CausalStore> {
-        match Self::get_meta(&self.conn(), CAUSAL_STORE_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), CAUSAL_STORE_META_KEY)?;
+        match meta {
             Some(json) => {
                 let mut store: CausalStore = serde_json::from_str(&json).map_err(|e| {
                     crate::error::YantrikDbError::Database(
@@ -65,7 +69,11 @@ impl YantrikDB {
 
     /// Load the causal configuration.
     pub fn load_causal_config(&self) -> Result<CausalConfig> {
-        match Self::get_meta(&self.conn(), CAUSAL_CONFIG_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), CAUSAL_CONFIG_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),

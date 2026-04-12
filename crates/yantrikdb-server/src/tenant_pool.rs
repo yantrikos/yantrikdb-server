@@ -3,9 +3,10 @@
 //! Each tenant gets an isolated YantrikDB engine backed by its own SQLite file.
 //! Engines are cached in memory and shared across connections to the same database.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use yantrikdb::YantrikDB;
 
@@ -37,13 +38,17 @@ impl TenantPool {
     }
 
     /// Whether encryption is enabled for engines created by this pool.
+    ///
+    /// Not currently called — reserved for /v1/admin/status surfacing of
+    /// encryption state and for startup diagnostics.
+    #[allow(dead_code)]
     pub fn is_encrypted(&self) -> bool {
         self.master_key.is_some()
     }
 
     /// Get or create an engine for the given database.
     pub fn get_engine(&self, db_record: &DatabaseRecord) -> anyhow::Result<Arc<Mutex<YantrikDB>>> {
-        let mut engines = self.engines.lock().unwrap();
+        let mut engines = self.engines.lock();
 
         if let Some(engine) = engines.get(&db_record.id) {
             return Ok(Arc::clone(engine));
@@ -78,14 +83,18 @@ impl TenantPool {
     }
 
     /// Remove an engine from the pool (e.g. on database drop).
+    ///
+    /// Not currently called — reserved for the planned /v1/admin/drop
+    /// endpoint which tears down a tenant cleanly.
+    #[allow(dead_code)]
     pub fn evict(&self, db_id: i64) {
-        let mut engines = self.engines.lock().unwrap();
+        let mut engines = self.engines.lock();
         engines.remove(&db_id);
     }
 
     /// Number of loaded engines.
     pub fn loaded_count(&self) -> usize {
-        self.engines.lock().unwrap().len()
+        self.engines.lock().len()
     }
 
     /// Get the data directory path.

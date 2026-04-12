@@ -20,7 +20,11 @@ impl YantrikDB {
 
     /// Load the agenda from the database (or create a new one).
     pub fn load_agenda(&self) -> Result<Agenda> {
-        match Self::get_meta(&self.conn(), AGENDA_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), AGENDA_META_KEY)?;
+        match meta {
             Some(json) => {
                 serde_json::from_str(&json).map_err(|e| {
                     crate::error::YantrikDbError::Database(

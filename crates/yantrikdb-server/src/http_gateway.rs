@@ -19,7 +19,14 @@ use crate::server::AppState;
 
 type AppResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 
-fn app_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
+/// Shared engine handle. Type alias keeps the complex nested generic out
+/// of function signatures and avoids clippy::type_complexity.
+type EngineHandle = Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>;
+
+/// Error tuple returned by auth-checking helpers.
+type AppError = (StatusCode, Json<Value>);
+
+fn app_error(status: StatusCode, message: impl Into<String>) -> AppError {
     (status, Json(json!({ "error": message.into() })))
 }
 
@@ -27,7 +34,7 @@ fn app_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Jso
 fn resolve_engine(
     state: &AppState,
     auth_header: Option<&str>,
-) -> Result<(i64, Arc<std::sync::Mutex<yantrikdb::YantrikDB>>), (StatusCode, Json<Value>)> {
+) -> Result<(i64, EngineHandle), AppError> {
     let token = auth_header
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "missing Bearer token"))?;
@@ -36,7 +43,7 @@ fn resolve_engine(
     if let Some(ref cluster) = state.cluster {
         if let Some(ref secret) = cluster.config.cluster_secret {
             if token == secret.as_str() {
-                let control = state.control.lock().unwrap();
+                let control = state.control.lock();
                 let db_record = control
                     .get_database("default")
                     .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -59,7 +66,7 @@ fn resolve_engine(
     }
 
     let token_hash = auth::hash_token(token);
-    let control = state.control.lock().unwrap();
+    let control = state.control.lock();
     let db_id = control
         .validate_token(&token_hash)
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -88,13 +95,13 @@ fn resolve_engine(
 
 /// Execute a command on a blocking thread so a slow engine call (think,
 /// consolidate, embed) cannot park a tokio worker. The engine and control
-/// mutexes are `std::sync::Mutex`, which must NEVER be held across an await
+/// mutexes are `parking_lot::Mutex`, which must NEVER be held across an await
 /// — running the whole call inside `spawn_blocking` makes that structurally
 /// impossible.
 async fn execute_cmd(
-    engine: Arc<std::sync::Mutex<yantrikdb::YantrikDB>>,
+    engine: Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>,
     cmd: Command,
-    control: Arc<std::sync::Mutex<crate::control::ControlDb>>,
+    control: Arc<parking_lot::Mutex<crate::control::ControlDb>>,
 ) -> AppResult {
     let result =
         tokio::task::spawn_blocking(move || handler::execute(&engine, cmd, Some(control.as_ref())))
@@ -563,7 +570,7 @@ async fn create_database(
         .to_string();
 
     // Create directly via control (no engine needed)
-    let control = state.control.lock().unwrap();
+    let control = state.control.lock();
     if control
         .database_exists(&name)
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -695,7 +702,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     // auth (which needs control). Scope the control lock tightly, then drop
     // it before touching the engine.
     let default_db = {
-        let control = state.control.lock().unwrap();
+        let control = state.control.lock();
         control.get_database("default").ok().flatten()
     };
     if let Some(rec) = default_db {
@@ -703,10 +710,8 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
             let stats_opt = {
                 // Use try_lock so a slow engine call (e.g. embedding generation)
                 // can never wedge the metrics endpoint. Skip this scrape instead.
-                match engine.try_lock() {
-                    Ok(db) => db.stats(None).ok(),
-                    Err(_) => None,
-                }
+                // parking_lot::Mutex::try_lock returns Option<MutexGuard>.
+                engine.try_lock().and_then(|db| db.stats(None).ok())
             };
             if let Some(stats) = stats_opt {
                 {
@@ -806,7 +811,6 @@ async fn list_databases(
     let databases = state
         .control
         .lock()
-        .unwrap()
         .list_databases()
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let list: Vec<Value> = databases

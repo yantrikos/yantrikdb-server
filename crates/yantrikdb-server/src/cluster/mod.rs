@@ -9,10 +9,12 @@
 //! - **ReadReplica** — Consumes oplog, never votes, never accepts writes
 //! - **Witness** — Vote-only, no data storage (separate binary)
 //! - **Single** — Standalone, no replication
+//!
+//! This module intentionally exposes some methods for future use
+//! and operational tooling, even when not currently called. A module-level
+//! `#![allow(dead_code)]` covers those scaffolding points.
 
 #![allow(dead_code)]
-//! Cluster module — intentionally exposes some methods for future use
-//! and operational tooling, even when not currently called.
 
 pub mod client;
 pub mod election;
@@ -25,8 +27,8 @@ pub mod sync_loop;
 
 use std::sync::Arc;
 
-pub use peers::{PeerRegistry, PeerStatus};
-pub use state::{LeaderRole, NodeState, RaftState};
+pub use peers::PeerRegistry;
+pub use state::{LeaderRole, NodeState};
 
 use crate::config::ClusterSection;
 use crate::tenant_pool::TenantPool;
@@ -37,7 +39,7 @@ pub struct ClusterContext {
     pub state: Arc<NodeState>,
     pub peers: Arc<PeerRegistry>,
     pub pool: Arc<TenantPool>,
-    pub control: Option<Arc<std::sync::Mutex<crate::control::ControlDb>>>,
+    pub control: Option<Arc<parking_lot::Mutex<crate::control::ControlDb>>>,
 }
 
 impl ClusterContext {
@@ -46,7 +48,7 @@ impl ClusterContext {
         state: Arc<NodeState>,
         peers: Arc<PeerRegistry>,
         pool: Arc<TenantPool>,
-        control: Option<Arc<std::sync::Mutex<crate::control::ControlDb>>>,
+        control: Option<Arc<parking_lot::Mutex<crate::control::ControlDb>>>,
     ) -> Self {
         Self {
             config,
@@ -82,10 +84,9 @@ impl ClusterContext {
     pub fn engine_for(
         &self,
         db_name: &str,
-    ) -> anyhow::Result<Arc<std::sync::Mutex<yantrikdb::YantrikDB>>> {
+    ) -> anyhow::Result<Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>> {
         let db_record = if let Some(ref ctrl) = self.control {
             ctrl.lock()
-                .unwrap()
                 .get_database(db_name)?
                 .ok_or_else(|| anyhow::anyhow!("database '{}' not found", db_name))?
         } else {
@@ -101,14 +102,14 @@ impl ClusterContext {
     }
 
     /// Get a default-database engine for replication ops.
-    pub fn default_engine(&self) -> anyhow::Result<Arc<std::sync::Mutex<yantrikdb::YantrikDB>>> {
+    pub fn default_engine(&self) -> anyhow::Result<Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>> {
         self.engine_for("default")
     }
 
     /// List all replicable databases known to this node.
     pub fn list_databases(&self) -> Vec<String> {
         if let Some(ref ctrl) = self.control {
-            if let Ok(dbs) = ctrl.lock().unwrap().list_databases() {
+            if let Ok(dbs) = ctrl.lock().list_databases() {
                 return dbs.into_iter().map(|d| d.name).collect();
             }
         }
@@ -120,7 +121,7 @@ impl ClusterContext {
         let Some(ref ctrl) = self.control else {
             return Ok(()); // no control db, nothing to do
         };
-        let ctrl = ctrl.lock().unwrap();
+        let ctrl = ctrl.lock();
         if ctrl.database_exists(name)? {
             return Ok(());
         }
@@ -135,7 +136,7 @@ impl ClusterContext {
     /// Get our last HLC position from a specific database's oplog.
     pub fn last_hlc_for(&self, db_name: &str) -> anyhow::Result<Vec<u8>> {
         let engine = self.engine_for(db_name)?;
-        let db = engine.lock().unwrap();
+        let db = engine.lock();
         let conn = db.conn();
         let result: Option<Vec<u8>> = conn
             .query_row(
@@ -154,7 +155,7 @@ impl ClusterContext {
 
     pub fn last_op_id_for(&self, db_name: &str) -> anyhow::Result<String> {
         let engine = self.engine_for(db_name)?;
-        let db = engine.lock().unwrap();
+        let db = engine.lock();
         let conn = db.conn();
         let result: Option<String> = conn
             .query_row(

@@ -139,7 +139,7 @@ impl YantrikDB {
                 };
 
                 // Add session context if available
-                let active_sessions = self.active_sessions.read().unwrap();
+                let active_sessions = self.active_sessions.read();
                 if !active_sessions.is_empty() {
                     let session_ids: Vec<&String> = active_sessions.values().collect();
                     context.insert(

@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-server"
-version = "0.5.8"
+version = "0.5.9"
 edition = "2021"
 description = "YantrikDB database server — multi-tenant cognitive memory with wire protocol, HTTP gateway, replication, auto-failover, and at-rest encryption"
 license = "AGPL-3.0-only"
@@ -24,6 +24,13 @@ yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec", "rt"] }
 futures = "0.3"
+
+# Lock primitives
+# parking_lot provides non-poisoning Mutex/RwLock with runtime deadlock
+# detection via the `deadlock_detection` feature. A background task in
+# main.rs runs `deadlock::check_deadlock()` on a 10s cadence and logs any
+# cycles with full backtraces. See CONCURRENCY.md for lock ordering rules.
+parking_lot = { version = "0.12", features = ["deadlock_detection"] }
 
 # HTTP gateway
 axum = { version = "0.8", features = ["json"] }

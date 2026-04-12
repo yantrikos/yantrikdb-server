@@ -733,7 +733,11 @@ impl YantrikDB {
             }
         }
 
-        // Save everything in a transaction
+        // Save everything in a transaction. The conn guard is held for the
+        // duration of this block and MUST be dropped before self.log_op()
+        // runs below — log_op internally calls self.conn() and would
+        // self-deadlock on this thread's existing guard. See CONCURRENCY.md
+        // Rule 4.
         let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let ts = now_secs();
@@ -852,6 +856,7 @@ impl YantrikDB {
         }
 
         tx.commit()?;
+        drop(conn); // release guard before self.log_op() reacquires it
 
         self.log_op(
             "cognitive_graph_save",

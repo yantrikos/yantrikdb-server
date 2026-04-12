@@ -26,7 +26,11 @@ impl YantrikDB {
 
     /// Load the plan store from the database.
     pub fn load_plan_store(&self) -> Result<PlanStore> {
-        match Self::get_meta(&self.conn(), PLAN_STORE_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), PLAN_STORE_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
@@ -52,7 +56,11 @@ impl YantrikDB {
 
     /// Load the planner configuration.
     pub fn load_planner_config(&self) -> Result<PlannerConfig> {
-        match Self::get_meta(&self.conn(), PLANNER_CONFIG_META_KEY)? {
+        // Scope the conn guard to the get_meta call so it drops before
+        // the match body runs. Without this, arms that call self.*
+        // methods (which re-acquire conn) will self-deadlock.
+        let meta = Self::get_meta(&self.conn(), PLANNER_CONFIG_META_KEY)?;
+        match meta {
             Some(json) => serde_json::from_str(&json).map_err(|e| {
                 crate::error::YantrikDbError::Database(
                     rusqlite::Error::ToSqlConversionFailure(Box::new(e)),

@@ -127,7 +127,7 @@ impl YantrikDB {
         drop(conn);
 
         // Update scoring cache
-        if let Some(cached) = self.scoring_cache.write().unwrap().get_mut(rid) {
+        if let Some(cached) = self.scoring_cache.write().get_mut(rid) {
             cached.importance = new_importance;
             cached.certainty = new_certainty;
             cached.last_access = ts;

@@ -49,17 +49,17 @@ impl YantrikDB {
 
     /// Insert a scoring row into the in-memory cache.
     pub fn cache_insert(&self, rid: String, row: ScoringRow) {
-        self.scoring_cache.write().unwrap().insert(rid, row);
+        self.scoring_cache.write().insert(rid, row);
     }
 
     /// Remove a scoring row from the in-memory cache.
     pub fn cache_remove(&self, rid: &str) {
-        self.scoring_cache.write().unwrap().remove(rid);
+        self.scoring_cache.write().remove(rid);
     }
 
     /// Mark a memory as consolidated in the cache and reduce its importance.
     pub fn cache_mark_consolidated(&self, rid: &str, importance_factor: f64) {
-        let mut cache = self.scoring_cache.write().unwrap();
+        let mut cache = self.scoring_cache.write();
         if let Some(row) = cache.get_mut(rid) {
             row.consolidation_status = "consolidated".to_string();
             row.importance *= importance_factor;

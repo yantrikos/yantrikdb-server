@@ -253,8 +253,8 @@ impl YantrikDB {
         }; // drop conn before acquiring vec_index/graph_index locks
 
         if changes > 0 {
-            self.vec_index.write().unwrap().remove(rid);
-            self.graph_index.write().unwrap().unlink_memory(rid);
+            self.vec_index.write().remove(rid);
+            self.graph_index.write().unlink_memory(rid);
             // Remove from scoring cache (tombstoned memories excluded)
             self.cache_remove(rid);
             self.log_op(

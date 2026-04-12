@@ -22,6 +22,11 @@ zstd = "0.13"
 tracing = "0.1"
 aes-gcm = "0.10"
 base64 = "0.22"
+# parking_lot provides faster, smaller, non-poisoning Mutex/RwLock with
+# optional runtime deadlock detection. Used to protect the engine's internal
+# state (conn, hlc, vec_index, graph_index, scoring_cache, active_sessions).
+# See CONCURRENCY.md for the lock ordering invariant this enforces.
+parking_lot = { version = "0.12", features = ["deadlock_detection"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"

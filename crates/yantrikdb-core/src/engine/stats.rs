@@ -8,7 +8,7 @@ use super::{now, YantrikDB};
 impl YantrikDB {
     /// Get engine statistics. Optionally filter memory counts by namespace.
     pub fn stats(&self, namespace: Option<&str>) -> Result<Stats> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let ns_filter = namespace.map(|ns| format!(" AND namespace = '{}'", ns.replace('\'', "''"))).unwrap_or_default();
         let active = conn.query_row(
             &format!("SELECT COUNT(*) FROM memories WHERE consolidation_status = 'active'{}", ns_filter),
@@ -68,10 +68,10 @@ impl YantrikDB {
             resolved_conflicts,
             pending_triggers,
             active_patterns,
-            scoring_cache_entries: self.scoring_cache.read().unwrap().len(),
-            vec_index_entries: self.vec_index.read().unwrap().len(),
-            graph_index_entities: self.graph_index.read().unwrap().entity_count(),
-            graph_index_edges: self.graph_index.read().unwrap().edge_count(),
+            scoring_cache_entries: self.scoring_cache.read().len(),
+            vec_index_entries: self.vec_index.read().len(),
+            graph_index_entities: self.graph_index.read().entity_count(),
+            graph_index_edges: self.graph_index.read().edge_count(),
         })
     }
 
@@ -88,7 +88,7 @@ impl YantrikDB {
         let hlc_bytes = hlc_ts.to_bytes().to_vec();
         let payload_str = serde_json::to_string(payload)?;
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO oplog (op_id, op_type, timestamp, target_rid, payload, \
              actor_id, hlc, embedding_hash, origin_actor, applied) \

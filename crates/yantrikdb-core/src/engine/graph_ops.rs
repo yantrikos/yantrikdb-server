@@ -24,7 +24,7 @@ impl YantrikDB {
 
         // Phase 1: Lock conn for all SQL operations, then drop
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock();
             conn.execute(
                 "INSERT INTO edges (edge_id, src, dst, rel_type, weight, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
@@ -46,7 +46,7 @@ impl YantrikDB {
 
         // Phase 2: Lock graph_index write for in-memory updates, then drop
         {
-            let mut gi = self.graph_index.write().unwrap();
+            let mut gi = self.graph_index.write();
             gi.add_entity(src, src_type);
             gi.add_entity(dst, dst_type);
             gi.add_edge(src, dst, weight as f32);
@@ -77,7 +77,7 @@ impl YantrikDB {
 
     /// Get all edges connected to an entity.
     pub fn get_edges(&self, entity: &str) -> Result<Vec<Edge>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT * FROM edges WHERE (src = ?1 OR dst = ?1) AND tombstoned = 0",
         )?;
@@ -141,7 +141,7 @@ impl YantrikDB {
             ),
         };
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
         let entities = stmt
@@ -163,7 +163,7 @@ impl YantrikDB {
     pub fn link_memory_entity(&self, memory_rid: &str, entity_name: &str) -> Result<()> {
         // Phase 1: Lock conn for SQL INSERT, then drop
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock();
             conn.execute(
                 "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
                 params![memory_rid, entity_name],
@@ -171,7 +171,7 @@ impl YantrikDB {
         } // conn dropped
 
         // Phase 2: Lock graph_index write for in-memory update
-        self.graph_index.write().unwrap().link_memory(memory_rid, entity_name);
+        self.graph_index.write().link_memory(memory_rid, entity_name);
         Ok(())
     }
 
@@ -186,7 +186,7 @@ impl YantrikDB {
         let mut candidates = Vec::new();
 
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock();
             let mut stmt = conn.prepare_cached(
                 "SELECT rid, text FROM memories \
                  WHERE consolidation_status = 'active' \
@@ -223,7 +223,7 @@ impl YantrikDB {
 
         // Phase 3: Lock conn, do INSERT OR IGNORE for each link, drop conn
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock();
             for c in &candidates {
                 conn.execute(
                     "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
@@ -234,7 +234,7 @@ impl YantrikDB {
 
         // Phase 4: Lock graph_index write, do link_memory for each, drop
         {
-            let mut gi = self.graph_index.write().unwrap();
+            let mut gi = self.graph_index.write();
             for c in &candidates {
                 gi.link_memory(&c.rid, &c.entity);
             }
@@ -252,7 +252,7 @@ impl YantrikDB {
         let raw_memories: Vec<(String, String)>;
 
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock();
             entities = conn.prepare(
                 "SELECT name FROM entities",
             )?.query_map([], |row| row.get(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
@@ -300,7 +300,7 @@ impl YantrikDB {
 
         // Phase 3: Lock conn, do INSERT OR IGNORE for each link, drop conn
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock();
             for c in &candidates {
                 conn.execute(
                     "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
@@ -311,7 +311,7 @@ impl YantrikDB {
 
         // Phase 4: Lock graph_index write, do link_memory for each, drop
         {
-            let mut gi = self.graph_index.write().unwrap();
+            let mut gi = self.graph_index.write();
             for c in &candidates {
                 gi.link_memory(&c.rid, &c.entity);
             }

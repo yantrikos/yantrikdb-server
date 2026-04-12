@@ -3,8 +3,9 @@
 //! Spawns per-database tokio tasks that run consolidation, decay sweeps,
 //! and stale session cleanup on configurable intervals.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::task::JoinHandle;
@@ -23,6 +24,10 @@ pub struct WorkerRegistry {
 
 struct DatabaseWorkers {
     cancel: CancellationToken,
+    /// Kept alive so the task handles drop when this struct drops, which
+    /// cancels the associated tasks via Drop. Never read explicitly — the
+    /// Drop behaviour is the whole point.
+    #[allow(dead_code)]
     handles: Vec<JoinHandle<()>>,
 }
 
@@ -37,7 +42,7 @@ impl WorkerRegistry {
     /// Start background workers for a database engine.
     /// Call this when an engine is first loaded into the pool.
     pub fn start_for_database(&self, db_id: i64, db_name: String, engine: Arc<Mutex<YantrikDB>>) {
-        let mut workers = self.workers.lock().unwrap();
+        let mut workers = self.workers.lock();
         if workers.contains_key(&db_id) {
             return; // Already running
         }
@@ -101,8 +106,12 @@ impl WorkerRegistry {
     }
 
     /// Stop background workers for a database.
+    ///
+    /// Not currently called from anywhere — present as public API for
+    /// graceful tenant eviction once that feature lands.
+    #[allow(dead_code)]
     pub fn stop_for_database(&self, db_id: i64) {
-        let mut workers = self.workers.lock().unwrap();
+        let mut workers = self.workers.lock();
         if let Some(db_workers) = workers.remove(&db_id) {
             db_workers.cancel.cancel();
             // Handles will be dropped — tasks will see cancellation and exit
@@ -112,7 +121,7 @@ impl WorkerRegistry {
 
     /// Stop all workers (server shutdown).
     pub fn stop_all(&self) {
-        let mut workers = self.workers.lock().unwrap();
+        let mut workers = self.workers.lock();
         for (db_id, db_workers) in workers.drain() {
             db_workers.cancel.cancel();
             tracing::debug!(db_id, "background workers cancelled");
@@ -120,8 +129,12 @@ impl WorkerRegistry {
     }
 
     /// Number of databases with active workers.
+    ///
+    /// Not currently called — reserved for the /metrics and /health
+    /// endpoints once they surface tenant-level worker state.
+    #[allow(dead_code)]
     pub fn active_count(&self) -> usize {
-        self.workers.lock().unwrap().len()
+        self.workers.lock().len()
     }
 }
 
@@ -152,7 +165,7 @@ async fn consolidation_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock().unwrap();
+                let db = engine.lock();
 
                 // Skip if too few memories
                 let stats = db.stats(None);
@@ -221,7 +234,7 @@ async fn decay_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock().unwrap();
+                let db = engine.lock();
                 match db.decay(0.01) {
                     Ok(decayed) => Some(decayed.len()),
                     Err(e) => {
@@ -266,7 +279,7 @@ async fn session_cleanup_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock().unwrap();
+                let db = engine.lock();
                 match db.session_abandon_stale(24.0) {
                     Ok(count) => Some(count),
                     Err(e) => {
@@ -316,7 +329,7 @@ pub async fn run_oplog_gc_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock().unwrap();
+                let db = engine.lock();
                 let conn = db.conn();
 
                 // Count current oplog

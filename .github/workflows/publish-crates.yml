@@ -40,6 +40,15 @@ jobs:
       - name: Wait for protocol to be indexed
         run: sleep 30
 
+      - name: Publish yantrikdb (core)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p yantrikdb --no-verify
+        continue-on-error: true
+
+      - name: Wait for core to be indexed
+        run: sleep 30
+
       - name: Publish yantrikdb-witness
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

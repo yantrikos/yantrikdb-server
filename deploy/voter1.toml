@@ -1,0 +1,20 @@
+[server]
+wire_port = 7437
+http_port = 7438
+data_dir = "/data"
+
+[cluster]
+node_id = 1
+role = "voter"
+cluster_port = 7440
+cluster_secret = "change-me-in-production"
+heartbeat_interval_ms = 1000
+election_timeout_ms = 5000
+
+[[cluster.peers]]
+addr = "172.30.0.11:7440"
+role = "voter"
+
+[[cluster.peers]]
+addr = "172.30.0.12:7440"
+role = "witness"

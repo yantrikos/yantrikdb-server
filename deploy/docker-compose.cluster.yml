@@ -1,0 +1,73 @@
+# YantrikDB HA Cluster via Docker Compose
+#
+# Spins up 2 voters + 1 witness using public images from ghcr.io.
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.cluster.yml up -d
+#   # Wait ~10s for election, then:
+#   curl http://localhost:7438/v1/cluster   # voter1
+#   curl http://localhost:7448/v1/cluster   # voter2
+#   # Whichever returns role=Leader is your write target.
+#
+# Tear down:
+#   docker compose -f deploy/docker-compose.cluster.yml down -v
+
+services:
+  voter1:
+    image: ghcr.io/yantrikos/yantrikdb:latest
+    container_name: ydb-voter1
+    command:
+      - yantrikdb
+      - serve
+      - --data-dir=/var/lib/yantrikdb
+      - --config=/etc/yantrikdb/yantrikdb.toml
+    volumes:
+      - voter1-data:/var/lib/yantrikdb
+      - ./voter1.toml:/etc/yantrikdb/yantrikdb.toml:ro
+    ports:
+      - "7437:7437"
+      - "7438:7438"
+    networks:
+      ydb-net:
+        ipv4_address: 172.30.0.10
+
+  voter2:
+    image: ghcr.io/yantrikos/yantrikdb:latest
+    container_name: ydb-voter2
+    command:
+      - yantrikdb
+      - serve
+      - --data-dir=/var/lib/yantrikdb
+      - --config=/etc/yantrikdb/yantrikdb.toml
+    volumes:
+      - voter2-data:/var/lib/yantrikdb
+      - ./voter2.toml:/etc/yantrikdb/yantrikdb.toml:ro
+    ports:
+      - "7447:7437"
+      - "7448:7438"
+    networks:
+      ydb-net:
+        ipv4_address: 172.30.0.11
+
+  witness:
+    image: ghcr.io/yantrikos/yantrikdb-witness:latest
+    container_name: ydb-witness
+    # Image already has ENTRYPOINT=["yantrikdb-witness"] — only pass args
+    command:
+      - --node-id=99
+      - --port=7440
+      - --cluster-secret=change-me-in-production
+    networks:
+      ydb-net:
+        ipv4_address: 172.30.0.12
+
+networks:
+  ydb-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  voter1-data:
+  voter2-data:

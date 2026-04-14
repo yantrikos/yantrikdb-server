@@ -421,6 +421,11 @@ pub struct ThinkConfig {
     pub consolidation_time_window_days: f64,
     pub consolidation_min_cluster: usize,
     pub consolidation_limit: usize,
+    /// When true, consolidation requires candidate pairs to share at least one
+    /// extracted entity (falls back to cosine-only when either side has no
+    /// entities). Guards against merging semantically similar sentences that
+    /// refer to different subjects.
+    pub consolidation_require_entity_overlap: bool,
     pub min_active_memories: i64,
     pub run_personality: bool,
 }
@@ -438,6 +443,7 @@ impl Default for ThinkConfig {
             consolidation_time_window_days: 7.0,
             consolidation_min_cluster: 2,
             consolidation_limit: 5,
+            consolidation_require_entity_overlap: true,
             min_active_memories: 10,
             run_personality: true,
         }

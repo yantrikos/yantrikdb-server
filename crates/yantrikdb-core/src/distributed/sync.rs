@@ -203,7 +203,7 @@ mod tests {
         a.record("mem1", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.0, 8), "default", 0.8, "general", "user", None).unwrap();
         a.record("mem2", "episodic", 0.5, 0.0, 604800.0, &empty_meta(), &vec_seed(1.1, 8), "default", 0.8, "general", "user", None).unwrap();
 
-        let consolidated = crate::consolidate::consolidate(&a, 0.0, 365.0, 2, 10000, false).unwrap();
+        let consolidated = crate::consolidate::consolidate(&a, 0.0, 365.0, 2, 10000, false, false).unwrap();
         assert!(!consolidated.is_empty());
 
         // Sync to B

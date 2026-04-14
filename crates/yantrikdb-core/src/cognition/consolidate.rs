@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::engine::YantrikDB;
 use crate::error::Result;
 use crate::serde_helpers::{deserialize_f32, serialize_f32};
@@ -19,8 +21,15 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 /// Two memories can cluster together if:
 ///   - Embedding similarity >= sim_threshold
 ///   - Created within time_window_days of each other
+///   - If `entities_by_rid` is Some AND both memories have non-empty entity sets,
+///     they must share at least one entity. This guards against false merges
+///     where two sentences are cosine-similar but refer to different entities
+///     (e.g., "Alice is CEO" vs "Sarah is CTO" — same shape, different people).
+///     When either memory has no entities the guard falls back to cosine-only
+///     (no regression on memories predating entity extraction).
 pub fn find_clusters(
     memories: &[MemoryWithEmbedding],
+    entities_by_rid: Option<&HashMap<String, HashSet<String>>>,
     sim_threshold: f64,
     time_window_days: f64,
     min_cluster_size: usize,
@@ -39,7 +48,7 @@ pub fn find_clusters(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mut used = std::collections::HashSet::new();
+    let mut used = HashSet::new();
     let mut clusters: Vec<Vec<usize>> = Vec::new();
 
     for &i in &indices {
@@ -59,6 +68,19 @@ pub fn find_clusters(
             let time_diff = (memories[j].created_at - memories[i].created_at).abs();
             if time_diff > time_window_days * 86400.0 {
                 continue;
+            }
+
+            // Entity-overlap guard: if both memories have entities, require at
+            // least one shared one. Skips the guard if either side is empty
+            // (covers memories written before extraction existed).
+            if let Some(emap) = entities_by_rid {
+                let ei = emap.get(&memories[i].rid);
+                let ej = emap.get(&memories[j].rid);
+                if let (Some(a), Some(b)) = (ei, ej) {
+                    if !a.is_empty() && !b.is_empty() && a.is_disjoint(b) {
+                        continue;
+                    }
+                }
             }
 
             // Similarity check
@@ -128,12 +150,17 @@ pub fn mean_embedding(memories: &[MemoryWithEmbedding]) -> Vec<f32> {
 }
 
 /// Find clusters of memories that are candidates for consolidation.
+///
+/// When `require_entity_overlap` is true, candidate pairs must share at least
+/// one entity in `memory_entities` (or have no entities on either side). This
+/// prevents cosine-only false merges across distinct named subjects.
 pub fn find_consolidation_candidates(
     db: &YantrikDB,
     sim_threshold: f64,
     time_window_days: f64,
     min_cluster_size: usize,
     limit: usize,
+    require_entity_overlap: bool,
 ) -> Result<Vec<Vec<MemoryWithEmbedding>>> {
     // Phase 1: query rows while holding the conn lock, then drop it.
     // Scope is explicit so the guard CANNOT live across the subsequent
@@ -193,9 +220,39 @@ pub fn find_consolidation_candidates(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Load memory→entities map (single query) so the entity-overlap guard
+    // can prune false-positive pairs before cosine clustering.
+    let entities_by_rid: Option<HashMap<String, HashSet<String>>> = if require_entity_overlap {
+        let rids: Vec<String> = memories.iter().map(|m| m.rid.clone()).collect();
+        if rids.is_empty() {
+            None
+        } else {
+            let conn = db.conn();
+            let placeholders = vec!["?"; rids.len()].join(",");
+            let sql = format!(
+                "SELECT memory_rid, entity_name FROM memory_entities WHERE memory_rid IN ({})",
+                placeholders
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let params_vec: Vec<&dyn rusqlite::ToSql> =
+                rids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let rows = stmt
+                .query_map(params_vec.as_slice(), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+            for (rid, name) in rows {
+                map.entry(rid).or_default().insert(name);
+            }
+            Some(map)
+        }
+    } else {
+        None
+    };
+
     // Group memories by namespace to prevent cross-namespace consolidation
-    let mut by_namespace: std::collections::HashMap<String, Vec<MemoryWithEmbedding>> =
-        std::collections::HashMap::new();
+    let mut by_namespace: HashMap<String, Vec<MemoryWithEmbedding>> = HashMap::new();
     for mem in memories {
         by_namespace.entry(mem.namespace.clone()).or_default().push(mem);
     }
@@ -204,6 +261,7 @@ pub fn find_consolidation_candidates(
     for (_ns, ns_memories) in by_namespace {
         let cluster_indices = find_clusters(
             &ns_memories,
+            entities_by_rid.as_ref(),
             sim_threshold,
             time_window_days,
             min_cluster_size,
@@ -224,9 +282,17 @@ pub fn consolidate(
     time_window_days: f64,
     min_cluster_size: usize,
     limit: usize,
+    require_entity_overlap: bool,
     dry_run: bool,
 ) -> Result<Vec<serde_json::Value>> {
-    let clusters = find_consolidation_candidates(db, sim_threshold, time_window_days, min_cluster_size, limit)?;
+    let clusters = find_consolidation_candidates(
+        db,
+        sim_threshold,
+        time_window_days,
+        min_cluster_size,
+        limit,
+        require_entity_overlap,
+    )?;
 
     if dry_run {
         return Ok(clusters
@@ -422,10 +488,64 @@ mod tests {
             make_mem("c", "t3", vec_seed(10.0, 8), now + 200.0, 0.5),
         ];
 
-        let clusters = find_clusters(&mems, 0.9, 7.0, 2, 10);
+        let clusters = find_clusters(&mems, None, 0.9, 7.0, 2, 10);
         assert_eq!(clusters.len(), 1);
         assert!(clusters[0].contains(&0)); // "a"
         assert!(clusters[0].contains(&1)); // "b"
+    }
+
+    #[test]
+    fn test_find_clusters_entity_overlap_blocks_false_merge() {
+        // Regression: cosine-similar memories referring to different entities
+        // should NOT cluster when entity-overlap guard is active.
+        let now = 1000000.0;
+        let mems = vec![
+            make_mem("a", "Alice is CEO", vec_seed(1.0, 8), now, 0.5),
+            make_mem("b", "Sarah is CTO", vec_seed(1.02, 8), now + 100.0, 0.5),
+        ];
+        let mut entities: HashMap<String, HashSet<String>> = HashMap::new();
+        entities.insert("a".to_string(), ["Alice"].iter().map(|s| s.to_string()).collect());
+        entities.insert("b".to_string(), ["Sarah"].iter().map(|s| s.to_string()).collect());
+
+        // Without guard: would cluster (high cosine).
+        let unguarded = find_clusters(&mems, None, 0.9, 7.0, 2, 10);
+        assert_eq!(unguarded.len(), 1, "cosine-only should merge");
+
+        // With guard: should NOT cluster (disjoint entities).
+        let guarded = find_clusters(&mems, Some(&entities), 0.9, 7.0, 2, 10);
+        assert_eq!(guarded.len(), 0, "entity-overlap guard should block merge");
+    }
+
+    #[test]
+    fn test_find_clusters_entity_overlap_allows_shared_entity() {
+        let now = 1000000.0;
+        let mems = vec![
+            make_mem("a", "Alice is CEO", vec_seed(1.0, 8), now, 0.5),
+            make_mem("b", "Acme's CEO is Alice", vec_seed(1.02, 8), now + 100.0, 0.5),
+        ];
+        let mut entities: HashMap<String, HashSet<String>> = HashMap::new();
+        entities.insert("a".to_string(), ["Alice"].iter().map(|s| s.to_string()).collect());
+        entities.insert(
+            "b".to_string(),
+            ["Alice", "Acme"].iter().map(|s| s.to_string()).collect(),
+        );
+
+        let guarded = find_clusters(&mems, Some(&entities), 0.9, 7.0, 2, 10);
+        assert_eq!(guarded.len(), 1, "shared entity should allow merge");
+    }
+
+    #[test]
+    fn test_find_clusters_entity_overlap_falls_back_when_empty() {
+        // Memories without extracted entities should still cluster by cosine
+        // alone (no regression on memories predating entity extraction).
+        let now = 1000000.0;
+        let mems = vec![
+            make_mem("a", "t1", vec_seed(1.0, 8), now, 0.5),
+            make_mem("b", "t2", vec_seed(1.05, 8), now + 100.0, 0.5),
+        ];
+        let entities: HashMap<String, HashSet<String>> = HashMap::new();
+        let clusters = find_clusters(&mems, Some(&entities), 0.9, 7.0, 2, 10);
+        assert_eq!(clusters.len(), 1, "empty entity map falls back to cosine-only");
     }
 
     #[test]

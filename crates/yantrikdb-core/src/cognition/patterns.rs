@@ -281,6 +281,7 @@ fn mine_topic_clusters(db: &YantrikDB, config: &PatternConfig) -> Result<Vec<Raw
 
     let cluster_indices = find_clusters(
         &memories,
+        None, // pattern mining is topic-level, not entity-gated
         config.topic_cluster_sim_threshold,
         config.topic_cluster_time_window_days,
         5,  // min cluster size for a "recurring topic"

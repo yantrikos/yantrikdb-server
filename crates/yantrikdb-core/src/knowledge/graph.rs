@@ -33,6 +33,92 @@ pub fn entity_matches_text(entity: &str, text_tokens: &[String]) -> bool {
     }
 }
 
+// ── Heuristic proper-noun extraction ──
+
+/// English function/pronoun/auxiliary words that should be stripped from the
+/// start or end of a capitalized chunk. A sentence-initial "The" or "Our" is
+/// capitalized by position, not because it names an entity.
+const ENTITY_STOPWORDS: &[&str] = &[
+    "The", "A", "An", "I", "We", "You", "He", "She", "It", "They",
+    "This", "That", "These", "Those", "My", "Your", "His", "Her",
+    "Its", "Our", "Their", "But", "And", "Or", "So", "If", "When",
+    "Where", "What", "Who", "Why", "How", "Is", "Are", "Was", "Were",
+    "Be", "Been", "Being", "Have", "Has", "Had", "Do", "Does", "Did",
+    "Of", "In", "On", "At", "To", "For", "With", "From", "By",
+    "As", "Than", "Then", "Also", "Just", "Only", "Very", "Much",
+];
+
+/// Extract candidate proper-noun entities from free-form text using a
+/// capitalized-chunk heuristic. Groups consecutive capitalized words into
+/// multi-word entities ("Alice Chen", "San Francisco", "Acme Corp") and
+/// strips leading/trailing English stopwords.
+///
+/// This is intentionally not a full NER — it captures the common case of
+/// people, companies, places, and products well enough that conflict
+/// detection can fire without requiring users to call `/v1/relate` for every
+/// entity. Acronyms, lowercase entities, and ambiguous mentions still need
+/// explicit `relate()` calls to enter the graph.
+pub fn extract_heuristic_entities(text: &str) -> Vec<String> {
+    let mut entities: Vec<String> = Vec::new();
+    let mut chunk: Vec<String> = Vec::new();
+
+    let flush = |chunk: &mut Vec<String>, out: &mut Vec<String>| {
+        while !chunk.is_empty() && ENTITY_STOPWORDS.contains(&chunk[0].as_str()) {
+            chunk.remove(0);
+        }
+        // Trailing-stopword strip skips single-character tokens so multi-word
+        // entities like "Series A" or "Version B" keep their letter suffix
+        // (A is a stopword but is also a valid version designator when trailing).
+        while let Some(last) = chunk.last() {
+            if ENTITY_STOPWORDS.contains(&last.as_str()) && last.chars().count() > 1 {
+                chunk.pop();
+            } else {
+                break;
+            }
+        }
+        if !chunk.is_empty() {
+            let candidate = chunk.join(" ");
+            let alpha_chars = candidate.chars().filter(|c| c.is_alphanumeric()).count();
+            if alpha_chars >= 2 {
+                out.push(candidate);
+            }
+        }
+        chunk.clear();
+    };
+
+    for word in text
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|s| !s.is_empty())
+    {
+        let first = word.chars().next().unwrap();
+        let starts_upper = first.is_uppercase();
+        let is_all_caps = word.len() > 1 && word.chars().all(|c| !c.is_alphabetic() || c.is_uppercase());
+
+        let joins_chunk = if chunk.is_empty() {
+            // Open a new chunk only on capitalized or all-caps tokens.
+            starts_upper || is_all_caps
+        } else {
+            // Continue an existing chunk on capitalized words or short letter-suffixes
+            // (e.g., "Series A", "Version B").
+            starts_upper
+                || is_all_caps
+                || (word.len() == 1 && first.is_ascii_uppercase())
+        };
+
+        if joins_chunk {
+            chunk.push(word.to_string());
+        } else {
+            flush(&mut chunk, &mut entities);
+        }
+    }
+    flush(&mut chunk, &mut entities);
+
+    // Deduplicate while preserving first-appearance order.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    entities.retain(|e| seen.insert(e.clone()));
+    entities
+}
+
 // ── Entity type classification ──
 
 /// Tech terms that should NOT be classified as person names even if title-cased/all-caps.
@@ -350,6 +436,62 @@ pub fn graph_proximity(
 mod tests {
     use super::*;
     use crate::YantrikDB;
+
+    #[test]
+    fn test_extract_heuristic_entities_basic_names() {
+        let got = extract_heuristic_entities("Alice Chen is the CEO of Acme Corp");
+        assert!(got.contains(&"Alice Chen".to_string()), "got: {:?}", got);
+        assert!(got.contains(&"Acme Corp".to_string()), "got: {:?}", got);
+        // CEO is all-caps standalone — should appear as an entity candidate.
+        assert!(got.contains(&"CEO".to_string()), "got: {:?}", got);
+    }
+
+    #[test]
+    fn test_extract_heuristic_entities_strips_sentence_start() {
+        let got = extract_heuristic_entities("The database backend is PostgreSQL");
+        assert_eq!(got, vec!["PostgreSQL".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_heuristic_entities_multi_word_place() {
+        let got = extract_heuristic_entities("Acme is headquartered in San Francisco");
+        assert!(got.contains(&"Acme".to_string()), "got: {:?}", got);
+        assert!(got.contains(&"San Francisco".to_string()), "got: {:?}", got);
+    }
+
+    #[test]
+    fn test_extract_heuristic_entities_single_letter_suffix() {
+        let got = extract_heuristic_entities("Series A funding was 20 million dollars");
+        assert!(got.contains(&"Series A".to_string()), "got: {:?}", got);
+    }
+
+    #[test]
+    fn test_extract_heuristic_entities_dedupe() {
+        let got = extract_heuristic_entities("Alice met Alice at the cafe");
+        let alice_count = got.iter().filter(|e| *e == "Alice").count();
+        assert_eq!(alice_count, 1);
+    }
+
+    #[test]
+    fn test_extract_heuristic_entities_empty_on_lowercase() {
+        let got = extract_heuristic_entities("the quick brown fox jumps over the lazy dog");
+        assert!(got.is_empty(), "got: {:?}", got);
+    }
+
+    #[test]
+    fn test_extract_heuristic_entities_distinct_people() {
+        // Regression guard for the false-merge case that motivated this:
+        // two sentences structurally similar but referring to different people.
+        let a = extract_heuristic_entities("Alice Chen is the CEO of Acme Corp");
+        let b = extract_heuristic_entities("Sarah Kim is the CTO of Acme Corp");
+        let a_set: std::collections::HashSet<_> = a.iter().collect();
+        let b_set: std::collections::HashSet<_> = b.iter().collect();
+        // They share Acme Corp but differ on person name — disjointness on people.
+        assert!(a_set.contains(&"Alice Chen".to_string()));
+        assert!(b_set.contains(&"Sarah Kim".to_string()));
+        assert!(!a_set.contains(&"Sarah Kim".to_string()));
+        assert!(!b_set.contains(&"Alice Chen".to_string()));
+    }
 
     fn setup_db() -> YantrikDB {
         let db = YantrikDB::new(":memory:", 4).unwrap();

@@ -60,6 +60,7 @@ impl YantrikDB {
                     config.consolidation_time_window_days,
                     config.consolidation_min_cluster,
                     config.consolidation_limit,
+                    config.consolidation_require_entity_overlap,
                     false,
                 )?;
                 results.len()

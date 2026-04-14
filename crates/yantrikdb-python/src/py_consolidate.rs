@@ -41,6 +41,7 @@ pub fn py_find_clusters(
 
     let cluster_indices = yantrikdb_core::consolidate::find_clusters(
         &mems,
+        None,
         sim_threshold,
         time_window_days,
         min_cluster_size,
@@ -63,7 +64,7 @@ pub fn py_find_clusters(
 
 /// Find consolidation candidates.
 #[pyfunction]
-#[pyo3(signature = (db, sim_threshold=0.6, time_window_days=7.0, min_cluster_size=2, limit=100))]
+#[pyo3(signature = (db, sim_threshold=0.6, time_window_days=7.0, min_cluster_size=2, limit=100, require_entity_overlap=true))]
 pub fn find_consolidation_candidates(
     py: Python<'_>,
     db: &PyYantrikDB,
@@ -71,6 +72,7 @@ pub fn find_consolidation_candidates(
     time_window_days: f64,
     min_cluster_size: usize,
     limit: usize,
+    require_entity_overlap: bool,
 ) -> PyResult<Vec<Vec<PyObject>>> {
     let inner = db.get_inner()?;
     let clusters = yantrikdb_core::consolidate::find_consolidation_candidates(
@@ -79,6 +81,7 @@ pub fn find_consolidation_candidates(
         time_window_days,
         min_cluster_size,
         limit,
+        require_entity_overlap,
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
@@ -96,7 +99,7 @@ pub fn find_consolidation_candidates(
 
 /// Run the full consolidation pipeline.
 #[pyfunction]
-#[pyo3(name = "consolidate", signature = (db, sim_threshold=0.6, time_window_days=7.0, min_cluster_size=2, limit=100, dry_run=false))]
+#[pyo3(name = "consolidate", signature = (db, sim_threshold=0.6, time_window_days=7.0, min_cluster_size=2, limit=100, require_entity_overlap=true, dry_run=false))]
 pub fn py_consolidate(
     py: Python<'_>,
     db: &PyYantrikDB,
@@ -104,6 +107,7 @@ pub fn py_consolidate(
     time_window_days: f64,
     min_cluster_size: usize,
     limit: usize,
+    require_entity_overlap: bool,
     dry_run: bool,
 ) -> PyResult<Vec<PyObject>> {
     let inner = db.get_inner()?;
@@ -113,6 +117,7 @@ pub fn py_consolidate(
         time_window_days,
         min_cluster_size,
         limit,
+        require_entity_overlap,
         dry_run,
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;

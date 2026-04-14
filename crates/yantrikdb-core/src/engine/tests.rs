@@ -36,6 +36,127 @@ fn test_actor_id_explicit() {
 }
 
 #[test]
+fn test_record_auto_extracts_entities() {
+    // Regression: /v1/remember should populate memory_entities from heuristic
+    // extraction so conflict detection can fire on raw-text inputs without
+    // requiring the user to call /v1/relate first. Fixes issue #2.
+    let db = YantrikDB::new(":memory:", 8).unwrap();
+    let rid = db
+        .record(
+            "Alice Chen is the CEO of Acme Corp",
+            "semantic",
+            0.8,
+            0.0,
+            604800.0,
+            &empty_meta(),
+            &vec_seed(1.0, 8),
+            "default",
+            0.8,
+            "people",
+            "user",
+            None,
+        )
+        .unwrap();
+
+    let entities: Vec<String> = {
+        let conn = db.conn();
+        let mut stmt = conn
+            .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")
+            .unwrap();
+        stmt.query_map(params![rid], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+    };
+
+    assert!(
+        entities.contains(&"Alice Chen".to_string()),
+        "got: {:?}",
+        entities
+    );
+    assert!(
+        entities.contains(&"Acme Corp".to_string()),
+        "got: {:?}",
+        entities
+    );
+
+    // Also verify the entities table was populated.
+    let entity_count: i64 = db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM entities", [], |r| r.get(0))
+        .unwrap();
+    assert!(entity_count >= 2, "expected >= 2 entities, got {}", entity_count);
+}
+
+#[test]
+fn test_record_batch_auto_extracts_entities() {
+    // Same regression as above but for the batch path, which previously
+    // skipped entity linking entirely.
+    let db = YantrikDB::new(":memory:", 8).unwrap();
+    let inputs = vec![
+        RecordInput {
+            text: "Alice Chen is the CEO of Acme Corp".to_string(),
+            memory_type: "semantic".to_string(),
+            importance: 0.8,
+            valence: 0.0,
+            half_life: 604800.0,
+            metadata: empty_meta(),
+            embedding: vec_seed(1.0, 8),
+            namespace: "default".to_string(),
+            certainty: 0.8,
+            domain: "people".to_string(),
+            source: "user".to_string(),
+            emotional_state: None,
+        },
+        RecordInput {
+            text: "Sarah Kim is the CTO of Acme Corp".to_string(),
+            memory_type: "semantic".to_string(),
+            importance: 0.8,
+            valence: 0.0,
+            half_life: 604800.0,
+            metadata: empty_meta(),
+            embedding: vec_seed(1.05, 8),
+            namespace: "default".to_string(),
+            certainty: 0.8,
+            domain: "people".to_string(),
+            source: "user".to_string(),
+            emotional_state: None,
+        },
+    ];
+    let rids = db.record_batch(&inputs).unwrap();
+    assert_eq!(rids.len(), 2);
+
+    let total_links: i64 = db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM memory_entities", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        total_links >= 3,
+        "expected batch to link both memories to entities, got {} links",
+        total_links
+    );
+
+    // The two memories refer to different people — verify extraction
+    // distinguished them rather than lumping both into one entity.
+    let load_entities = |rid: &str| -> Vec<String> {
+        let conn = db.conn();
+        let mut stmt = conn
+            .prepare("SELECT entity_name FROM memory_entities WHERE memory_rid = ?1")
+            .unwrap();
+        stmt.query_map(params![rid], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let m1_entities = load_entities(&rids[0]);
+    let m2_entities = load_entities(&rids[1]);
+    assert!(m1_entities.contains(&"Alice Chen".to_string()));
+    assert!(m2_entities.contains(&"Sarah Kim".to_string()));
+    assert!(!m1_entities.contains(&"Sarah Kim".to_string()));
+    assert!(!m2_entities.contains(&"Alice Chen".to_string()));
+}
+
+#[test]
 fn test_record_and_get() {
     let db = YantrikDB::new(":memory:", 8).unwrap();
     let emb = vec_seed(1.0, 8);

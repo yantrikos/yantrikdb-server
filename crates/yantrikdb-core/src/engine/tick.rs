@@ -182,6 +182,7 @@ impl YantrikDB {
             30.0,  // time window days
             2,     // min cluster size
             100,   // consolidation limit
+            true,  // require entity overlap (guards cosine-only false merges)
             false, // not dry run
         )?;
         Ok(())

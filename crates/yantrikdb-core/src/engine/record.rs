@@ -84,30 +84,59 @@ impl YantrikDB {
             emotional_state: emotional_state.map(|s| s.to_string()),
         });
 
-        // Auto-link memory to known entities (populates memory_entities for graph recall)
+        // Auto-link memory to entities. Two passes:
+        //   1. Heuristic extraction from text — seeds new proper-noun entities
+        //      into `entities` + `graph_index` so conflict detection has data
+        //      to scan even when the user never calls `/v1/relate`.
+        //   2. Match against all known entities in `graph_index` (catches
+        //      entities relate()d earlier whose names don't follow the
+        //      capitalization heuristic, e.g. lowercase product names).
         {
             let text_tokens = crate::graph::tokenize(text);
-            // Read graph_index to find matching entities, then drop read lock
-            let all_entities = self.graph_index.read().all_entity_names();
-            let matching: Vec<String> = all_entities
-                .into_iter()
-                .filter(|entity| crate::graph::entity_matches_text(entity, &text_tokens))
-                .collect();
+            let heuristic_entities = crate::graph::extract_heuristic_entities(text);
 
-            if !matching.is_empty() {
-                // Acquire conn for entity inserts
+            // Seed heuristic entities into the `entities` table (idempotent).
+            if !heuristic_entities.is_empty() {
+                let conn = self.conn();
+                for entity in &heuristic_entities {
+                    let entity_type = crate::graph::classify_entity_type(entity);
+                    conn.execute(
+                        "INSERT INTO entities (name, entity_type, first_seen, last_seen, mention_count) \
+                         VALUES (?1, ?2, ?3, ?3, 1) \
+                         ON CONFLICT(name) DO UPDATE SET \
+                            last_seen = ?3, \
+                            mention_count = mention_count + 1, \
+                            entity_type = CASE \
+                                WHEN entity_type = 'unknown' AND ?2 != 'unknown' THEN ?2 \
+                                ELSE entity_type END",
+                        params![entity, entity_type, ts],
+                    )?;
+                }
+            }
+
+            // Compose the candidate set: heuristic + already-known entities.
+            let mut candidates: std::collections::HashSet<String> =
+                heuristic_entities.iter().cloned().collect();
+            for known in self.graph_index.read().all_entity_names() {
+                if crate::graph::entity_matches_text(&known, &text_tokens) {
+                    candidates.insert(known);
+                }
+            }
+
+            if !candidates.is_empty() {
                 {
                     let conn = self.conn();
-                    for entity in &matching {
+                    for entity in &candidates {
                         conn.execute(
                             "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
                             params![rid, entity],
                         )?;
                     }
                 }
-                // conn dropped, now acquire graph_index write lock
                 let mut gi = self.graph_index.write();
-                for entity in &matching {
+                for entity in &candidates {
+                    let entity_type = crate::graph::classify_entity_type(entity);
+                    gi.add_entity(entity, entity_type);
                     gi.link_memory(&rid, entity);
                 }
             }
@@ -149,6 +178,27 @@ impl YantrikDB {
 
         // Clone active sessions map before acquiring conn
         let sessions = self.active_sessions.read().clone();
+
+        // Precompute entity candidates per memory before touching conn/graph_index.
+        // Two sources:
+        //   (a) heuristic extraction from text (capitalized proper-nouns)
+        //   (b) match against already-known entities in graph_index
+        let known_entities = self.graph_index.read().all_entity_names();
+        let per_memory_linkage: Vec<(Vec<String>, std::collections::HashSet<String>)> = inputs
+            .iter()
+            .map(|input| {
+                let text_tokens = crate::graph::tokenize(&input.text);
+                let heuristic = crate::graph::extract_heuristic_entities(&input.text);
+                let mut candidates: std::collections::HashSet<String> =
+                    heuristic.iter().cloned().collect();
+                for known in &known_entities {
+                    if crate::graph::entity_matches_text(known, &text_tokens) {
+                        candidates.insert(known.clone());
+                    }
+                }
+                (heuristic, candidates)
+            })
+            .collect();
 
         let mut rids = Vec::with_capacity(inputs.len());
 
@@ -202,9 +252,45 @@ impl YantrikDB {
                 }
             }
 
+            // Persist entity linkage (SQL side). graph_index in-memory update
+            // happens after conn is dropped to avoid holding two write locks.
+            let batch_ts = now();
+            for (rid, (heuristic, candidates)) in rids.iter().zip(per_memory_linkage.iter()) {
+                for entity in heuristic {
+                    let entity_type = crate::graph::classify_entity_type(entity);
+                    conn.execute(
+                        "INSERT INTO entities (name, entity_type, first_seen, last_seen, mention_count) \
+                         VALUES (?1, ?2, ?3, ?3, 1) \
+                         ON CONFLICT(name) DO UPDATE SET \
+                            last_seen = ?3, \
+                            mention_count = mention_count + 1, \
+                            entity_type = CASE \
+                                WHEN entity_type = 'unknown' AND ?2 != 'unknown' THEN ?2 \
+                                ELSE entity_type END",
+                        params![entity, entity_type, batch_ts],
+                    )?;
+                }
+                for entity in candidates {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO memory_entities (memory_rid, entity_name) VALUES (?1, ?2)",
+                        params![rid, entity],
+                    )?;
+                }
+            }
+
             conn.execute_batch("RELEASE batch_record")?;
         }
-        // conn dropped here
+        // conn dropped; now update graph_index in-memory.
+        {
+            let mut gi = self.graph_index.write();
+            for (rid, (_, candidates)) in rids.iter().zip(per_memory_linkage.iter()) {
+                for entity in candidates {
+                    let entity_type = crate::graph::classify_entity_type(entity);
+                    gi.add_entity(entity, entity_type);
+                    gi.link_memory(rid, entity);
+                }
+            }
+        }
 
         // Insert into HNSW vec index + scoring cache after SQL commit
         {

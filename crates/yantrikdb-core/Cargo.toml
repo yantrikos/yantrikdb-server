@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "Cognitive memory engine for persistent AI systems"

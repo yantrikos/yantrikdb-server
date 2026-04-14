@@ -140,6 +140,30 @@ impl YantrikDB {
                     gi.link_memory(&rid, entity);
                 }
             }
+
+            // RFC 006 Phase 0: emit extraction audit telemetry. Log-only, no
+            // behavior change. Consumed by external observability to calibrate
+            // the v0.6.0 extraction whitelist against real agent-write data.
+            let heuristic_vec: Vec<String> = heuristic_entities.iter().cloned().collect();
+            let features = crate::graph::analyze_text_features(text, &heuristic_vec);
+            tracing::info!(
+                target: "yantrikdb::audit::extraction",
+                namespace = %namespace,
+                memory_rid = %rid,
+                domain = %domain,
+                source = %source,
+                extractor_version = "heuristic_v1",
+                char_length = features.char_length,
+                sentence_count = features.sentence_count,
+                entity_count = features.entity_count,
+                entities_matched_in_graph = candidates.len().saturating_sub(heuristic_entities.len()),
+                negation_cue_count = features.negation_cue_count,
+                temporal_cue_count = features.temporal_cue_count,
+                modality_cue_count = features.modality_cue_count,
+                has_compound_markers = features.has_compound_markers,
+                likely_assertion = features.likely_assertion,
+                "extraction audit"
+            );
         }
 
         let emb_hash = embedding_hash(embedding);
@@ -290,6 +314,33 @@ impl YantrikDB {
                     gi.link_memory(rid, entity);
                 }
             }
+        }
+
+        // RFC 006 Phase 0: emit one audit event per memory in the batch.
+        for (rid, (input, (heuristic_entities, candidates))) in
+            rids.iter().zip(inputs.iter().zip(per_memory_linkage.iter()))
+        {
+            let heuristic_vec: Vec<String> = heuristic_entities.iter().cloned().collect();
+            let features = crate::graph::analyze_text_features(&input.text, &heuristic_vec);
+            tracing::info!(
+                target: "yantrikdb::audit::extraction",
+                namespace = %input.namespace,
+                memory_rid = %rid,
+                domain = %input.domain,
+                source = %input.source,
+                extractor_version = "heuristic_v1",
+                batch = true,
+                char_length = features.char_length,
+                sentence_count = features.sentence_count,
+                entity_count = features.entity_count,
+                entities_matched_in_graph = candidates.len().saturating_sub(heuristic_entities.len()),
+                negation_cue_count = features.negation_cue_count,
+                temporal_cue_count = features.temporal_cue_count,
+                modality_cue_count = features.modality_cue_count,
+                has_compound_markers = features.has_compound_markers,
+                likely_assertion = features.likely_assertion,
+                "extraction audit"
+            );
         }
 
         // Insert into HNSW vec index + scoring cache after SQL commit

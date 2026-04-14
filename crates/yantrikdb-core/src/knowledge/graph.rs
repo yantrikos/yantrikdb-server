@@ -119,6 +119,103 @@ pub fn extract_heuristic_entities(text: &str) -> Vec<String> {
     entities
 }
 
+// ── Text feature analysis (Phase 0 audit data for RFC 006) ──
+
+/// Cues that indicate a statement is negated. Window-scanned around pattern
+/// matches to flag `polarity=negative` in v0.6.0. In v0.5.13 we only count
+/// occurrences for audit telemetry.
+const NEGATION_CUES: &[&str] = &[
+    "not", "no", "never", "denied", "refuted", "isn't", "wasn't",
+    "aren't", "weren't", "doesn't", "didn't", "disputes", "denies",
+];
+
+/// Cues that indicate a statement has temporal scope. Used to flag that a
+/// memory would benefit from `valid_from` / `valid_to` qualifiers.
+const TEMPORAL_CUES: &[&str] = &[
+    "was", "were", "until", "before", "after", "since", "during",
+    "former", "current", "currently", "previously", "recently",
+    "now", "then", "later", "earlier", "ago", "yesterday", "tomorrow",
+];
+
+/// Cues that indicate modality (hypothetical, reported, quoted).
+const MODALITY_CUES: &[&str] = &[
+    "may", "might", "allegedly", "reportedly", "rumor", "rumored",
+    "said", "claims", "according", "stated", "announced",
+];
+
+/// Compound-sentence separators that a v0.6.0 extractor should split on
+/// before running patterns. Counting these at audit time tells us how many
+/// real-world memories contain multiple claims per write.
+const COMPOUND_MARKERS: &[&str] = &[
+    "; ", ", then ", ", subsequently ", " but ", " however ", " although ",
+];
+
+/// Text features collected for extraction-audit telemetry (RFC 006 Phase 0).
+/// Captures everything the v0.6.0 extractor would need to know without
+/// changing any storage behavior — purely observational.
+#[derive(Debug, Clone, Default)]
+pub struct TextFeatures {
+    pub char_length: usize,
+    pub sentence_count: usize,
+    pub entity_count: usize,
+    pub negation_cue_count: usize,
+    pub temporal_cue_count: usize,
+    pub modality_cue_count: usize,
+    pub has_compound_markers: bool,
+    pub likely_assertion: bool,
+}
+
+/// Compute text features for extraction audit. Pure function, no I/O.
+pub fn analyze_text_features(text: &str, extracted_entities: &[String]) -> TextFeatures {
+    let lower = text.to_lowercase();
+    let tokens: Vec<&str> = text
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let tokens_lower: Vec<String> = tokens.iter().map(|t| t.to_lowercase()).collect();
+
+    let sentence_count = text
+        .chars()
+        .filter(|c| matches!(c, '.' | '!' | '?'))
+        .count()
+        .max(1);
+
+    let negation_cue_count = tokens_lower
+        .iter()
+        .filter(|t| NEGATION_CUES.contains(&t.as_str()))
+        .count();
+
+    let temporal_cue_count = tokens_lower
+        .iter()
+        .filter(|t| TEMPORAL_CUES.contains(&t.as_str()))
+        .count();
+
+    let modality_cue_count = tokens_lower
+        .iter()
+        .filter(|t| MODALITY_CUES.contains(&t.as_str()))
+        .count();
+
+    let has_compound_markers = COMPOUND_MARKERS.iter().any(|m| lower.contains(m));
+
+    // Rough "assertion?" signal: not a question, has at least 2 tokens, not
+    // pure modality/rumor. Used to estimate what fraction of agent writes
+    // the v0.6.0 extractor should try to process at all.
+    let likely_assertion = !text.trim_end().ends_with('?')
+        && tokens.len() >= 2
+        && modality_cue_count == 0;
+
+    TextFeatures {
+        char_length: text.chars().count(),
+        sentence_count,
+        entity_count: extracted_entities.len(),
+        negation_cue_count,
+        temporal_cue_count,
+        modality_cue_count,
+        has_compound_markers,
+        likely_assertion,
+    }
+}
+
 // ── Entity type classification ──
 
 /// Tech terms that should NOT be classified as person names even if title-cased/all-caps.
@@ -476,6 +573,48 @@ mod tests {
     fn test_extract_heuristic_entities_empty_on_lowercase() {
         let got = extract_heuristic_entities("the quick brown fox jumps over the lazy dog");
         assert!(got.is_empty(), "got: {:?}", got);
+    }
+
+    #[test]
+    fn test_analyze_text_features_basic_assertion() {
+        let entities = vec!["Alice Chen".to_string(), "Acme Corp".to_string()];
+        let f = analyze_text_features("Alice Chen is the CEO of Acme Corp", &entities);
+        assert_eq!(f.entity_count, 2);
+        assert_eq!(f.negation_cue_count, 0);
+        assert_eq!(f.modality_cue_count, 0);
+        assert!(f.likely_assertion);
+        assert!(!f.has_compound_markers);
+    }
+
+    #[test]
+    fn test_analyze_text_features_negation() {
+        let f = analyze_text_features("Alice is not the CEO of Acme", &[]);
+        assert_eq!(f.negation_cue_count, 1);
+    }
+
+    #[test]
+    fn test_analyze_text_features_temporal() {
+        let f = analyze_text_features("Alice was previously the CEO before 2024", &[]);
+        assert!(f.temporal_cue_count >= 2, "got: {}", f.temporal_cue_count);
+    }
+
+    #[test]
+    fn test_analyze_text_features_modality_suppresses_assertion() {
+        let f = analyze_text_features("Alice may become CEO allegedly", &[]);
+        assert!(f.modality_cue_count >= 2);
+        assert!(!f.likely_assertion);
+    }
+
+    #[test]
+    fn test_analyze_text_features_compound() {
+        let f = analyze_text_features("Alice was CEO until 2024; then Bob took over", &[]);
+        assert!(f.has_compound_markers);
+    }
+
+    #[test]
+    fn test_analyze_text_features_question_not_assertion() {
+        let f = analyze_text_features("Who is the CEO of Acme?", &[]);
+        assert!(!f.likely_assertion);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-server"
-version = "0.5.11"
+version = "0.5.12"
 edition = "2021"
 description = "YantrikDB database server — multi-tenant cognitive memory with wire protocol, HTTP gateway, replication, auto-failover, and at-rest encryption"
 license = "AGPL-3.0-only"
@@ -17,7 +17,7 @@ name = "yantrikdb"
 path = "src/main.rs"
 
 [dependencies]
-yantrikdb = { version = "0.4.2", path = "../yantrikdb-core" }
+yantrikdb = { version = "0.4.3", path = "../yantrikdb-core" }
 yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime

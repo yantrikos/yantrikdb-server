@@ -23,9 +23,54 @@ pub struct FastEmbedder {
 impl FastEmbedder {
     pub fn new() -> anyhow::Result<Self> {
         tracing::info!("loading embedding model (all-MiniLM-L6-v2)...");
-        let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
-        )?;
+
+        // ort (the underlying ONNX Runtime binding) panics on dlopen failure
+        // instead of returning an error. Catch the panic and convert it into
+        // a clear actionable error so users don't see a raw stack trace on
+        // first run.
+        let model = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            TextEmbedding::try_new(
+                InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+                    .with_show_download_progress(true),
+            )
+        }))
+        .map_err(|panic_info| {
+            let msg = panic_info
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic_info.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+
+            let hint = if msg.contains("dlopen") || msg.contains("libonnxruntime") || msg.contains("onnxruntime.dll") {
+                "\n\n\
+                ONNX Runtime library not found. The built-in embedder requires it.\n\
+                \n\
+                Linux:   wget https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-linux-x64-1.24.4.tgz\n\
+                         tar xzf onnxruntime-linux-x64-1.24.4.tgz\n\
+                         sudo cp onnxruntime-linux-x64-1.24.4/lib/libonnxruntime*.so* /usr/local/lib/\n\
+                         sudo ldconfig\n\
+                         export ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so.1.24.4\n\
+                \n\
+                macOS:   brew install onnxruntime\n\
+                \n\
+                Windows: Download from https://github.com/microsoft/onnxruntime/releases\n\
+                         and place onnxruntime.dll alongside the binary.\n\
+                \n\
+                Or use the Docker image (ghcr.io/yantrikos/yantrikdb) which bundles ONNX Runtime.\n\
+                \n\
+                Or skip the built-in embedder by setting [embedding] strategy = \"client_only\"\n\
+                in your config file (you'll need to provide pre-computed embeddings to remember()).\n"
+            } else {
+                ""
+            };
+
+            anyhow::anyhow!(
+                "embedder initialization failed: {}{}",
+                msg,
+                hint,
+            )
+        })??;
+
         tracing::info!("embedding model loaded (384 dim)");
 
         Ok(Self {

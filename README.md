@@ -6,12 +6,27 @@ Vector databases store memories. They don't manage them. After 10,000 memories, 
 
 YantrikDB is different. It's a **cognitive memory engine** — embed it, run it as a server, or connect via MCP. It thinks about what it stores.
 
+> **The bigger picture:** YantrikDB is the memory layer being built on the road to [YantrikOS](https://github.com/yantrikos) — an AI-native operating system where agents are first-class primitives, not apps on top. Memory was the bottleneck, so we're shipping it first.
+
 [![Crates.io](https://img.shields.io/crates/v/yantrikdb-server)](https://crates.io/crates/yantrikdb-server)
 [![PyPI](https://img.shields.io/pypi/v/yantrikdb)](https://pypi.org/project/yantrikdb/)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fyantrikos%2Fyantrikdb-blue)](https://github.com/yantrikos/yantrikdb-server/pkgs/container/yantrikdb)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 ![YantrikDB demo: storing three facts, recalling them, then think() flagging a contradiction between two memories](docs/images/demo.gif)
+
+## 99.9% token savings vs file-based memory
+
+| Memories | File-Based (CLAUDE.md) | YantrikDB | Token Savings | Recall Precision |
+|---|---|---|---|---|
+| 100 | 1,770 tokens | 69 tokens | **96%** | 66% |
+| 500 | 9,807 tokens | 72 tokens | **99.3%** | 77% |
+| 1,000 | 19,988 tokens | 72 tokens | **99.6%** | 84% |
+| 5,000 | 101,739 tokens | 53 tokens | **99.9%** | 88% |
+
+At 500 memories, file-based memory exceeds 32K context. At 5,000, it doesn't fit in any model — not even 200K. YantrikDB stays at ~70 tokens per query. **Precision improves with more data** — the opposite of context stuffing.
+
+Reproduce: `python benchmarks/bench_token_savings.py`
 
 ---
 
@@ -49,6 +64,19 @@ db.think()
 ```
 
 Plus: temporal decay with configurable half-life, entity graph with relationship edges, personality derivation from memory patterns, session-aware context surfacing, multi-signal scoring (recency × importance × similarity × graph proximity).
+
+---
+
+## What makes this different
+
+YantrikDB isn't just storage with operations. The engine has a layer that makes agents feel less reactive:
+
+- **Proactive triggers** — the system surfaces what needs attention: pending conflicts, decaying important memories, approaching deadlines, patterns across domains. Agents don't have to ask what they should care about. The memory tells them.
+- **Derived personality** — stable tendencies extracted from memory patterns over time. "This user prefers X, reacts to Y, values Z." Informs default agent behavior across sessions.
+- **Procedural memory** — strategies that worked before get recorded and reinforced. Agents learn what to do, not just what they know.
+- **Temporal awareness** — `stale` surfaces important memories that haven't been touched recently. `upcoming` surfaces memories with approaching deadlines.
+
+Full cognitive architecture lives in the [standalone engine repo](https://github.com/yantrikos/yantrikdb). This server repo focuses on deployment, HTTP API, and cluster operations.
 
 ---
 
@@ -108,7 +136,7 @@ For pre-computed embeddings (skip query-time embedding), recall p50 drops to ~5m
 
 ## Status
 
-**v0.5.11** — hardened alpha. The embeddable engine has been used in production by the YantrikOS ecosystem since early 2026. The network server is newer — running live on a 3-node Proxmox cluster with multiple tenants for the past few weeks.
+**v0.5.13** — hardened alpha + RFC 006 Phase 0 observability telemetry shipped. The embeddable engine has been used in production by the YantrikOS ecosystem since early 2026. The network server runs live on a 3-node Proxmox cluster with multiple tenants.
 
 A 42-task hardening sprint just completed across 8 epics:
 - `parking_lot` mutexes everywhere with runtime deadlock detection (caught a self-deadlock that would have taken hours to find with std::sync)

@@ -734,6 +734,174 @@ pub fn scan_conflicts_limited(db: &YantrikDB, max_conflicts: usize) -> Result<Ve
     Ok(conflicts)
 }
 
+// ── RFC 006 Phase 1: Claim-Aware Conflict Scanner ──
+
+/// Reason codes for claim-based conflicts (RFC 006 Phase 1).
+pub mod reason_codes {
+    pub const SAME_SUBJECT_SAME_REL_DISTINCT_OBJECT: &str = "same_subject_same_relation_distinct_object";
+    pub const OVERLAPPING_VALIDITY: &str = "overlapping_validity_windows";
+    pub const MISSING_TEMPORAL: &str = "missing_temporal_qualifier";
+    pub const POSSIBLE_SUCCESSION: &str = "possible_temporal_succession";
+}
+
+/// Check if two time intervals overlap.
+fn intervals_overlap(from_a: Option<f64>, to_a: Option<f64>, from_b: Option<f64>, to_b: Option<f64>) -> Option<bool> {
+    // If both have at least from or to, we can check
+    let start_a = from_a?;
+    let start_b = from_b?;
+    let end_a = to_a.unwrap_or(f64::MAX);
+    let end_b = to_b.unwrap_or(f64::MAX);
+    Some(start_a < end_b && start_b < end_a)
+}
+
+/// Scan claims (extended edges) for scoped conflicts using RFC 006 logic.
+///
+/// Unlike the existing entity-based scanner, this operates on structured
+/// claims with polarity, modality, and temporal qualifiers. It produces
+/// conflicts with severity bands and reason codes.
+///
+/// Filtering:
+/// - Only positive polarity (polarity = 1)
+/// - Only asserted or reported modality
+/// - Groups by (resolved_src, rel_type) to find distinct dst values
+/// - Uses entity aliases for normalization
+pub fn scan_claim_conflicts(db: &YantrikDB, max_conflicts: usize) -> Result<Vec<Conflict>> {
+    let mut conflicts = Vec::new();
+
+    // Phase 1: Query claim groups (same src + rel_type, different dst)
+    // Only positive, asserted/reported claims participate
+    let candidates: Vec<(String, String, String, String, Option<f64>, Option<f64>, Option<f64>, Option<f64>, String)>;
+    {
+        let conn = db.conn();
+
+        // Find all (src, rel_type) pairs with multiple distinct dst values
+        // among positive, asserted claims
+        let mut stmt = conn.prepare(
+            "SELECT e1.src, e1.rel_type, e1.dst, e2.dst,
+                    e1.valid_from, e1.valid_to, e2.valid_from, e2.valid_to,
+                    e1.namespace
+             FROM edges e1
+             JOIN edges e2
+               ON e1.src = e2.src
+              AND e1.rel_type = e2.rel_type
+              AND e1.dst < e2.dst
+              AND e1.namespace = e2.namespace
+             WHERE e1.tombstoned = 0 AND e2.tombstoned = 0
+               AND e1.polarity = 1 AND e2.polarity = 1
+               AND e1.modality IN ('asserted', 'reported')
+               AND e2.modality IN ('asserted', 'reported')
+             ORDER BY e1.created_at DESC
+             LIMIT ?1",
+        )?;
+
+        candidates = stmt
+            .query_map(params![max_conflicts * 5], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,  // src
+                    row.get::<_, String>(1)?,  // rel_type
+                    row.get::<_, String>(2)?,  // dst1
+                    row.get::<_, String>(3)?,  // dst2
+                    row.get::<_, Option<f64>>(4)?, // valid_from_1
+                    row.get::<_, Option<f64>>(5)?, // valid_to_1
+                    row.get::<_, Option<f64>>(6)?, // valid_from_2
+                    row.get::<_, Option<f64>>(7)?, // valid_to_2
+                    row.get::<_, String>(8)?,  // namespace
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    } // conn released
+
+    // Phase 2: Evaluate each candidate pair
+    for (src, rel_type, dst1, dst2, vf1, vt1, vf2, vt2, namespace) in &candidates {
+        if conflicts.len() >= max_conflicts {
+            break;
+        }
+
+        // Resolve aliases
+        let src_canonical = db.resolve_alias(src, namespace);
+        let dst1_canonical = db.resolve_alias(dst1, namespace);
+        let dst2_canonical = db.resolve_alias(dst2, namespace);
+
+        // If dsts resolve to the same canonical, not a conflict
+        if dst1_canonical == dst2_canonical {
+            continue;
+        }
+
+        // Determine severity based on temporal information
+        let mut reason_codes = vec![reason_codes::SAME_SUBJECT_SAME_REL_DISTINCT_OBJECT.to_string()];
+        let priority;
+
+        match intervals_overlap(*vf1, *vt1, *vf2, *vt2) {
+            Some(true) => {
+                // Both have time, and they overlap → real conflict
+                reason_codes.push(reason_codes::OVERLAPPING_VALIDITY.to_string());
+                priority = "high";
+            }
+            Some(false) => {
+                // Both have time, but they DON'T overlap → succession, not conflict
+                reason_codes.push(reason_codes::POSSIBLE_SUCCESSION.to_string());
+                continue; // Skip — this is temporal succession, not a conflict
+            }
+            None => {
+                // One or both missing time → medium severity
+                reason_codes.push(reason_codes::MISSING_TEMPORAL.to_string());
+                priority = "medium";
+            }
+        }
+
+        let reason = format!(
+            "Claim conflict: {} has different {} values: '{}' vs '{}'. Reasons: [{}]",
+            src_canonical, rel_type, dst1_canonical, dst2_canonical,
+            reason_codes.join(", ")
+        );
+
+        // Find source memory rids for the conflicting claims
+        let (mem_a, mem_b) = {
+            let conn = db.conn();
+            let a = conn.query_row(
+                "SELECT source_memory_rid FROM edges WHERE src = ?1 AND rel_type = ?2 AND dst = ?3 AND tombstoned = 0",
+                params![src, rel_type, dst1],
+                |row| row.get::<_, Option<String>>(0),
+            ).ok().flatten();
+            let b = conn.query_row(
+                "SELECT source_memory_rid FROM edges WHERE src = ?1 AND rel_type = ?2 AND dst = ?3 AND tombstoned = 0",
+                params![src, rel_type, dst2],
+                |row| row.get::<_, Option<String>>(0),
+            ).ok().flatten();
+            (a, b)
+        };
+
+        // Use source memory rids if available, otherwise use src entity as fallback
+        let rid_a = mem_a.unwrap_or_else(|| format!("claim:{}:{}:{}", src, rel_type, dst1));
+        let rid_b = mem_b.unwrap_or_else(|| format!("claim:{}:{}:{}", src, rel_type, dst2));
+
+        if !conflict_exists(db, &rid_a, &rid_b)? {
+            let conflict = create_conflict(
+                db,
+                &ConflictType::IdentityFact,
+                &rid_a,
+                &rid_b,
+                Some(&src_canonical),
+                Some(rel_type),
+                &reason,
+            )?;
+
+            // Override priority based on our temporal analysis
+            {
+                let conn = db.conn();
+                conn.execute(
+                    "UPDATE conflicts SET priority = ?1 WHERE conflict_id = ?2",
+                    params![priority, conflict.conflict_id],
+                )?;
+            }
+
+            conflicts.push(conflict);
+        }
+    }
+
+    Ok(conflicts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

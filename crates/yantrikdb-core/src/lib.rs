@@ -22,7 +22,7 @@ pub use error::YantrikDbError;
 pub use types::*;
 pub use consolidate::{consolidate, find_consolidation_candidates};
 pub use triggers::{check_decay_triggers, check_consolidation_triggers, check_all_triggers};
-pub use conflict::{scan_conflicts, scan_conflicts_limited, detect_edge_conflicts, create_conflict};
+pub use conflict::{scan_conflicts, scan_conflicts_limited, scan_claim_conflicts, detect_edge_conflicts, create_conflict};
 pub use patterns::mine_patterns;
 pub use state::{
     CognitiveNode, CognitiveAttrs, CognitiveEdge, CognitiveEdgeKind,

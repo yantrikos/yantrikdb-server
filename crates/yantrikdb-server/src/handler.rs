@@ -150,13 +150,29 @@ pub fn execute_with_guard(
                     domain.as_deref(),
                     source.as_deref(),
                 )?
+            } else if namespace.is_some()
+                || domain.is_some()
+                || source.is_some()
+                || memory_type.is_some()
+            {
+                // Any filter set — must go through the full recall() path.
+                // recall_text_filtered silently drops namespace/memory_type.
+                let emb = db.embed(&query)?;
+                db.recall(
+                    &emb,
+                    top_k,
+                    None,
+                    memory_type.as_deref(),
+                    include_consolidated,
+                    expand_entities,
+                    Some(&query),
+                    false,
+                    namespace.as_deref(),
+                    domain.as_deref(),
+                    source.as_deref(),
+                )?
             } else {
-                // Use the convenience method that auto-embeds
-                if domain.is_some() || source.is_some() {
-                    db.recall_text_filtered(&query, top_k, domain.as_deref(), source.as_deref())?
-                } else {
-                    db.recall_text(&query, top_k)?
-                }
+                db.recall_text(&query, top_k)?
             };
 
             let result_values: Vec<Value> = results

@@ -36,6 +36,14 @@ pub enum OpCode {
     Edges = 0x42,
     EdgesResult = 0x43,
 
+    // --- Claims (0x44–0x49) ---
+    Claim = 0x44,      // C→S: ingest a claim
+    ClaimOk = 0x45,    // S→C: claim ingested
+    Claims = 0x46,     // C→S: query claims for an entity
+    ClaimsResult = 0x47, // S→C: claims list
+    Alias = 0x48,      // C→S: add entity alias
+    AliasOk = 0x49,    // S→C: alias added
+
     // --- Forget (0x50–0x51) ---
     Forget = 0x50,
     ForgetOk = 0x51,
@@ -113,6 +121,12 @@ impl OpCode {
             0x41 => Some(Self::RelateOk),
             0x42 => Some(Self::Edges),
             0x43 => Some(Self::EdgesResult),
+            0x44 => Some(Self::Claim),
+            0x45 => Some(Self::ClaimOk),
+            0x46 => Some(Self::Claims),
+            0x47 => Some(Self::ClaimsResult),
+            0x48 => Some(Self::Alias),
+            0x49 => Some(Self::AliasOk),
 
             0x50 => Some(Self::Forget),
             0x51 => Some(Self::ForgetOk),
@@ -187,6 +201,12 @@ mod tests {
             OpCode::RelateOk,
             OpCode::Edges,
             OpCode::EdgesResult,
+            OpCode::Claim,
+            OpCode::ClaimOk,
+            OpCode::Claims,
+            OpCode::ClaimsResult,
+            OpCode::Alias,
+            OpCode::AliasOk,
             OpCode::Forget,
             OpCode::ForgetOk,
             OpCode::SessionStart,

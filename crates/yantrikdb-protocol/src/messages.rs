@@ -214,6 +214,107 @@ pub struct EdgeMsg {
     pub weight: f64,
 }
 
+// ── Claims ────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClaimRequest {
+    pub src: String,
+    pub rel_type: String,
+    pub dst: String,
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
+    #[serde(default = "default_polarity")]
+    pub polarity: i32,
+    #[serde(default = "default_modality")]
+    pub modality: String,
+    #[serde(default)]
+    pub valid_from: Option<f64>,
+    #[serde(default)]
+    pub valid_to: Option<f64>,
+    #[serde(default = "default_extractor")]
+    pub extractor: String,
+    #[serde(default)]
+    pub extractor_version: Option<String>,
+    #[serde(default = "default_confidence_band")]
+    pub confidence_band: String,
+    #[serde(default)]
+    pub source_memory_rid: Option<String>,
+    #[serde(default)]
+    pub span_start: Option<i32>,
+    #[serde(default)]
+    pub span_end: Option<i32>,
+    #[serde(default = "default_weight")]
+    pub weight: f64,
+}
+
+fn default_polarity() -> i32 {
+    1
+}
+fn default_modality() -> String {
+    "asserted".into()
+}
+fn default_extractor() -> String {
+    "manual".into()
+}
+fn default_confidence_band() -> String {
+    "medium".into()
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClaimOkResponse {
+    pub claim_id: String,
+    pub namespace: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClaimsRequest {
+    pub entity: String,
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClaimsResultMsg {
+    pub claims: Vec<ClaimMsg>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClaimMsg {
+    pub claim_id: String,
+    pub src: String,
+    pub dst: String,
+    pub rel_type: String,
+    pub weight: f64,
+    pub polarity: i32,
+    pub modality: String,
+    pub namespace: String,
+    pub confidence_band: String,
+}
+
+// ── Alias ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AliasRequest {
+    pub alias: String,
+    pub canonical_name: String,
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
+    #[serde(default = "default_alias_source")]
+    pub source: String,
+}
+
+fn default_alias_source() -> String {
+    "explicit".into()
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AliasOkResponse {
+    pub alias: String,
+    pub canonical_name: String,
+    pub namespace: String,
+    pub added: bool,
+}
+
 // ── Forget ────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]

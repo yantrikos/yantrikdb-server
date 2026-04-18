@@ -333,6 +333,11 @@ pub fn execute_with_guard(
             })))
         }
 
+        Command::GetClaims { entity, namespace } => {
+            let claims = db.get_claims(&entity, namespace.as_deref())?;
+            Ok(CommandResult::Json(json!({ "claims": claims })))
+        }
+
         Command::IngestClaim {
             src, rel_type, dst, namespace, polarity, modality,
             valid_from, valid_to, extractor, extractor_version,

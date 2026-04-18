@@ -86,7 +86,11 @@ pub enum Command {
         resolution_note: Option<String>,
     },
 
-    // ── Claims (RFC 006 Phase 1) ────────────────────────
+    // ── Claims (RFC 006 Phase 5) ────────────────────────
+    GetClaims {
+        entity: String,
+        namespace: Option<String>,
+    },
     IngestClaim {
         src: String,
         rel_type: String,

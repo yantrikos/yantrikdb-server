@@ -295,6 +295,8 @@ fn is_write_command(cmd: &Command) -> bool {
             | Command::RememberBatch { .. }
             | Command::Forget { .. }
             | Command::Relate { .. }
+            | Command::IngestClaim { .. }
+            | Command::AddAlias { .. }
             | Command::SessionStart { .. }
             | Command::SessionEnd { .. }
             | Command::Think { .. }
@@ -419,6 +421,46 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
                 resolution_note: req.resolution_note,
             })
         }
+        OpCode::Claim => {
+            let req: ClaimRequest = unpack(&frame.payload)?;
+            Ok(Command::IngestClaim {
+                src: req.src,
+                rel_type: req.rel_type,
+                dst: req.dst,
+                namespace: req.namespace,
+                polarity: req.polarity,
+                modality: req.modality,
+                valid_from: req.valid_from,
+                valid_to: req.valid_to,
+                extractor: req.extractor,
+                extractor_version: req.extractor_version,
+                confidence_band: req.confidence_band,
+                source_memory_rid: req.source_memory_rid,
+                span_start: req.span_start,
+                span_end: req.span_end,
+                weight: req.weight,
+            })
+        }
+        OpCode::Claims => {
+            let req: ClaimsRequest = unpack(&frame.payload)?;
+            Ok(Command::GetClaims {
+                entity: req.entity,
+                namespace: if req.namespace.is_empty() || req.namespace == "default" {
+                    None
+                } else {
+                    Some(req.namespace)
+                },
+            })
+        }
+        OpCode::Alias => {
+            let req: AliasRequest = unpack(&frame.payload)?;
+            Ok(Command::AddAlias {
+                alias: req.alias,
+                canonical_name: req.canonical_name,
+                namespace: req.namespace,
+                source: req.source,
+            })
+        }
         OpCode::Personality => Ok(Command::Personality),
         OpCode::Stats => Ok(Command::Stats),
         OpCode::CreateDb => {
@@ -482,6 +524,12 @@ fn response_opcode_for_json(value: &serde_json::Value) -> OpCode {
         OpCode::RememberOk
     } else if value.get("found").is_some() {
         OpCode::ForgetOk
+    } else if value.get("claim_id").is_some() {
+        OpCode::ClaimOk
+    } else if value.get("claims").is_some() {
+        OpCode::ClaimsResult
+    } else if value.get("alias").is_some() {
+        OpCode::AliasOk
     } else if value.get("edge_id").is_some() {
         OpCode::RelateOk
     } else if value.get("edges").is_some() {

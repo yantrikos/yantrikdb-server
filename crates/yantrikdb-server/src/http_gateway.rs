@@ -5,8 +5,9 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path as AxumPath, State},
-    http::StatusCode,
+    extract::{Path as AxumPath, Query, State},
+    http::{HeaderValue, StatusCode},
+    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -601,7 +602,7 @@ async fn relate(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
-) -> AppResult {
+) -> Result<impl IntoResponse, AppError> {
     let _timer = crate::metrics::HandlerTimer::new("relate");
     check_writable(&state)?;
     let (_, engine) = resolve_engine(
@@ -623,7 +624,17 @@ async fn relate(
             .into(),
         weight: body.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0),
     };
-    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+    let json = execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await?;
+    let mut response = json.into_response();
+    response.headers_mut().insert(
+        "deprecation",
+        HeaderValue::from_static("true"),
+    );
+    response.headers_mut().insert(
+        "link",
+        HeaderValue::from_static(r#"</v1/claim>; rel="successor-version""#),
+    );
+    Ok(response)
 }
 
 async fn ingest_claim(
@@ -732,6 +743,30 @@ async fn add_alias(
             .into(),
     };
     execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+}
+
+async fn get_claims(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("get_claims");
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let entity = params
+        .get("entity")
+        .cloned()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'entity' query parameter"))?;
+    let namespace = params.get("namespace").cloned();
+    execute_cmd(
+        engine,
+        Command::GetClaims { entity, namespace },
+        state.control.clone(),
+        &state.inflight,
+    )
+    .await
 }
 
 async fn think(
@@ -1334,6 +1369,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/forget", post(forget))
         .route("/v1/relate", post(relate))
         .route("/v1/claim", post(ingest_claim))
+        .route("/v1/claims", get(get_claims))
         .route("/v1/alias", post(add_alias))
         .route("/v1/think", post(think))
         .route("/v1/conflicts", get(conflicts))

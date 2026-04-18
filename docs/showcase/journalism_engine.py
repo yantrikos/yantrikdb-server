@@ -8,9 +8,10 @@ reconstructions). All names are invented. The reconstruction pattern is
 how real journalism works.
 
 Scenario:
-  Representative Marcus Lanier (fictional) is running for Senate. At a
-  public town hall he states: "I have never taken a dollar from anyone
-  connected to the pharmaceutical industry."
+  Senator-candidate Marcus Lanier (fictional, no party affiliation given)
+  is running a statewide campaign. At a public town hall he states:
+  "I have never taken a dollar from anyone connected to the
+  pharmaceutical industry."
 
   FEC filings, Delaware state registry, bank transfer records, and
   journalists' source notes suggest otherwise — and show the money
@@ -114,11 +115,11 @@ def sub(title):
 # ==================================================================
 
 def seed_public_denial():
-    sub("Public statement — Rep. Lanier's town hall (2026-07-12)")
+    sub("Public statement — Candidate Lanier's town hall (2026-07-12)")
     remember(
-        "[Town hall 2026-07-12, Springfield IL] Rep. Marcus Lanier (D-IL), "
-        "asked about pharmaceutical campaign funding: 'I have never taken "
-        "a dollar from anyone connected to the pharmaceutical industry. "
+        "[Town hall 2026-07-12] Senate candidate Marcus Lanier, asked "
+        "about pharmaceutical campaign funding: 'I have never taken a "
+        "dollar from anyone connected to the pharmaceutical industry. "
         "Never have, never will.'",
         source="public.lanier", importance=1.0, certainty=0.95)
 
@@ -304,7 +305,7 @@ def trace_entity_chain():
 def surface_the_contradiction():
     banner("PHASE 4  THE CONTRADICTION — direct denial vs entity chain")
     print()
-    print("  Rep. Lanier claims:")
+    print("  Candidate Lanier claims:")
     r = request_json("GET", f"/v1/claims?entity=Lanier_campaign&namespace={NS}")
     for c in r.get("claims", []):
         if c["rel_type"] == "received_funds_from" and c["dst"] == "pharma_industry":
@@ -356,7 +357,7 @@ def verdict():
     print("  was ingested as a structured triple, each of which was traced")
     print("  automatically through the claims ledger.")
     print()
-    print("  Rep. Lanier's public denial was not contradicted by a single")
+    print("  Candidate Lanier's public denial was not contradicted by a single")
     print("  opposing assertion. It was contradicted by the *composition*")
     print("  of five assertions across public registries. That is how real")
     print("  investigative journalism works — and that is exactly what graph-")

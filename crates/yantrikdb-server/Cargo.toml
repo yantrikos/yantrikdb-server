@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-server"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "YantrikDB database server — multi-tenant cognitive memory with wire protocol, HTTP gateway, replication, auto-failover, and at-rest encryption"
 license = "AGPL-3.0-only"

@@ -801,6 +801,7 @@ async fn think(
 async fn conflicts(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> AppResult {
     let _timer = crate::metrics::HandlerTimer::new("conflicts");
     let (_, engine) = resolve_engine(
@@ -808,10 +809,14 @@ async fn conflicts(
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
     let cmd = Command::Conflicts {
-        status: None,
-        conflict_type: None,
-        entity: None,
-        limit: 50,
+        status: params.get("status").cloned(),
+        conflict_type: params.get("conflict_type").cloned(),
+        entity: params.get("entity").cloned(),
+        namespace: params.get("namespace").cloned(),
+        limit: params
+            .get("limit")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50),
     };
     execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }

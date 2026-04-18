@@ -76,6 +76,7 @@ pub enum Command {
         status: Option<String>,
         conflict_type: Option<String>,
         entity: Option<String>,
+        namespace: Option<String>,
         limit: usize,
     },
     Resolve {

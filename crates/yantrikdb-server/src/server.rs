@@ -408,6 +408,7 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
                 status: req.status,
                 conflict_type: req.conflict_type,
                 entity: req.entity,
+                namespace: None, // wire protocol namespace filter not yet exposed
                 limit: req.limit,
             })
         }

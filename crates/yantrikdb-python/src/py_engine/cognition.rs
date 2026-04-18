@@ -147,11 +147,12 @@ impl PyYantrikDB {
         conflict_type: Option<&str>,
         entity: Option<&str>,
         priority: Option<&str>,
+        namespace: Option<&str>,
         limit: usize,
     ) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
         let conflicts = db
-            .get_conflicts(status, conflict_type, entity, priority, limit)
+            .get_conflicts(status, conflict_type, entity, priority, namespace, limit)
             .map_err(map_err)?;
         conflicts.iter().map(|c| conflict_to_dict(py, c)).collect()
     }

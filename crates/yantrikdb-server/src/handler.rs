@@ -301,6 +301,7 @@ pub fn execute_with_guard(
             status,
             conflict_type,
             entity,
+            namespace,
             limit,
         } => {
             let conflicts = db.get_conflicts(
@@ -308,6 +309,7 @@ pub fn execute_with_guard(
                 conflict_type.as_deref(),
                 entity.as_deref(),
                 None, // priority
+                namespace.as_deref(),
                 limit,
             )?;
             let list: Vec<Value> = conflicts

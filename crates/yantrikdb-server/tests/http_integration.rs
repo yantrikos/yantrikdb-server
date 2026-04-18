@@ -525,7 +525,7 @@ async fn handle_conflicts(
 ) -> TestResult {
     let engine = resolve_test_engine(&state, &headers)?;
     let db = engine.lock().unwrap();
-    let conflicts = db.get_conflicts(None, None, None, None, 50).map_err(|e| {
+    let conflicts = db.get_conflicts(None, None, None, None, None, 50).map_err(|e| {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             axum::Json(json!({"error": e.to_string()})),

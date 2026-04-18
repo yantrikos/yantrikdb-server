@@ -7,13 +7,7 @@ use super::{map_err, PyYantrikDB};
 #[pymethods]
 impl PyYantrikDB {
     #[pyo3(signature = (src, dst, rel_type="related_to", weight=1.0))]
-    fn relate(
-        &self,
-        src: &str,
-        dst: &str,
-        rel_type: &str,
-        weight: f64,
-    ) -> PyResult<String> {
+    fn relate(&self, src: &str, dst: &str, rel_type: &str, weight: f64) -> PyResult<String> {
         let db = self.get_inner()?;
         db.relate(src, dst, rel_type, weight).map_err(map_err)
     }
@@ -33,13 +27,16 @@ impl PyYantrikDB {
         limit: usize,
     ) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
-        let entities = db.search_entities(pattern, entity_type, limit).map_err(map_err)?;
+        let entities = db
+            .search_entities(pattern, entity_type, limit)
+            .map_err(map_err)?;
         entities.iter().map(|e| entity_to_dict(py, e)).collect()
     }
 
     fn link_memory_entity(&self, memory_rid: &str, entity_name: &str) -> PyResult<()> {
         let db = self.get_inner()?;
-        db.link_memory_entity(memory_rid, entity_name).map_err(map_err)
+        db.link_memory_entity(memory_rid, entity_name)
+            .map_err(map_err)
     }
 
     fn backfill_memory_entities(&self) -> PyResult<usize> {

@@ -1,6 +1,6 @@
-mod memory;
-mod graph;
 mod cognition;
+mod graph;
+mod memory;
 mod session_temporal;
 mod sync;
 
@@ -56,13 +56,20 @@ impl CursorProxy {
 #[pymethods]
 impl ConnectionProxy {
     #[pyo3(signature = (sql, params=None))]
-    fn execute(&self, py: Python<'_>, sql: &str, params: Option<&Bound<'_, PyTuple>>) -> PyResult<CursorProxy> {
+    fn execute(
+        &self,
+        py: Python<'_>,
+        sql: &str,
+        params: Option<&Bound<'_, PyTuple>>,
+    ) -> PyResult<CursorProxy> {
         let conn = self.db.conn();
 
         let is_select = sql.trim_start().to_uppercase().starts_with("SELECT");
 
         let param_values: Vec<Box<dyn rusqlite::types::ToSql>> = if let Some(p) = params {
-            p.iter().map(|item| py_to_sql_value(&item)).collect::<PyResult<_>>()?
+            p.iter()
+                .map(|item| py_to_sql_value(&item))
+                .collect::<PyResult<_>>()?
         } else {
             vec![]
         };
@@ -70,20 +77,23 @@ impl ConnectionProxy {
             param_values.iter().map(|p| p.as_ref()).collect();
 
         if is_select {
-            let mut stmt = conn.prepare(sql)
+            let mut stmt = conn
+                .prepare(sql)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
             let col_count = stmt.column_count();
             let col_names: Vec<String> = (0..col_count)
                 .map(|i| stmt.column_name(i).unwrap_or("").to_string())
                 .collect();
 
-            let rows_result = stmt.query_map(params_ref.as_slice(), |row| {
-                let mut values: Vec<rusqlite::types::Value> = Vec::new();
-                for i in 0..col_count {
-                    values.push(row.get::<_, rusqlite::types::Value>(i)?);
-                }
-                Ok(values)
-            }).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            let rows_result = stmt
+                .query_map(params_ref.as_slice(), |row| {
+                    let mut values: Vec<rusqlite::types::Value> = Vec::new();
+                    for i in 0..col_count {
+                        values.push(row.get::<_, rusqlite::types::Value>(i)?);
+                    }
+                    Ok(values)
+                })
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
             let mut py_rows: Vec<PyObject> = Vec::new();
             for row_result in rows_result {
@@ -96,16 +106,25 @@ impl ConnectionProxy {
                 py_rows.push(dict.into());
             }
 
-            Ok(CursorProxy { rows: py_rows, rowcount: 0 })
+            Ok(CursorProxy {
+                rows: py_rows,
+                rowcount: 0,
+            })
         } else {
-            let changes = conn.execute(sql, params_ref.as_slice())
+            let changes = conn
+                .execute(sql, params_ref.as_slice())
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-            Ok(CursorProxy { rows: vec![], rowcount: changes })
+            Ok(CursorProxy {
+                rows: vec![],
+                rowcount: changes,
+            })
         }
     }
 
     fn executescript(&self, _py: Python<'_>, sql: &str) -> PyResult<()> {
-        self.db.conn().execute_batch(sql)
+        self.db
+            .conn()
+            .execute_batch(sql)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(())
     }
@@ -119,10 +138,21 @@ impl ConnectionProxy {
 fn sqlite_value_to_py(py: Python<'_>, val: &rusqlite::types::Value) -> PyResult<PyObject> {
     match val {
         rusqlite::types::Value::Null => Ok(py.None()),
-        rusqlite::types::Value::Integer(i) => Ok((*i).into_pyobject(py)?.to_owned().into_any().unbind()),
-        rusqlite::types::Value::Real(f) => Ok((*f).into_pyobject(py)?.to_owned().into_any().unbind()),
-        rusqlite::types::Value::Text(s) => Ok(s.as_str().into_pyobject(py)?.to_owned().into_any().unbind()),
-        rusqlite::types::Value::Blob(b) => Ok(b.as_slice().into_pyobject(py)?.to_owned().into_any().unbind()),
+        rusqlite::types::Value::Integer(i) => {
+            Ok((*i).into_pyobject(py)?.to_owned().into_any().unbind())
+        }
+        rusqlite::types::Value::Real(f) => {
+            Ok((*f).into_pyobject(py)?.to_owned().into_any().unbind())
+        }
+        rusqlite::types::Value::Text(s) => {
+            Ok(s.as_str().into_pyobject(py)?.to_owned().into_any().unbind())
+        }
+        rusqlite::types::Value::Blob(b) => Ok(b
+            .as_slice()
+            .into_pyobject(py)?
+            .to_owned()
+            .into_any()
+            .unbind()),
     }
 }
 
@@ -150,12 +180,8 @@ pub(crate) fn py_to_sql_value(obj: &Bound<'_, PyAny>) -> PyResult<Box<dyn rusqli
 
 pub(crate) fn map_err(e: yantrikdb_core::YantrikDbError) -> PyErr {
     match e {
-        yantrikdb_core::YantrikDbError::NoEmbedder => {
-            PyRuntimeError::new_err(e.to_string())
-        }
-        yantrikdb_core::YantrikDbError::NoQuery => {
-            PyValueError::new_err(e.to_string())
-        }
+        yantrikdb_core::YantrikDbError::NoEmbedder => PyRuntimeError::new_err(e.to_string()),
+        yantrikdb_core::YantrikDbError::NoQuery => PyValueError::new_err(e.to_string()),
         _ => PyRuntimeError::new_err(e.to_string()),
     }
 }
@@ -189,7 +215,9 @@ impl PyYantrikDB {
         #[cfg(feature = "candle")]
         if let Some(dir) = model_dir {
             let candle_embedder = yantrik_ml::CandleEmbedder::from_dir(std::path::Path::new(dir))
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to load candle embedder: {e}")))?;
+                .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to load candle embedder: {e}"))
+            })?;
             inner.set_embedder(Box::new(candle_embedder));
         }
 
@@ -221,9 +249,10 @@ impl PyYantrikDB {
     /// The _conn property — returns a ConnectionProxy for test compatibility.
     #[getter]
     fn _conn(&self) -> PyResult<ConnectionProxy> {
-        let db = self.inner.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err("YantrikDB is closed")
-        })?;
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("YantrikDB is closed"))?;
         Ok(ConnectionProxy { db: Arc::clone(db) })
     }
 
@@ -251,7 +280,8 @@ impl PyYantrikDB {
     ) -> PyResult<String> {
         let db = self.get_inner()?;
         let payload_json = py_to_json(&payload.as_any())?;
-        db.log_op(op_type, target_rid, &payload_json, None).map_err(map_err)
+        db.log_op(op_type, target_rid, &payload_json, None)
+            .map_err(map_err)
     }
 
     fn close(&mut self) -> PyResult<()> {
@@ -272,9 +302,9 @@ impl PyYantrikDB {
 impl PyYantrikDB {
     /// Get a reference to the inner YantrikDB engine (for use by consolidation/trigger wrappers).
     pub fn get_inner(&self) -> PyResult<&YantrikDB> {
-        self.inner.as_deref().ok_or_else(|| {
-            PyRuntimeError::new_err("YantrikDB is closed")
-        })
+        self.inner
+            .as_deref()
+            .ok_or_else(|| PyRuntimeError::new_err("YantrikDB is closed"))
     }
 
     pub(crate) fn embed_text(&self, py: Python<'_>, text: &str) -> PyResult<Vec<f32>> {

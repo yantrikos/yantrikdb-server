@@ -26,7 +26,10 @@ pub fn memory_to_dict(py: Python<'_>, mem: &yantrikdb_core::Memory) -> PyResult<
 }
 
 /// Convert an yantrikdb-core RecallResult to a Python dict.
-pub fn recall_result_to_dict(py: Python<'_>, r: &yantrikdb_core::RecallResult) -> PyResult<PyObject> {
+pub fn recall_result_to_dict(
+    py: Python<'_>,
+    r: &yantrikdb_core::RecallResult,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("rid", &r.rid)?;
     dict.set_item("type", &r.memory_type)?;
@@ -68,10 +71,15 @@ pub fn recall_result_to_dict(py: Python<'_>, r: &yantrikdb_core::RecallResult) -
 }
 
 /// Convert an yantrikdb-core RecallResponse to a Python dict.
-pub fn recall_response_to_dict(py: Python<'_>, r: &yantrikdb_core::RecallResponse) -> PyResult<PyObject> {
+pub fn recall_response_to_dict(
+    py: Python<'_>,
+    r: &yantrikdb_core::RecallResponse,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
 
-    let results: Vec<PyObject> = r.results.iter()
+    let results: Vec<PyObject> = r
+        .results
+        .iter()
         .map(|res| recall_result_to_dict(py, res))
         .collect::<PyResult<_>>()?;
     dict.set_item("results", results)?;
@@ -82,7 +90,12 @@ pub fn recall_response_to_dict(py: Python<'_>, r: &yantrikdb_core::RecallRespons
     let summary = PyDict::new(py);
     summary.set_item("top_similarity", r.retrieval_summary.top_similarity)?;
     summary.set_item("score_spread", r.retrieval_summary.score_spread)?;
-    let sources: Vec<&str> = r.retrieval_summary.sources_used.iter().map(|s| s.as_str()).collect();
+    let sources: Vec<&str> = r
+        .retrieval_summary
+        .sources_used
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
     summary.set_item("sources_used", sources)?;
     summary.set_item("candidate_count", r.retrieval_summary.candidate_count)?;
     dict.set_item("retrieval_summary", summary)?;
@@ -208,7 +221,10 @@ pub fn think_result_to_dict(py: Python<'_>, r: &yantrikdb_core::ThinkResult) -> 
 }
 
 /// Convert an yantrikdb-core PersistedTrigger to a Python dict.
-pub fn persisted_trigger_to_dict(py: Python<'_>, t: &yantrikdb_core::PersistedTrigger) -> PyResult<PyObject> {
+pub fn persisted_trigger_to_dict(
+    py: Python<'_>,
+    t: &yantrikdb_core::PersistedTrigger,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("trigger_id", &t.trigger_id)?;
     dict.set_item("trigger_type", &t.trigger_type)?;
@@ -247,7 +263,10 @@ pub fn pattern_to_dict(py: Python<'_>, p: &yantrikdb_core::Pattern) -> PyResult<
 }
 
 /// Convert an yantrikdb-core PersonalityTrait to a Python dict.
-pub fn personality_trait_to_dict(py: Python<'_>, t: &yantrikdb_core::PersonalityTrait) -> PyResult<PyObject> {
+pub fn personality_trait_to_dict(
+    py: Python<'_>,
+    t: &yantrikdb_core::PersonalityTrait,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("trait_name", &t.trait_name)?;
     dict.set_item("score", t.score)?;
@@ -258,9 +277,14 @@ pub fn personality_trait_to_dict(py: Python<'_>, t: &yantrikdb_core::Personality
 }
 
 /// Convert an yantrikdb-core PersonalityProfile to a Python dict.
-pub fn personality_profile_to_dict(py: Python<'_>, p: &yantrikdb_core::PersonalityProfile) -> PyResult<PyObject> {
+pub fn personality_profile_to_dict(
+    py: Python<'_>,
+    p: &yantrikdb_core::PersonalityProfile,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
-    let traits: Vec<PyObject> = p.traits.iter()
+    let traits: Vec<PyObject> = p
+        .traits
+        .iter()
         .map(|t| personality_trait_to_dict(py, t))
         .collect::<PyResult<_>>()?;
     dict.set_item("traits", traits)?;
@@ -282,7 +306,9 @@ pub fn json_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<PyObject>
                 Ok(py.None())
             }
         }
-        serde_json::Value::String(s) => Ok(s.as_str().into_pyobject(py)?.to_owned().into_any().unbind()),
+        serde_json::Value::String(s) => {
+            Ok(s.as_str().into_pyobject(py)?.to_owned().into_any().unbind())
+        }
         serde_json::Value::Array(arr) => {
             let list = pyo3::types::PyList::empty(py);
             for item in arr {
@@ -319,7 +345,10 @@ pub fn session_to_dict(py: Python<'_>, s: &yantrikdb_core::Session) -> PyResult<
 }
 
 /// Convert a SessionSummary to a Python dict.
-pub fn session_summary_to_dict(py: Python<'_>, s: &yantrikdb_core::SessionSummary) -> PyResult<PyObject> {
+pub fn session_summary_to_dict(
+    py: Python<'_>,
+    s: &yantrikdb_core::SessionSummary,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("session_id", &s.session_id)?;
     dict.set_item("duration_secs", s.duration_secs)?;
@@ -331,7 +360,10 @@ pub fn session_summary_to_dict(py: Python<'_>, s: &yantrikdb_core::SessionSummar
 }
 
 /// Convert an EntityProfile to a Python dict.
-pub fn entity_profile_to_dict(py: Python<'_>, p: &yantrikdb_core::EntityProfile) -> PyResult<PyObject> {
+pub fn entity_profile_to_dict(
+    py: Python<'_>,
+    p: &yantrikdb_core::EntityProfile,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("entity", &p.entity)?;
     dict.set_item("entity_type", &p.entity_type)?;
@@ -356,7 +388,10 @@ pub fn entity_profile_to_dict(py: Python<'_>, p: &yantrikdb_core::EntityProfile)
 }
 
 /// Convert a RelationshipDepth to a Python dict.
-pub fn relationship_depth_to_dict(py: Python<'_>, r: &yantrikdb_core::RelationshipDepth) -> PyResult<PyObject> {
+pub fn relationship_depth_to_dict(
+    py: Python<'_>,
+    r: &yantrikdb_core::RelationshipDepth,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("entity", &r.entity)?;
     dict.set_item("entity_type", &r.entity_type)?;
@@ -376,7 +411,10 @@ pub fn relationship_depth_to_dict(py: Python<'_>, r: &yantrikdb_core::Relationsh
 }
 
 /// Convert a ReclassifyResult to a Python dict.
-pub fn reclassify_result_to_dict(py: Python<'_>, r: &yantrikdb_core::ReclassifyResult) -> PyResult<PyObject> {
+pub fn reclassify_result_to_dict(
+    py: Python<'_>,
+    r: &yantrikdb_core::ReclassifyResult,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("conflict_id", &r.conflict_id)?;
     dict.set_item("old_type", &r.old_type)?;
@@ -395,7 +433,10 @@ pub fn reclassify_result_to_dict(py: Python<'_>, r: &yantrikdb_core::ReclassifyR
 }
 
 /// Convert a SubstitutionCategory to a Python dict.
-pub fn substitution_category_to_dict(py: Python<'_>, c: &yantrikdb_core::SubstitutionCategory) -> PyResult<PyObject> {
+pub fn substitution_category_to_dict(
+    py: Python<'_>,
+    c: &yantrikdb_core::SubstitutionCategory,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("id", &c.id)?;
     dict.set_item("name", &c.name)?;
@@ -406,7 +447,10 @@ pub fn substitution_category_to_dict(py: Python<'_>, c: &yantrikdb_core::Substit
 }
 
 /// Convert a SubstitutionMember to a Python dict.
-pub fn substitution_member_to_dict(py: Python<'_>, m: &yantrikdb_core::SubstitutionMember) -> PyResult<PyObject> {
+pub fn substitution_member_to_dict(
+    py: Python<'_>,
+    m: &yantrikdb_core::SubstitutionMember,
+) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("id", &m.id)?;
     dict.set_item("category_name", &m.category_name)?;

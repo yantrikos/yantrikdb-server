@@ -626,10 +626,9 @@ async fn relate(
     };
     let json = execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await?;
     let mut response = json.into_response();
-    response.headers_mut().insert(
-        "deprecation",
-        HeaderValue::from_static("true"),
-    );
+    response
+        .headers_mut()
+        .insert("deprecation", HeaderValue::from_static("true"));
     response.headers_mut().insert(
         "link",
         HeaderValue::from_static(r#"</v1/claim>; rel="successor-version""#),
@@ -666,10 +665,7 @@ async fn ingest_claim(
             .and_then(|v| v.as_str())
             .unwrap_or("default")
             .into(),
-        polarity: body
-            .get("polarity")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(1) as i32,
+        polarity: body.get("polarity").and_then(|v| v.as_i64()).unwrap_or(1) as i32,
         modality: body
             .get("modality")
             .and_then(|v| v.as_str())
@@ -703,10 +699,7 @@ async fn ingest_claim(
             .get("span_end")
             .and_then(|v| v.as_i64())
             .map(|v| v as i32),
-        weight: body
-            .get("weight")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0),
+        weight: body.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0),
     };
     execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }

@@ -355,15 +355,38 @@ pub fn execute_with_guard(
         }
 
         Command::IngestClaim {
-            src, rel_type, dst, namespace, polarity, modality,
-            valid_from, valid_to, extractor, extractor_version,
-            confidence_band, source_memory_rid, span_start, span_end, weight,
+            src,
+            rel_type,
+            dst,
+            namespace,
+            polarity,
+            modality,
+            valid_from,
+            valid_to,
+            extractor,
+            extractor_version,
+            confidence_band,
+            source_memory_rid,
+            span_start,
+            span_end,
+            weight,
         } => {
             let claim_id = db.ingest_claim(
-                &src, &rel_type, &dst, &namespace, polarity, &modality,
-                valid_from, valid_to, &extractor, extractor_version.as_deref(),
-                &confidence_band, source_memory_rid.as_deref(),
-                span_start, span_end, weight,
+                &src,
+                &rel_type,
+                &dst,
+                &namespace,
+                polarity,
+                &modality,
+                valid_from,
+                valid_to,
+                &extractor,
+                extractor_version.as_deref(),
+                &confidence_band,
+                source_memory_rid.as_deref(),
+                span_start,
+                span_end,
+                weight,
             )?;
             Ok(CommandResult::Json(json!({
                 "claim_id": claim_id,
@@ -371,7 +394,12 @@ pub fn execute_with_guard(
             })))
         }
 
-        Command::AddAlias { alias, canonical_name, namespace, source } => {
+        Command::AddAlias {
+            alias,
+            canonical_name,
+            namespace,
+            source,
+        } => {
             let added = db.add_entity_alias(&alias, &canonical_name, &namespace, &source)?;
             Ok(CommandResult::Json(json!({
                 "alias": alias,

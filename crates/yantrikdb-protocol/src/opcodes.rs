@@ -37,12 +37,12 @@ pub enum OpCode {
     EdgesResult = 0x43,
 
     // --- Claims (0x44–0x49) ---
-    Claim = 0x44,      // C→S: ingest a claim
-    ClaimOk = 0x45,    // S→C: claim ingested
-    Claims = 0x46,     // C→S: query claims for an entity
+    Claim = 0x44,        // C→S: ingest a claim
+    ClaimOk = 0x45,      // S→C: claim ingested
+    Claims = 0x46,       // C→S: query claims for an entity
     ClaimsResult = 0x47, // S→C: claims list
-    Alias = 0x48,      // C→S: add entity alias
-    AliasOk = 0x49,    // S→C: alias added
+    Alias = 0x48,        // C→S: add entity alias
+    AliasOk = 0x49,      // S→C: alias added
 
     // --- Forget (0x50–0x51) ---
     Forget = 0x50,

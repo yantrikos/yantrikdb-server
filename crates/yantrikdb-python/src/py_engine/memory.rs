@@ -25,13 +25,14 @@ impl PyYantrikDB {
         source: &str,
         emotional_state: Option<&str>,
     ) -> PyResult<String> {
-        let db = self.inner.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err("YantrikDB is closed")
-        })?;
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("YantrikDB is closed"))?;
 
         let emb = match embedding {
             Some(e) => e,
-            None => self.embed_text(py,text)?,
+            None => self.embed_text(py, text)?,
         };
 
         let meta = match metadata {
@@ -39,8 +40,21 @@ impl PyYantrikDB {
             None => serde_json::json!({}),
         };
 
-        db.record(text, memory_type, importance, valence, half_life, &meta, &emb, namespace, certainty, domain, source, emotional_state)
-            .map_err(map_err)
+        db.record(
+            text,
+            memory_type,
+            importance,
+            valence,
+            half_life,
+            &meta,
+            &emb,
+            namespace,
+            certainty,
+            domain,
+            source,
+            emotional_state,
+        )
+        .map_err(map_err)
     }
 
     #[pyo3(signature = (query=None, query_embedding=None, top_k=10, time_window=None, memory_type=None, include_consolidated=false, expand_entities=true, skip_reinforce=false, namespace=None, domain=None, source=None))]
@@ -59,20 +73,37 @@ impl PyYantrikDB {
         domain: Option<&str>,
         source: Option<&str>,
     ) -> PyResult<Vec<PyObject>> {
-        let db = self.inner.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err("YantrikDB is closed")
-        })?;
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("YantrikDB is closed"))?;
 
         let emb = match query_embedding {
             Some(e) => e,
             None => match query {
-                Some(q) => self.embed_text(py,q)?,
-                None => return Err(PyValueError::new_err("Must provide either query or query_embedding")),
+                Some(q) => self.embed_text(py, q)?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "Must provide either query or query_embedding",
+                    ))
+                }
             },
         };
 
         let results = db
-            .recall(&emb, top_k, time_window, memory_type, include_consolidated, expand_entities, query, skip_reinforce, namespace, domain, source)
+            .recall(
+                &emb,
+                top_k,
+                time_window,
+                memory_type,
+                include_consolidated,
+                expand_entities,
+                query,
+                skip_reinforce,
+                namespace,
+                domain,
+                source,
+            )
             .map_err(map_err)?;
 
         results
@@ -103,13 +134,29 @@ impl PyYantrikDB {
         let emb = match query_embedding {
             Some(e) => e,
             None => match query {
-                Some(q) => self.embed_text(py,q)?,
-                None => return Err(PyValueError::new_err("Must provide either query or query_embedding")),
+                Some(q) => self.embed_text(py, q)?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "Must provide either query or query_embedding",
+                    ))
+                }
             },
         };
 
         let response = db
-            .recall_with_response(&emb, top_k, time_window, memory_type, include_consolidated, expand_entities, query, skip_reinforce, namespace, domain, source)
+            .recall_with_response(
+                &emb,
+                top_k,
+                time_window,
+                memory_type,
+                include_consolidated,
+                expand_entities,
+                query,
+                skip_reinforce,
+                namespace,
+                domain,
+                source,
+            )
             .map_err(map_err)?;
 
         recall_response_to_dict(py, &response)
@@ -134,13 +181,25 @@ impl PyYantrikDB {
         let ref_emb = match refinement_embedding {
             Some(e) => e,
             None => match refinement_text {
-                Some(t) => self.embed_text(py,t)?,
-                None => return Err(PyValueError::new_err("Must provide either refinement_text or refinement_embedding")),
+                Some(t) => self.embed_text(py, t)?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "Must provide either refinement_text or refinement_embedding",
+                    ))
+                }
             },
         };
 
         let response = db
-            .recall_refine(&original_query_embedding, &ref_emb, &original_rids, top_k, namespace, domain, source)
+            .recall_refine(
+                &original_query_embedding,
+                &ref_emb,
+                &original_rids,
+                top_k,
+                namespace,
+                domain,
+                source,
+            )
             .map_err(map_err)?;
 
         recall_response_to_dict(py, &response)
@@ -181,25 +240,46 @@ impl PyYantrikDB {
         let emb = match embedding {
             Some(e) => e,
             None => match query {
-                Some(q) => self.embed_text(py,q)?,
-                None => return Err(PyValueError::new_err("Must provide either query or embedding")),
+                Some(q) => self.embed_text(py, q)?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "Must provide either query or embedding",
+                    ))
+                }
             },
         };
 
         let mut q = yantrikdb_core::RecallQuery::new(emb).top_k(top_k);
-        if let Some(mt) = memory_type { q = q.memory_type(mt); }
-        if let Some(ns) = namespace { q = q.namespace(ns); }
-        if let Some(tw) = time_window { q = q.time_window(tw.0, tw.1); }
+        if let Some(mt) = memory_type {
+            q = q.memory_type(mt);
+        }
+        if let Some(ns) = namespace {
+            q = q.namespace(ns);
+        }
+        if let Some(tw) = time_window {
+            q = q.time_window(tw.0, tw.1);
+        }
         if expand_entities {
             q = q.expand_entities(query.unwrap_or(""));
         }
-        if include_consolidated { q = q.include_consolidated(); }
-        if skip_reinforce { q = q.skip_reinforce(); }
-        if let Some(d) = domain { q = q.domain(d); }
-        if let Some(s) = source { q = q.source(s); }
+        if include_consolidated {
+            q = q.include_consolidated();
+        }
+        if skip_reinforce {
+            q = q.skip_reinforce();
+        }
+        if let Some(d) = domain {
+            q = q.domain(d);
+        }
+        if let Some(s) = source {
+            q = q.source(s);
+        }
 
         let results = db.query(q).map_err(map_err)?;
-        results.iter().map(|r| recall_result_to_dict(py, r)).collect()
+        results
+            .iter()
+            .map(|r| recall_result_to_dict(py, r))
+            .collect()
     }
 
     fn get(&self, py: Python<'_>, rid: &str) -> PyResult<Option<PyObject>> {
@@ -227,9 +307,14 @@ impl PyYantrikDB {
         sort_by: &str,
     ) -> PyResult<PyObject> {
         let db = self.get_inner()?;
-        let (memories, total) = db.list_memories(limit, offset, domain, memory_type, namespace, sort_by).map_err(map_err)?;
+        let (memories, total) = db
+            .list_memories(limit, offset, domain, memory_type, namespace, sort_by)
+            .map_err(map_err)?;
         let dict = pyo3::types::PyDict::new(py);
-        let items: Vec<PyObject> = memories.iter().map(|m| memory_to_dict(py, m)).collect::<PyResult<Vec<_>>>()?;
+        let items: Vec<PyObject> = memories
+            .iter()
+            .map(|m| memory_to_dict(py, m))
+            .collect::<PyResult<Vec<_>>>()?;
         dict.set_item("memories", items)?;
         dict.set_item("total", total)?;
         dict.set_item("offset", offset)?;
@@ -257,10 +342,17 @@ impl PyYantrikDB {
         let db = self.get_inner()?;
         let emb = match embedding {
             Some(e) => e,
-            None => self.embed_text(py,new_text)?,
+            None => self.embed_text(py, new_text)?,
         };
         let result = db
-            .correct(rid, new_text, new_importance, new_valence, &emb, correction_note)
+            .correct(
+                rid,
+                new_text,
+                new_importance,
+                new_valence,
+                &emb,
+                correction_note,
+            )
             .map_err(map_err)?;
         let dict = PyDict::new(py);
         dict.set_item("original_rid", &result.original_rid)?;
@@ -269,66 +361,81 @@ impl PyYantrikDB {
         Ok(dict.into())
     }
 
-    fn record_batch(&self, py: Python<'_>, inputs: Vec<Bound<'_, PyDict>>) -> PyResult<Vec<String>> {
+    fn record_batch(
+        &self,
+        py: Python<'_>,
+        inputs: Vec<Bound<'_, PyDict>>,
+    ) -> PyResult<Vec<String>> {
         let db = self.get_inner()?;
 
         let mut record_inputs = Vec::with_capacity(inputs.len());
         for d in &inputs {
-            let text: String = d.get_item("text")?.ok_or_else(|| {
-                PyValueError::new_err("Each input must have a 'text' key")
-            })?.extract()?;
+            let text: String = d
+                .get_item("text")?
+                .ok_or_else(|| PyValueError::new_err("Each input must have a 'text' key"))?
+                .extract()?;
 
-            let memory_type: String = d.get_item("memory_type")?
+            let memory_type: String = d
+                .get_item("memory_type")?
                 .map(|v| v.extract::<String>())
                 .transpose()?
                 .unwrap_or_else(|| "episodic".to_string());
 
-            let importance: f64 = d.get_item("importance")?
+            let importance: f64 = d
+                .get_item("importance")?
                 .map(|v| v.extract::<f64>())
                 .transpose()?
                 .unwrap_or(0.5);
 
-            let valence: f64 = d.get_item("valence")?
+            let valence: f64 = d
+                .get_item("valence")?
                 .map(|v| v.extract::<f64>())
                 .transpose()?
                 .unwrap_or(0.0);
 
-            let half_life: f64 = d.get_item("half_life")?
+            let half_life: f64 = d
+                .get_item("half_life")?
                 .map(|v| v.extract::<f64>())
                 .transpose()?
                 .unwrap_or(604800.0);
 
-            let metadata = d.get_item("metadata")?
+            let metadata = d
+                .get_item("metadata")?
                 .map(|v| py_to_json(&v))
                 .transpose()?
                 .unwrap_or(serde_json::json!({}));
 
             let embedding: Vec<f32> = match d.get_item("embedding")? {
                 Some(v) => v.extract()?,
-                None => self.embed_text(py,&text)?,
+                None => self.embed_text(py, &text)?,
             };
 
-            let namespace: String = d.get_item("namespace")?
+            let namespace: String = d
+                .get_item("namespace")?
                 .map(|v| v.extract::<String>())
                 .transpose()?
                 .unwrap_or_else(|| "default".to_string());
 
-            let certainty: f64 = d.get_item("certainty")?
+            let certainty: f64 = d
+                .get_item("certainty")?
                 .map(|v| v.extract::<f64>())
                 .transpose()?
                 .unwrap_or(0.8);
 
-            let domain: String = d.get_item("domain")?
+            let domain: String = d
+                .get_item("domain")?
                 .map(|v| v.extract::<String>())
                 .transpose()?
                 .unwrap_or_else(|| "general".to_string());
 
-            let source: String = d.get_item("source")?
+            let source: String = d
+                .get_item("source")?
                 .map(|v| v.extract::<String>())
                 .transpose()?
                 .unwrap_or_else(|| "user".to_string());
 
-            let emotional_state: Option<String> = d.get_item("emotional_state")?
+            let emotional_state: Option<String> = d
+                .get_item("emotional_state")?
                 .map(|v| v.extract::<Option<String>>())
                 .transpose()?
                 .flatten();
@@ -371,7 +478,8 @@ impl PyYantrikDB {
             feedback,
             score_at_retrieval,
             rank_at_retrieval,
-        ).map_err(map_err)
+        )
+        .map_err(map_err)
     }
 
     /// Get the current learned scoring weights.

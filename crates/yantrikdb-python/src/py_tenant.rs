@@ -39,9 +39,7 @@ impl PyTenantManager {
     fn new(base_dir: &str, embedding_dim: usize) -> PyResult<Self> {
         let path = PathBuf::from(base_dir);
         std::fs::create_dir_all(&path).map_err(|e| {
-            pyo3::exceptions::PyIOError::new_err(format!(
-                "failed to create tenant base dir: {e}"
-            ))
+            pyo3::exceptions::PyIOError::new_err(format!("failed to create tenant base dir: {e}"))
         })?;
         Ok(Self {
             base_dir: path,
@@ -112,15 +110,11 @@ impl PyTenantManager {
     fn discovered_tenants(&self) -> PyResult<Vec<String>> {
         let mut tenants = Vec::new();
         let entries = std::fs::read_dir(&self.base_dir).map_err(|e| {
-            pyo3::exceptions::PyIOError::new_err(format!(
-                "failed to read tenant dir: {e}"
-            ))
+            pyo3::exceptions::PyIOError::new_err(format!("failed to read tenant dir: {e}"))
         })?;
         for entry in entries {
             let entry = entry.map_err(|e| {
-                pyo3::exceptions::PyIOError::new_err(format!(
-                    "failed to read dir entry: {e}"
-                ))
+                pyo3::exceptions::PyIOError::new_err(format!("failed to read dir entry: {e}"))
             })?;
             let name = entry.file_name();
             let name_str = name.to_string_lossy();

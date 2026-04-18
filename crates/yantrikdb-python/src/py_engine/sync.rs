@@ -44,7 +44,8 @@ impl PyYantrikDB {
             since_op_id,
             exclude_actor,
             limit,
-        ).map_err(map_err)?;
+        )
+        .map_err(map_err)?;
 
         let mut result = Vec::with_capacity(ops.len());
         for op in &ops {
@@ -68,36 +69,45 @@ impl PyYantrikDB {
 
         let mut entries = Vec::with_capacity(ops.len());
         for d in &ops {
-            let op_id: String = d.get_item("op_id")?.ok_or_else(|| {
-                PyValueError::new_err("Each op must have 'op_id'")
-            })?.extract()?;
-            let op_type: String = d.get_item("op_type")?.ok_or_else(|| {
-                PyValueError::new_err("Each op must have 'op_type'")
-            })?.extract()?;
-            let timestamp: f64 = d.get_item("timestamp")?.ok_or_else(|| {
-                PyValueError::new_err("Each op must have 'timestamp'")
-            })?.extract()?;
-            let target_rid: Option<String> = d.get_item("target_rid")?
+            let op_id: String = d
+                .get_item("op_id")?
+                .ok_or_else(|| PyValueError::new_err("Each op must have 'op_id'"))?
+                .extract()?;
+            let op_type: String = d
+                .get_item("op_type")?
+                .ok_or_else(|| PyValueError::new_err("Each op must have 'op_type'"))?
+                .extract()?;
+            let timestamp: f64 = d
+                .get_item("timestamp")?
+                .ok_or_else(|| PyValueError::new_err("Each op must have 'timestamp'"))?
+                .extract()?;
+            let target_rid: Option<String> = d
+                .get_item("target_rid")?
                 .and_then(|v| if v.is_none() { None } else { Some(v) })
                 .map(|v| v.extract())
                 .transpose()?;
-            let payload = d.get_item("payload")?
+            let payload = d
+                .get_item("payload")?
                 .map(|v| py_to_json(&v))
                 .transpose()?
                 .unwrap_or(serde_json::json!({}));
-            let actor_id: String = d.get_item("actor_id")?.ok_or_else(|| {
-                PyValueError::new_err("Each op must have 'actor_id'")
-            })?.extract()?;
-            let hlc: Vec<u8> = d.get_item("hlc")?.ok_or_else(|| {
-                PyValueError::new_err("Each op must have 'hlc'")
-            })?.extract()?;
-            let embedding_hash: Option<Vec<u8>> = d.get_item("embedding_hash")?
+            let actor_id: String = d
+                .get_item("actor_id")?
+                .ok_or_else(|| PyValueError::new_err("Each op must have 'actor_id'"))?
+                .extract()?;
+            let hlc: Vec<u8> = d
+                .get_item("hlc")?
+                .ok_or_else(|| PyValueError::new_err("Each op must have 'hlc'"))?
+                .extract()?;
+            let embedding_hash: Option<Vec<u8>> = d
+                .get_item("embedding_hash")?
                 .and_then(|v| if v.is_none() { None } else { Some(v) })
                 .map(|v| v.extract())
                 .transpose()?;
-            let origin_actor: String = d.get_item("origin_actor")?.ok_or_else(|| {
-                PyValueError::new_err("Each op must have 'origin_actor'")
-            })?.extract()?;
+            let origin_actor: String = d
+                .get_item("origin_actor")?
+                .ok_or_else(|| PyValueError::new_err("Each op must have 'origin_actor'"))?
+                .extract()?;
 
             entries.push(yantrikdb_core::replication::OplogEntry {
                 op_id,
@@ -121,7 +131,9 @@ impl PyYantrikDB {
 
     fn get_peer_watermark(&self, py: Python<'_>, peer_actor: &str) -> PyResult<Option<PyObject>> {
         let db = self.get_inner()?;
-        match yantrikdb_core::replication::get_peer_watermark(&*db.conn(), peer_actor).map_err(map_err)? {
+        match yantrikdb_core::replication::get_peer_watermark(&*db.conn(), peer_actor)
+            .map_err(map_err)?
+        {
             Some((hlc, op_id)) => {
                 let dict = PyDict::new(py);
                 dict.set_item("hlc", &hlc)?;

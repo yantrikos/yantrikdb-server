@@ -24,7 +24,8 @@ impl PyYantrikDB {
             Some(d) => py_to_json(&d.as_any())?,
             None => serde_json::json!({}),
         };
-        db.session_start(namespace, client_id, &meta).map_err(map_err)
+        db.session_start(namespace, client_id, &meta)
+            .map_err(map_err)
     }
 
     #[pyo3(signature = (session_id, summary=None))]
@@ -62,7 +63,9 @@ impl PyYantrikDB {
         limit: usize,
     ) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
-        let sessions = db.session_history(namespace, client_id, limit).map_err(map_err)?;
+        let sessions = db
+            .session_history(namespace, client_id, limit)
+            .map_err(map_err)?;
         sessions.iter().map(|s| session_to_dict(py, s)).collect()
     }
 
@@ -109,7 +112,9 @@ impl PyYantrikDB {
         namespace: Option<&str>,
     ) -> PyResult<PyObject> {
         let db = self.get_inner()?;
-        let profile = db.entity_profile(entity, days, namespace).map_err(map_err)?;
+        let profile = db
+            .entity_profile(entity, days, namespace)
+            .map_err(map_err)?;
         entity_profile_to_dict(py, &profile)
     }
 
@@ -143,7 +148,10 @@ impl PyYantrikDB {
         let results = db
             .surface_procedural(&query_embedding, query_text, domain, top_k, namespace)
             .map_err(map_err)?;
-        results.iter().map(|r| recall_result_to_dict(py, r)).collect()
+        results
+            .iter()
+            .map(|r| recall_result_to_dict(py, r))
+            .collect()
     }
 
     #[pyo3(signature = (text, embedding=None, domain="general", task_context="", effectiveness=0.5, namespace="default"))]
@@ -173,20 +181,19 @@ impl PyYantrikDB {
     }
 
     #[pyo3(signature = (namespace=None))]
-    fn procedural_stats(
-        &self,
-        py: Python<'_>,
-        namespace: Option<&str>,
-    ) -> PyResult<Vec<PyObject>> {
+    fn procedural_stats(&self, py: Python<'_>, namespace: Option<&str>) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
         let stats = db.procedural_stats(namespace).map_err(map_err)?;
-        stats.iter().map(|(domain, count, avg_imp)| {
-            let dict = PyDict::new(py);
-            dict.set_item("domain", domain)?;
-            dict.set_item("count", count)?;
-            dict.set_item("avg_effectiveness", avg_imp)?;
-            Ok(dict.into())
-        }).collect()
+        stats
+            .iter()
+            .map(|(domain, count, avg_imp)| {
+                let dict = PyDict::new(py);
+                dict.set_item("domain", domain)?;
+                dict.set_item("count", count)?;
+                dict.set_item("avg_effectiveness", avg_imp)?;
+                Ok(dict.into())
+            })
+            .collect()
     }
 
     // ── Substitution category APIs (V14) ──
@@ -199,25 +206,28 @@ impl PyYantrikDB {
         new_type: &str,
     ) -> PyResult<PyObject> {
         let db = self.get_inner()?;
-        let result = db.reclassify_conflict(conflict_id, new_type).map_err(map_err)?;
+        let result = db
+            .reclassify_conflict(conflict_id, new_type)
+            .map_err(map_err)?;
         reclassify_result_to_dict(py, &result)
     }
 
     fn substitution_categories(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
         let cats = db.substitution_categories().map_err(map_err)?;
-        cats.iter().map(|c| substitution_category_to_dict(py, c)).collect()
+        cats.iter()
+            .map(|c| substitution_category_to_dict(py, c))
+            .collect()
     }
 
     #[pyo3(signature = (category_name))]
-    fn substitution_members(
-        &self,
-        py: Python<'_>,
-        category_name: &str,
-    ) -> PyResult<Vec<PyObject>> {
+    fn substitution_members(&self, py: Python<'_>, category_name: &str) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
         let members = db.substitution_members(category_name).map_err(map_err)?;
-        members.iter().map(|m| substitution_member_to_dict(py, m)).collect()
+        members
+            .iter()
+            .map(|m| substitution_member_to_dict(py, m))
+            .collect()
     }
 
     #[pyo3(signature = (category_name, members, source="llm_suggested"))]
@@ -228,14 +238,12 @@ impl PyYantrikDB {
         source: &str,
     ) -> PyResult<usize> {
         let db = self.get_inner()?;
-        db.learn_category_members(category_name, &members, source).map_err(map_err)
+        db.learn_category_members(category_name, &members, source)
+            .map_err(map_err)
     }
 
     #[pyo3(signature = (category_name))]
-    fn reset_category_to_seed(
-        &self,
-        category_name: &str,
-    ) -> PyResult<usize> {
+    fn reset_category_to_seed(&self, category_name: &str) -> PyResult<usize> {
         let db = self.get_inner()?;
         db.reset_category_to_seed(category_name).map_err(map_err)
     }

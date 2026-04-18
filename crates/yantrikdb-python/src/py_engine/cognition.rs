@@ -14,17 +14,39 @@ impl PyYantrikDB {
         let db = self.get_inner()?;
         let cfg = if let Some(d) = config {
             let mut c = yantrikdb_core::ThinkConfig::default();
-            if let Ok(Some(v)) = d.get_item("importance_threshold") { c.importance_threshold = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("decay_threshold") { c.decay_threshold = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("max_triggers") { c.max_triggers = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("run_consolidation") { c.run_consolidation = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("run_conflict_scan") { c.run_conflict_scan = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("run_pattern_mining") { c.run_pattern_mining = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("min_active_memories") { c.min_active_memories = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("run_personality") { c.run_personality = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("consolidation_limit") { c.consolidation_limit = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("consolidation_time_window_days") { c.consolidation_time_window_days = v.extract()?; }
-            if let Ok(Some(v)) = d.get_item("consolidation_sim_threshold") { c.consolidation_sim_threshold = v.extract()?; }
+            if let Ok(Some(v)) = d.get_item("importance_threshold") {
+                c.importance_threshold = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("decay_threshold") {
+                c.decay_threshold = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("max_triggers") {
+                c.max_triggers = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("run_consolidation") {
+                c.run_consolidation = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("run_conflict_scan") {
+                c.run_conflict_scan = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("run_pattern_mining") {
+                c.run_pattern_mining = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("min_active_memories") {
+                c.min_active_memories = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("run_personality") {
+                c.run_personality = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("consolidation_limit") {
+                c.consolidation_limit = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("consolidation_time_window_days") {
+                c.consolidation_time_window_days = v.extract()?;
+            }
+            if let Ok(Some(v)) = d.get_item("consolidation_sim_threshold") {
+                c.consolidation_sim_threshold = v.extract()?;
+            }
             c
         } else {
             yantrikdb_core::ThinkConfig::default()
@@ -57,7 +79,10 @@ impl PyYantrikDB {
     fn get_pending_triggers(&self, py: Python<'_>, limit: usize) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
         let triggers = db.get_pending_triggers(limit).map_err(map_err)?;
-        triggers.iter().map(|t| persisted_trigger_to_dict(py, t)).collect()
+        triggers
+            .iter()
+            .map(|t| persisted_trigger_to_dict(py, t))
+            .collect()
     }
 
     #[pyo3(signature = (trigger_type=None, limit=50))]
@@ -68,8 +93,13 @@ impl PyYantrikDB {
         limit: usize,
     ) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
-        let triggers = db.get_trigger_history(trigger_type, limit).map_err(map_err)?;
-        triggers.iter().map(|t| persisted_trigger_to_dict(py, t)).collect()
+        let triggers = db
+            .get_trigger_history(trigger_type, limit)
+            .map_err(map_err)?;
+        triggers
+            .iter()
+            .map(|t| persisted_trigger_to_dict(py, t))
+            .collect()
     }
 
     #[pyo3(signature = (pattern_type=None, status=None, limit=50))]
@@ -81,7 +111,9 @@ impl PyYantrikDB {
         limit: usize,
     ) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
-        let patterns = db.get_patterns(pattern_type, status, limit).map_err(map_err)?;
+        let patterns = db
+            .get_patterns(pattern_type, status, limit)
+            .map_err(map_err)?;
         patterns.iter().map(|p| pattern_to_dict(py, p)).collect()
     }
 
@@ -121,10 +153,7 @@ impl PyYantrikDB {
         let conflicts = db
             .get_conflicts(status, conflict_type, entity, priority, limit)
             .map_err(map_err)?;
-        conflicts
-            .iter()
-            .map(|c| conflict_to_dict(py, c))
-            .collect()
+        conflicts.iter().map(|c| conflict_to_dict(py, c)).collect()
     }
 
     fn get_conflict(&self, py: Python<'_>, conflict_id: &str) -> PyResult<Option<PyObject>> {
@@ -167,9 +196,6 @@ impl PyYantrikDB {
     fn scan_conflicts(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
         let db = self.get_inner()?;
         let conflicts = yantrikdb_core::scan_conflicts(db).map_err(map_err)?;
-        conflicts
-            .iter()
-            .map(|c| conflict_to_dict(py, c))
-            .collect()
+        conflicts.iter().map(|c| conflict_to_dict(py, c)).collect()
     }
 }

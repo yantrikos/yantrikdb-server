@@ -122,22 +122,46 @@ pub fn py_consolidate(
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-    results
-        .iter()
-        .map(|v| json_to_py(py, v))
-        .collect()
+    results.iter().map(|v| json_to_py(py, v)).collect()
 }
 
 fn dict_to_mem_with_embedding(d: &Bound<'_, PyDict>) -> PyResult<MemoryWithEmbedding> {
-    let rid: String = d.get_item("rid")?.map(|v| v.extract()).unwrap_or(Ok("".to_string()))?;
-    let text: String = d.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok("".to_string()))?;
-    let memory_type: String = d.get_item("type")?.map(|v| v.extract()).unwrap_or(Ok("episodic".to_string()))?;
-    let embedding: Vec<f32> = d.get_item("embedding")?.map(|v| v.extract()).unwrap_or(Ok(vec![]))?;
-    let created_at: f64 = d.get_item("created_at")?.map(|v| v.extract()).unwrap_or(Ok(0.0))?;
-    let importance: f64 = d.get_item("importance")?.map(|v| v.extract()).unwrap_or(Ok(0.5))?;
-    let valence: f64 = d.get_item("valence")?.map(|v| v.extract()).unwrap_or(Ok(0.0))?;
-    let half_life: f64 = d.get_item("half_life")?.map(|v| v.extract()).unwrap_or(Ok(604800.0))?;
-    let last_access: f64 = d.get_item("last_access")?.map(|v| v.extract()).unwrap_or(Ok(0.0))?;
+    let rid: String = d
+        .get_item("rid")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok("".to_string()))?;
+    let text: String = d
+        .get_item("text")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok("".to_string()))?;
+    let memory_type: String = d
+        .get_item("type")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok("episodic".to_string()))?;
+    let embedding: Vec<f32> = d
+        .get_item("embedding")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok(vec![]))?;
+    let created_at: f64 = d
+        .get_item("created_at")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok(0.0))?;
+    let importance: f64 = d
+        .get_item("importance")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok(0.5))?;
+    let valence: f64 = d
+        .get_item("valence")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok(0.0))?;
+    let half_life: f64 = d
+        .get_item("half_life")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok(604800.0))?;
+    let last_access: f64 = d
+        .get_item("last_access")?
+        .map(|v| v.extract())
+        .unwrap_or(Ok(0.0))?;
     let metadata: serde_json::Value = d
         .get_item("metadata")?
         .map(|v| py_to_json(&v))

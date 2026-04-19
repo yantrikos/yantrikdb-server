@@ -113,27 +113,150 @@ frequent failure mode.
 - Single model (Qwen 3.6 MoE Q4). Frontier models would likely saturate
   oracle and change the failure mix.
 
-## Next: Level 2
+## L3 — longmemeval_s (~53 sessions / ~550 turns / ~120k tokens per haystack)
 
-L2 plan (not yet built):
-- Swap word-overlap for sentence-transformer embeddings
-  (`all-MiniLM-L6-v2`, cheap and fast)
-- Same oracle subset, same Qwen actor, same Qwen judge
-- Pre-register: L2 should improve the 3 retrieval-incomplete
-  multi-session cases. If it doesn't, the issue is not retrieval
-  quality, it's retrieval STRATEGY (chunking, aggregation).
+Same harness, same seed, same subset logic (5/type × 6 = 30), same
+Qwen actor + judge. Only difference: `longmemeval_s_cleaned.json`
+(evidence sessions + ~50 distractor sessions per instance), top-k=20
+(up from 10 for the bigger haystack).
 
-L3 plan (gated on L2 signal):
-- Move to longmemeval_s (~40 sessions, 115k tokens per haystack)
-- Retrieval matters here; the full published leaderboard is on this
-  subset.
-- This is where yantrikdb needs to have a number to be in the
-  conversation.
+Harness: [`phase3d_lme_harness_L3.py`](phase3d_lme_harness_L3.py) · judge:
+[`phase3d_lme_judge_L3.py`](phase3d_lme_judge_L3.py)
+Log: [`harness_L3_log.txt`](harness_L3_log.txt) · scored:
+[`scored_L3.jsonl`](scored_L3.jsonl)
 
-L4 plan (gated on L3 being in-range):
-- Replace simulator with real yantrikdb HTTP endpoints
-- For knowledge-update subset specifically, use `claim_with_lineage`
-  (RFC 008) with temporal validity windows
-- Pre-register: **on knowledge-update subset, yantrikdb must cut
-  stale-value-picking rate by ≥50% vs L3 baseline.** If it can't, RFC
-  006 does not earn its complexity and should be reconsidered.
+### L3 results (n=5 per type, n=30 total)
+
+| question type | L1 (oracle) | L3 (_s) | Δ |
+|---|---|---|---|
+| single-session-user         | 5/5 (100%) | 5/5 (100%) | 0 |
+| single-session-assistant    | 5/5 (100%) | 5/5 (100%) | 0 |
+| knowledge-update            | 4/5 (80%)  | **5/5 (100%)** | **+20** |
+| single-session-preference   | 4/5 (80%)  | 2/5 (40%)  | -40 |
+| temporal-reasoning          | 3/5 (60%)  | 2/5 (40%)  | -20 |
+| multi-session               | 2/5 (40%)  | 2/5 (40%)  | 0 |
+| **overall**                 | **76.67%** | **70.00%** | -6.67 |
+
+Session-level retrieval recall@20: **28/30 = 93.3%** (the two misses
+were preference questions where the user asked a tangentially worded
+question — the answer sessions were there but not in the top-20 by
+word overlap).
+
+**That 93% recall is striking.** Plain Dice-coefficient word overlap
+over 550-turn haystacks surfaces the correct answer session in the
+top-20 on 28 of 30 questions. This is far better than I expected and
+is an important baseline datum: you don't need embeddings or a
+structured substrate to find the right turn in LongMemEval_s. You
+need the LLM to read the turn and answer correctly, which is a
+different problem.
+
+### The headline finding — question `852ce960` (knowledge-update)
+
+The same question (mortgage pre-approval $350K → $400K revision)
+appeared in both L1 and L3 subsets. At L1, Qwen confidently answered
+**"$350,000"** — wrong, Qwen picked the stale value out of oracle's
+context. This was the one case I flagged as "exactly where yantrikdb
+RFC 006 temporal-succession substrate should win."
+
+At L3, Qwen answered: **"The user mentioned being pre-approved for
+$350,000 in one instance and $400,000 in another."** Hedged. Lists
+both values. LongMemEval's knowledge-update grading rubric
+**explicitly accepts this**:
+
+> "If the response contains some previous information along with an
+> updated answer, the response should be considered as correct as
+> long as the updated answer is the required answer."
+
+So L3's hedged answer is scored correct. The exact failure mode RFC
+006 was pre-registered to fix is, by LongMemEval's own grading
+definition, **not a failure**. There is no room on the LongMemEval
+knowledge-update subset for a temporal-succession substrate to
+improve the numerical score.
+
+This is uncomfortable, but it's the honest read. A product feature
+claim has to either (a) win on a benchmark's actual grading, or (b)
+be justified outside benchmarks entirely (cleaner UX, fewer hedged
+answers, auditability). The "fewer hedged answers" argument is
+legitimate — users asking "what was I pre-approved for?" don't want
+both values — but it's not what LongMemEval measures.
+
+### L3 retrieval failures
+
+2 / 30 questions had no answer-session overlap in top-20:
+
+- `505af2f5` (preference): asked about "recommendations for coffee
+  creamer recipes"; answer session discussed spring-themed coffee
+  flavors but not creamer recipes specifically. Word overlap missed
+  the semantic match.
+- `6b7dfb22` (preference): asked about "finding inspiration for
+  paintings"; answer session used different vocabulary. Semantic
+  mismatch.
+
+These are the textbook embedding-fixable cases. L2 (embeddings) would
+plausibly fix them.
+
+## What L1+L3 together establish
+
+- **Retrieval is not yantrikdb's killer app.** Plain word-overlap at
+  top-20 gets 93% session recall on 550-turn haystacks. Embeddings
+  would push this higher but the marginal gain is small (maybe 2-3
+  questions).
+- **The answer generator is the bottleneck.** Multi-session (40%/40%)
+  and temporal-reasoning (60%/40%) failures are Qwen arithmetic /
+  aggregation errors on retrieved-but-correct context. No memory
+  substrate fixes them.
+- **Knowledge-update under LongMemEval's grading is NOT a scenario
+  where RFC 006 can show numerical wins.** The benchmark's own
+  rubric accepts "old + new" hedged answers as correct. The stale-pick
+  failure I was targeting gets washed out.
+- **The retrieval hit rate at L3 is high enough that "bigger haystack
+  breaks retrieval" (the core assumption behind wanting a substrate)
+  is empirically false for this benchmark at this scale.** Maybe
+  longmemeval_m (500 sessions) breaks it. Haven't tested.
+
+## Where this leaves yantrikdb
+
+The retreat from Phase 3C → L1 → L3 has progressively eroded the
+case for the RFC 006/008 temporal substrate as a benchmark-winning
+feature, specifically:
+
+| phase | claim | status after testing |
+|---|---|---|
+| 3A/3B | "notebook beats cold" | supported (+36 to +67 pts) but ceilings |
+| 3C (plain struct vs markdown) | "structured memory beats markdown" | **falsified** at this scale |
+| 3C sub-claim | "plain structured memory has 40% stale-rate that yantrikdb could fix" | true but narrow |
+| 3D L1 | "that 40% stale-rate shows up on LongMemEval" | 1/30 occurrence — too small |
+| 3D L3 | "scaling haystack makes retrieval noisy so temporal validity pays off" | **falsified**: retrieval still 93% at top-20, knowledge-update ceilings at 100% because LME grading accepts hedging |
+
+## Remaining paths for yantrikdb to be defensible
+
+1. **longmemeval_m** (500 sessions per haystack). Maybe the retrieval
+   hit rate drops at that scale. This is cheap to test (same harness,
+   different data file).
+2. **Custom benchmark where the grading punishes hedging.** If we
+   define "knowledge-update" answers as correct ONLY when they pick
+   the current value without listing the stale one, RFC 006 has room
+   to improve. But this is "we grade ourselves to look good" territory;
+   it's a real concern but a weaker product story than winning on an
+   established benchmark.
+3. **Non-benchmark product wedge**: auditability, provenance-accuracy,
+   user-UX of clean answers vs hedged ones. These are real but quieter.
+   Mem0's product is the comparison — they sell auto-fact-extraction
+   as their value prop, not benchmark wins.
+4. **Concede the memory-layer framing and pivot.** If LongMemEval's
+   grading plus a strong enough actor model (Qwen 3.6 at 70% on _s)
+   erodes the structured-substrate argument this much, the claim
+   yantrikdb should stand on may not be "better memory" at all. It
+   may be "auditable claim graphs for regulated domains" — a
+   different product, a different market, a different RFC set.
+
+## Honest next-step ranking
+
+1. **longmemeval_m** (1 hour of work — same harness, different data).
+   If retrieval stays >90% at 500 sessions too, the structured-memory-for-benchmark thesis is probably dead.
+2. **Real yantrikdb integration (L4)**: test whether wire protocol and
+   claim_with_lineage works end-to-end with a baseline agent. This is
+   product-engineering validation independent of benchmark numbers.
+3. **Sit with the data for a day.** Three phases have progressively
+   narrowed the provable claim. Might be time to pause and talk to
+   potential users before writing more code.

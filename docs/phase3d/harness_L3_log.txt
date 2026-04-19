@@ -1,0 +1,160 @@
+Phase 3D Level 3 — LongMemEval_s + memory_sim + Qwen 3.6
+n_per_type=5, TOP_K=20, seed=42
+start: 2026-04-19 15:27:58
+
+loaded 500 instances from longmemeval_s_cleaned.json
+subset: 30 instances
+
+[1/30] gpt4_372c3eed_abs (multi-session) — 15:28:01
+  stored 490 turns | retrieved 20 (top score 0.105)
+  answer_sessions: ['answer_35c5419d_abs_3', 'answer_35c5419d_abs_2', 'answer_35c5419d_abs_1']; retrieved_sessions overlap: True
+  answer: 'Based on the provided memories, I cannot answer this question. The memories state that you attended Arcadia High School from 2010 to 2014 (4'
+  elapsed: 17.2s
+[2/30] 3249768e (single-session-assistant) — 15:28:18
+  stored 475 turns | retrieved 20 (top score 0.2)
+  answer_sessions: ['answer_sharegpt_CaxTGYP_0']; retrieved_sessions overlap: True
+  answer: 'The fifth bottle was Absinthe.'
+  elapsed: 2.0s
+[3/30] ac031881 (single-session-assistant) — 15:28:20
+  stored 529 turns | retrieved 20 (top score 0.244)
+  answer_sessions: ['answer_sharegpt_GYqnAhC_190']; retrieved_sessions overlap: True
+  answer: 'The designation on the jumpsuit was "LIV".'
+  elapsed: 1.8s
+[4/30] 6f9b354f (single-session-user) — 15:28:22
+  stored 500 turns | retrieved 20 (top score 0.115)
+  answer_sessions: ['answer_feb5200f']; retrieved_sessions overlap: True
+  answer: 'Lighter shade of gray.'
+  elapsed: 1.5s
+[5/30] 6ade9755 (single-session-user) — 15:28:23
+  stored 513 turns | retrieved 20 (top score 0.087)
+  answer_sessions: ['answer_9398da02']; retrieved_sessions overlap: True
+  answer: 'You take yoga classes at **Serenity Yoga**.'
+  elapsed: 3.6s
+[6/30] gpt4_e072b769 (temporal-reasoning) — 15:28:27
+  stored 444 turns | retrieved 20 (top score 0.128)
+  answer_sessions: ['answer_c19bd2bf_1']; retrieved_sessions overlap: True
+  answer: 'The provided memories do not contain information about when you started using the cashback app \'Ibotta\'. They only mention that you "just do'
+  elapsed: 3.0s
+[7/30] 27016adc (multi-session) — 15:28:30
+  stored 491 turns | retrieved 20 (top score 0.222)
+  answer_sessions: ['answer_a37bdf22_1', 'answer_a37bdf22_2']; retrieved_sessions overlap: True
+  answer: 'The provided memories do not contain the price of the countryside property, so this percentage cannot be calculated.'
+  elapsed: 1.6s
+[8/30] eac54adc (temporal-reasoning) — 15:28:31
+  stored 464 turns | retrieved 20 (top score 0.263)
+  answer_sessions: ['answer_0d4d0347_2', 'answer_0d4d0347_1']; retrieved_sessions overlap: True
+  answer: 'The provided memories do not contain information linking the date of the website launch to the date the contract was signed. Memory 5 mentio'
+  elapsed: 2.5s
+[9/30] f523d9fe (single-session-assistant) — 15:28:34
+  stored 484 turns | retrieved 20 (top score 0.308)
+  answer_sessions: ['answer_sharegpt_m2xJfjo_0']; retrieved_sessions overlap: True
+  answer: 'Doc Martin'
+  elapsed: 1.7s
+[10/30] 4dfccbf7 (temporal-reasoning) — 15:28:36
+  stored 521 turns | retrieved 20 (top score 0.192)
+  answer_sessions: ['answer_4bebc782_2', 'answer_4bebc782_1']; retrieved_sessions overlap: True
+  answer: '24 days'
+  elapsed: 1.8s
+[11/30] 505af2f5 (single-session-preference) — 15:28:38
+  stored 501 turns | retrieved 20 (top score 0.4)
+  answer_sessions: ['answer_f3164f2c']; retrieved_sessions overlap: False
+  answer: 'The provided memories do not contain recommendations for coffee creamer recipes. They mention spring-themed coffee flavors (like Lemon Ginge'
+  elapsed: 2.0s
+[12/30] cc6d1ec1 (temporal-reasoning) — 15:28:40
+  stored 457 turns | retrieved 20 (top score 0.167)
+  answer_sessions: ['answer_be73098b_1', 'answer_be73098b_2']; retrieved_sessions overlap: True
+  answer: 'The provided memories do not state how long you had been bird watching when you attended the workshop. Memory 1 mentions attending the works'
+  elapsed: 2.8s
+[13/30] 94f70d80 (single-session-user) — 15:28:42
+  stored 510 turns | retrieved 20 (top score 0.14)
+  answer_sessions: ['answer_c63c0458']; retrieved_sessions overlap: True
+  answer: 'It took you 4 hours.'
+  elapsed: 1.5s
+[14/30] 3fdac837 (multi-session) — 15:28:44
+  stored 453 turns | retrieved 20 (top score 0.091)
+  answer_sessions: ['answer_419d21d5_2', 'answer_419d21d5_1']; retrieved_sessions overlap: True
+  answer: 'Based on the retrieved memories, you spent **7 days** in Japan (from April 15th to April 22nd, as stated in Memory 3) and the duration of yo'
+  elapsed: 3.6s
+[15/30] b01defab (knowledge-update) — 15:28:47
+  stored 503 turns | retrieved 20 (top score 0.2)
+  answer_sessions: ['answer_8c0712af_1', 'answer_8c0712af_2']; retrieved_sessions overlap: True
+  answer: 'Yes. In memory 1 (session 47, dated 2023/03/30), the user states they "just finished reading" *The Seven Husbands of Evelyn Hugo* and also "'
+  elapsed: 4.1s
+[16/30] 6a27ffc2 (knowledge-update) — 15:28:51
+  stored 493 turns | retrieved 20 (top score 0.275)
+  answer_sessions: ['answer_77f32504_2', 'answer_77f32504_1']; retrieved_sessions overlap: True
+  answer: "You have completed 30 videos of Corey Schafer's Python series."
+  elapsed: 3.2s
+[17/30] 3e321797 (single-session-assistant) — 15:28:55
+  stored 490 turns | retrieved 20 (top score 0.256)
+  answer_sessions: ['answer_ultrachat_94624']; retrieved_sessions overlap: True
+  answer: 'You should leave the mixture of tomato juice and lemon juice on for 10 minutes, then wash it off with cold water.'
+  elapsed: 2.0s
+[18/30] 7161e7e2 (single-session-assistant) — 15:28:57
+  stored 550 turns | retrieved 20 (top score 0.4)
+  answer_sessions: ['answer_sharegpt_5Lzox6N_0']; retrieved_sessions overlap: True
+  answer: 'Based on the shift rotation sheet for GM social media agents (1 Week, Sunday - Saturday) provided in the conversation, Admon was assigned to'
+  elapsed: 3.0s
+[19/30] 54026fce (single-session-preference) — 15:29:00
+  stored 472 turns | retrieved 20 (top score 0.216)
+  answer_sessions: ['answer_f7b22c66']; retrieved_sessions overlap: True
+  answer: 'Based on memory 1, you mentioned missing watercooler conversations and social interactions while working from home. To stay connected, you c'
+  elapsed: 2.2s
+[20/30] 0e4e4c46 (knowledge-update) — 15:29:02
+  stored 481 turns | retrieved 20 (top score 0.208)
+  answer_sessions: ['answer_f2f998c7_2', 'answer_f2f998c7_1']; retrieved_sessions overlap: True
+  answer: '132'
+  elapsed: 1.4s
+[21/30] 6456829e (multi-session) — 15:29:03
+  stored 488 turns | retrieved 20 (top score 0.182)
+  answer_sessions: ['answer_743f03a1_1', 'answer_743f03a1_2']; retrieved_sessions overlap: True
+  answer: 'You initially planted 5 tomato plants. The memories do not specify the initial number of cucumber plants, only that you have 3 cucumber plan'
+  elapsed: 2.7s
+[22/30] c7dc5443 (knowledge-update) — 15:29:06
+  stored 478 turns | retrieved 20 (top score 0.214)
+  answer_sessions: ['answer_0cdbca92_1', 'answer_0cdbca92_2']; retrieved_sessions overlap: True
+  answer: '5-2'
+  elapsed: 1.5s
+[23/30] 852ce960 (knowledge-update) — 15:29:08
+  stored 396 turns | retrieved 20 (top score 0.258)
+  answer_sessions: ['answer_3a6f1e82_2', 'answer_3a6f1e82_1']; retrieved_sessions overlap: True
+  answer: 'The user mentioned being pre-approved for $350,000 in one instance and $400,000 in another.'
+  elapsed: 1.9s
+[24/30] b6025781 (single-session-preference) — 15:29:09
+  stored 460 turns | retrieved 20 (top score 0.294)
+  answer_sessions: ['answer_8414cc57']; retrieved_sessions overlap: True
+  answer: 'Based on previous conversations, you have considered meal prepping with **roasted sweet potatoes** (seasoned as desired), **quinoa and roast'
+  elapsed: 2.4s
+[25/30] gpt4_76048e76 (temporal-reasoning) — 15:29:12
+  stored 482 turns | retrieved 20 (top score 0.118)
+  answer_sessions: ['answer_b535969f_2', 'answer_b535969f_1']; retrieved_sessions overlap: True
+  answer: 'The bike. You mentioned having bike repairs in mid-February, while you washed your car on February 27th.'
+  elapsed: 2.6s
+[26/30] afdc33df (single-session-preference) — 15:29:14
+  stored 502 turns | retrieved 20 (top score 0.216)
+  answer_sessions: ['answer_8549e5e0']; retrieved_sessions overlap: True
+  answer: 'Based on the provided memories, there are no specific tips for general kitchen cleaning. However, previous discussions included tips for org'
+  elapsed: 2.1s
+[27/30] 6b7dfb22 (single-session-preference) — 15:29:16
+  stored 471 turns | retrieved 20 (top score 0.267)
+  answer_sessions: ['answer_f6502d0f']; retrieved_sessions overlap: False
+  answer: 'The provided memories do not contain information about finding inspiration for paintings.'
+  elapsed: 1.6s
+[28/30] bb7c3b45 (multi-session) — 15:29:18
+  stored 495 turns | retrieved 20 (top score 0.162)
+  answer_sessions: ['answer_de64539a_2', 'answer_de64539a_1']; retrieved_sessions overlap: True
+  answer: 'You saved $300 on the Jimmy Choo heels. They originally retailed for $500, and you purchased them for $200.'
+  elapsed: 3.1s
+[29/30] bc8a6e93 (single-session-user) — 15:29:21
+  stored 537 turns | retrieved 20 (top score 0.151)
+  answer_sessions: ['answer_e6143162']; retrieved_sessions overlap: True
+  answer: 'You baked a lemon blueberry cake.'
+  elapsed: 1.4s
+[30/30] bc8a6e93_abs (single-session-user) — 15:29:23
+  stored 493 turns | retrieved 20 (top score 0.113)
+  answer_sessions: ['answer_e6143162_abs']; retrieved_sessions overlap: True
+  answer: "The provided memories do not contain information about baking for your uncle's birthday party. Memory 1 mentions making a lemon blueberry ca"
+  elapsed: 1.9s
+
+done: 2026-04-19 15:29:24
+hypotheses → C:\Users\sync\codes\yantrikdb-server\docs\phase3d\hypotheses_L3.jsonl

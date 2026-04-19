@@ -1,0 +1,104 @@
+Phase 3E — LongMemEval L1 oracle rerun with REAL yantrikdb
+n_per_type=5 (6 types × 5 = 30 total)
+start: 2026-04-19 16:46:00
+
+subset: 30 instances
+
+[1/30] gpt4_372c3eed_abs (multi-session) — 16:46:00
+  ingested 34 turns | think: conflicts=54 consolidated=0
+  retrieved 10 (top score 0.958 if any)
+  answer: 'Based on the provided memories, it is not possible to answer this question. The memories confirm you attended Arcadia High School from 2010 '
+  elapsed: 83.3s
+[2/30] 3249768e (single-session-assistant) — 16:47:24
+  ingested 4 turns | think: conflicts=9 consolidated=0
+  retrieved 4 (top score 1.228 if any)
+  answer: 'Based on the retrieved memories, the fifth bottle recommended for making the widest variety of gin-based cocktails is **Dry Vermouth**.\n\nThe'
+  elapsed: 16.7s
+[3/30] ac031881 (single-session-assistant) — 16:47:40
+  ingested 32 turns | think: conflicts=47 consolidated=0
+  retrieved 10 (top score 1.094 if any)
+  answer: 'The designation on your jumpsuit was "LIV". You realized that LIV is the Roman numeral for 54, which allowed you to search for file number 5'
+  elapsed: 74.4s
+[4/30] 6f9b354f (single-session-user) — 16:48:55
+  ingested 10 turns | think: conflicts=18 consolidated=0
+  retrieved 10 (top score 0.834 if any)
+  answer: 'You repainted your bedroom walls a lighter shade of gray.'
+  elapsed: 27.9s
+[5/30] 6ade9755 (single-session-user) — 16:49:23
+  ingested 12 turns | think: conflicts=18 consolidated=0
+  retrieved 10 (top score 1.129 if any)
+  answer: 'The provided memories do not contain information about where you take yoga classes. They only mention that you practice at home using apps l'
+  elapsed: 32.6s
+[6/30] gpt4_0b2f1d21 (temporal-reasoning) — 16:49:55
+  ingested 24 turns | think: conflicts=54 consolidated=0
+  retrieved 10 (top score 1.002 if any)
+  answer: 'The purchase of the coffee maker happened first.\n\nAccording to the memories, the user bought the coffee maker about three weeks ago (Memory '
+  elapsed: 59.4s
+[7/30] 27016adc (multi-session) — 16:50:55
+  ingested 24 turns | think: conflicts=61 consolidated=0
+  retrieved 10 (top score 1.112 if any)
+  answer: 'The provided memories do not contain information about the price of the countryside property in relation to the renovation costs of your cur'
+  elapsed: 60.6s
+[8/30] 6613b389 (temporal-reasoning) — 16:51:55
+  ingested 36 turns | think: conflicts=54 consolidated=0
+  retrieved 10 (top score 1.098 if any)
+  answer: 'Rachel got engaged in May, and your anniversary is in July. Therefore, she got engaged **2 months** before your anniversary.'
+  elapsed: 82.7s
+[9/30] f523d9fe (single-session-assistant) — 16:53:18
+  ingested 22 turns | think: conflicts=100 consolidated=0
+  retrieved 10 (top score 1.287 if any)
+  answer: 'Yes, the show you used as an example was "Doc Martin."'
+  elapsed: 53.5s
+[10/30] c9f37c46 (temporal-reasoning) — 16:54:11
+  ingested 22 turns | think: conflicts=53 consolidated=0
+  retrieved 10 (top score 1.116 if any)
+  answer: 'You had been watching stand-up comedy specials regularly for about **3 months** when you attended the open mic night.'
+  elapsed: 54.2s
+[11/30] 505af2f5 (single-session-preference) — 16:55:06
+  ingested 12 turns | think: conflicts=18 consolidated=0
+  retrieved 10 (top score 1.069 if any)
+  answer: 'Based on your previous interest in reducing sugar intake and saving money, you have already started making your own flavored creamer using a'
+  elapsed: 34.5s
+[12/30] gpt4_af6db32f (temporal-reasoning) — 16:55:40
+  ingested 12 turns | think: conflicts=26 consolidated=0
+  retrieved 10 (top score 0.716 if any)
+  answer: "Based on the retrieved memories, you watched the Super Bowl on **February 12, 2023**.\n\nToday's date is March 1, 2023. Therefore, you watched"
+  elapsed: 33.7s
+[13/30] 94f70d80 (single-session-user) — 16:56:14
+  ingested 12 turns | think: conflicts=33 consolidated=0
+  retrieved 10 (top score 1.157 if any)
+  answer: 'It took you 4 hours to assemble the IKEA bookshelf.'
+  elapsed: 31.9s
+[14/30] 3fdac837 (multi-session) — 16:56:46
+  ingested 20 turns | think: conflicts=37 consolidated=0
+  retrieved 10 (top score 1.072 if any)
+  answer: 'Based on the retrieved memories, you spent **7 days** in Japan (April 15th to 22nd) and **4 days** in Chicago.\n\nTotal: **11 days**.'
+  elapsed: 50.2s
+[15/30] b01defab (knowledge-update) — 16:57:36
+  ingested 24 turns | think: conflicts=41 consolidated=0
+  retrieved 10 (top score 1.174 if any)
+  answer: 'Yes, you finished reading "The Nightingale" by Kristin Hannah. You mentioned finishing it recently on March 30, 2023, and described it as a '
+  elapsed: 58.7s
+[16/30] 6a27ffc2 (knowledge-update) — 16:58:34
+  ingested 24 turns | think: conflicts=60 consolidated=0
+  retrieved 10 (top score 1.006 if any)
+  answer: "You have completed 30 videos of Corey Schafer's Python series."
+  elapsed: 58.9s
+[17/30] 3e321797 (single-session-assistant) — 16:59:33
+  ingested 8 turns | think: conflicts=11 consolidated=0
+  retrieved 8 (top score 1.158 if any)
+  answer: 'You should leave the tomato juice mixed with lemon juice on for 10 minutes before washing it off with cold water.'
+  elapsed: 24.4s
+[18/30] 7161e7e2 (single-session-assistant) — 16:59:58
+  ingested 14 turns | think: conflicts=45 consolidated=0
+  retrieved 10 (top score 1.250 if any)
+  answer: 'Based on the provided memories, there is no mention of an agent named "Admon." The previous chat only referenced generic placeholders such a'
+  elapsed: 37.8s
+[19/30] 54026fce (single-session-preference) — 17:00:36
+  ingested 12 turns | think: conflicts=32 consolidated=0
+  retrieved 10 (top score 1.102 if any)
+  answer: 'Based on the retrieved memories, here are suggestions to stay connected with your colleagues while working from home:\n\n1.  **Virtual Coffee '
+  elapsed: 41.7s
+[20/30] 0e4e4c46 (knowledge-update) — 17:01:17
+  ingested 24 turns | think: conflicts=25 consolidated=0
+  retrieved 10 (top score 1.014 if any)

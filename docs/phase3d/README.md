@@ -1,3 +1,25 @@
+> ## ⚠️ METHODOLOGY CORRECTION (2026-04-19)
+>
+> All L1/L3/L4 experiments on this page ran against
+> [`../phase3c/memory_sim.py`](../phase3c/memory_sim.py) — a Python
+> list of `(key, value, session)` tuples with Dice word-overlap
+> retrieval. **That is not yantrikdb.** It has no embeddings, no
+> HNSW, no `think()` loop, no multi-signal scoring, no conflict scan.
+>
+> The "null result on RFC 006" conclusion in this writeup was therefore
+> drawn from a stripped-down simulator that doesn't exercise the
+> features RFC 006 adds. The conclusion is **withdrawn**.
+>
+> A rerun with the actual yantrikdb HTTP server is underway in
+> [`../phase3e/`](../phase3e/). Preliminary 3E results on the Phase 3C
+> scenario show the simulator-era finding does NOT hold when real
+> yantrikdb (with `think()`) is used.
+>
+> **Do not cite the numbers below without the Phase 3E correction.**
+> This writeup is preserved for audit trail only.
+
+---
+
 # Phase 3D — LongMemEval head-to-head
 
 **Goal.** Move out of custom experimental designs and onto the

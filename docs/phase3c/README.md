@@ -1,3 +1,26 @@
+> ## ⚠️ METHODOLOGY CORRECTION (2026-04-19)
+>
+> The **C_structured** condition in this writeup used
+> [`memory_sim.py`](memory_sim.py) — a Python list of `(key, value, session)`
+> tuples with Dice word-overlap retrieval. It is **NOT yantrikdb**. It has
+> no embeddings, no HNSW, no `think()` loop, no multi-signal scoring,
+> no conflict scan. Calling this condition "structured memory" in the
+> original writeup was misleading.
+>
+> A Phase 3E rerun with the **actual yantrikdb HTTP server**
+> (client-side MiniLM embeddings + `/v1/recall` multi-signal scoring +
+> `/v1/think` between sessions) produced materially different numbers:
+> overall score 0.584 → 0.850, stale-rate 0.40 → 0.20, C now BEATS D
+> markdown by 18 points. See [`../phase3e/`](../phase3e/) for the rerun.
+>
+> **Do not cite the numbers below without the Phase 3E correction.**
+> This writeup is preserved for audit trail only.
+>
+> Credit to the project's maintainer for catching that the simulator
+> wasn't yantrikdb during consultation.
+
+---
+
 # Phase 3C — memory probe with supersession, alias, and indirect retrieval pressure
 
 **Question:** does structured memory (key/value + retrieval) beat a plain

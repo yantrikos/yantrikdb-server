@@ -56,6 +56,10 @@ class MemoryStore:
     memories: list[Memory] = field(default_factory=list)
     write_log: list[dict] = field(default_factory=list)
     query_log: list[dict] = field(default_factory=list)
+    # Per-store caps. Defaults match Phase 3C's stricter regime; callers
+    # for larger-text corpora (LongMemEval turns) can override.
+    value_cap: int = 120
+    key_cap: int = 60
 
     def remember(self, key: str, value: str, session: int) -> dict:
         """Store a (key, value, session) tuple. Returns storage confirmation."""
@@ -63,11 +67,10 @@ class MemoryStore:
         value = (value or "").strip()
         if not key or not value:
             return {"__error__": "empty key or value"}
-        # Truncate payload if needed.
-        if len(value) > 120:
-            value = value[:120]
-        if len(key) > 60:
-            key = key[:60]
+        if len(value) > self.value_cap:
+            value = value[:self.value_cap]
+        if len(key) > self.key_cap:
+            key = key[:self.key_cap]
         mem = Memory(
             idx=len(self.memories),
             key=key,

@@ -1,0 +1,160 @@
+Phase 3D Level 1 — LongMemEval oracle + memory_sim + Qwen 3.6
+n_per_type=5 (6 types × 5 = 30 total)
+start: 2026-04-19 14:34:57
+
+loaded 500 instances from longmemeval_oracle.json
+subset: 30 instances
+
+[1/30] gpt4_372c3eed_abs (multi-session) — 14:34:57
+  stored 34 turns as memories
+  retrieved 10 memories (top score 0.105)
+  answer: "Based on the provided memories, I cannot answer this question because the memories do not state that you have completed a Master's degree. T"
+  elapsed: 17.3s
+[2/30] 3249768e (single-session-assistant) — 14:35:15
+  stored 4 turns as memories
+  retrieved 4 memories (top score 0.205)
+  answer: 'Absinthe'
+  elapsed: 0.9s
+[3/30] ac031881 (single-session-assistant) — 14:35:16
+  stored 32 turns as memories
+  retrieved 10 memories (top score 0.244)
+  answer: 'LIV'
+  elapsed: 1.1s
+[4/30] 6f9b354f (single-session-user) — 14:35:17
+  stored 10 turns as memories
+  retrieved 7 memories (top score 0.115)
+  answer: 'Lighter shade of gray.'
+  elapsed: 1.9s
+[5/30] 6ade9755 (single-session-user) — 14:35:19
+  stored 12 turns as memories
+  retrieved 10 memories (top score 0.074)
+  answer: 'You attend classes at Serenity Yoga.'
+  elapsed: 1.9s
+[6/30] gpt4_0b2f1d21 (temporal-reasoning) — 14:35:20
+  stored 24 turns as memories
+  retrieved 10 memories (top score 0.143)
+  answer: 'The purchase of the coffee maker happened first. The user stated they bought the coffee maker about three weeks ago (relative to May 22, 202'
+  elapsed: 2.4s
+[7/30] 27016adc (multi-session) — 14:35:23
+  stored 24 turns as memories
+  retrieved 10 memories (top score 0.229)
+  answer: 'The provided memories do not contain information about the price of a countryside property or the cost of renovations on it, so this questio'
+  elapsed: 1.5s
+[8/30] 6613b389 (temporal-reasoning) — 14:35:24
+  stored 36 turns as memories
+  retrieved 10 memories (top score 0.125)
+  answer: 'Rachel got engaged on May 15th, and your anniversary is on July 22nd. This is approximately 2 months and 7 days before your anniversary.'
+  elapsed: 1.4s
+[9/30] f523d9fe (single-session-assistant) — 14:35:26
+  stored 22 turns as memories
+  retrieved 10 memories (top score 0.308)
+  answer: 'Doc Martin'
+  elapsed: 1.1s
+[10/30] c9f37c46 (temporal-reasoning) — 14:35:27
+  stored 22 turns as memories
+  retrieved 10 memories (top score 0.246)
+  answer: 'About 4 months.'
+  elapsed: 1.8s
+[11/30] 505af2f5 (single-session-preference) — 14:35:29
+  stored 12 turns as memories
+  retrieved 5 memories (top score 0.091)
+  answer: 'Based on the previous conversation, you have already made a homemade creamer using almond milk, vanilla extract, and honey. To make it healt'
+  elapsed: 1.8s
+[12/30] gpt4_af6db32f (temporal-reasoning) — 14:35:31
+  stored 12 turns as memories
+  retrieved 3 memories (top score 0.098)
+  answer: '17 days ago'
+  elapsed: 0.8s
+[13/30] 94f70d80 (single-session-user) — 14:35:31
+  stored 12 turns as memories
+  retrieved 8 memories (top score 0.14)
+  answer: '4 hours'
+  elapsed: 1.8s
+[14/30] 3fdac837 (multi-session) — 14:35:33
+  stored 20 turns as memories
+  retrieved 10 memories (top score 0.071)
+  answer: 'You spent 8 days in Japan (April 15th to 22nd) and an unspecified number of days in Chicago. Therefore, the total number of days cannot be d'
+  elapsed: 2.7s
+[15/30] b01defab (knowledge-update) — 14:35:36
+  stored 24 turns as memories
+  retrieved 10 memories (top score 0.2)
+  answer: 'Yes, you have finished reading "The Nightingale" by Kristin Hannah.'
+  elapsed: 1.9s
+[16/30] 6a27ffc2 (knowledge-update) — 14:35:38
+  stored 24 turns as memories
+  retrieved 10 memories (top score 0.275)
+  answer: '30'
+  elapsed: 2.4s
+[17/30] 3e321797 (single-session-assistant) — 14:35:40
+  stored 8 turns as memories
+  retrieved 7 memories (top score 0.256)
+  answer: '10 minutes'
+  elapsed: 3.3s
+[18/30] 7161e7e2 (single-session-assistant) — 14:35:44
+  stored 14 turns as memories
+  retrieved 10 memories (top score 0.4)
+  answer: 'Admon was assigned to the 8 am - 4 pm (Day Shift) on Sunday.'
+  elapsed: 2.5s
+[19/30] 54026fce (single-session-preference) — 14:35:46
+  stored 12 turns as memories
+  retrieved 8 memories (top score 0.216)
+  answer: 'Based on previous discussions, here are suggestions to stay connected with colleagues while working from home:\n\n1.  **Virtual Coffee Breaks*'
+  elapsed: 4.5s
+[20/30] 0e4e4c46 (knowledge-update) — 14:35:50
+  stored 24 turns as memories
+  retrieved 9 memories (top score 0.208)
+  answer: '132 points'
+  elapsed: 1.9s
+[21/30] 6456829e (multi-session) — 14:35:52
+  stored 24 turns as memories
+  retrieved 10 memories (top score 0.122)
+  answer: 'You initially planted 5 tomato plants. The memories do not state how many cucumber plants you initially planted, only that you currently hav'
+  elapsed: 1.4s
+[22/30] c7dc5443 (knowledge-update) — 14:35:54
+  stored 24 turns as memories
+  retrieved 10 memories (top score 0.214)
+  answer: '5-2'
+  elapsed: 1.0s
+[23/30] 852ce960 (knowledge-update) — 14:35:55
+  stored 24 turns as memories
+  retrieved 10 memories (top score 0.258)
+  answer: '$350,000'
+  elapsed: 1.9s
+[24/30] b6025781 (single-session-preference) — 14:35:57
+  stored 12 turns as memories
+  retrieved 9 memories (top score 0.294)
+  answer: 'Based on the previous conversation, you were planning to use **roasted sweet potatoes** (seasoned with **Classic Herbs** like rosemary), **q'
+  elapsed: 3.8s
+[25/30] gpt4_6dc9b45b (temporal-reasoning) — 14:36:00
+  stored 12 turns as memories
+  retrieved 10 memories (top score 0.167)
+  answer: '4'
+  elapsed: 1.9s
+[26/30] afdc33df (single-session-preference) — 14:36:02
+  stored 14 turns as memories
+  retrieved 10 memories (top score 0.188)
+  answer: 'Based on the retrieved memories, here are tips for keeping your kitchen clean and organized:\n\n**For Countertops:**\n*   **Regular Cleaning:**'
+  elapsed: 4.8s
+[27/30] 6b7dfb22 (single-session-preference) — 14:36:07
+  stored 16 turns as memories
+  retrieved 10 memories (top score 0.163)
+  answer: 'Based on the memories provided, you mentioned recently starting a **30-day painting challenge** and drawing inspiration from **social media*'
+  elapsed: 2.2s
+[28/30] bb7c3b45 (multi-session) — 14:36:09
+  stored 24 turns as memories
+  retrieved 10 memories (top score 0.162)
+  answer: 'You saved $300 on the Jimmy Choo heels (originally $500, purchased for $200).'
+  elapsed: 2.5s
+[29/30] bc8a6e93 (single-session-user) — 14:36:12
+  stored 12 turns as memories
+  retrieved 3 memories (top score 0.151)
+  answer: 'Lemon blueberry cake'
+  elapsed: 0.8s
+[30/30] bc8a6e93_abs (single-session-user) — 14:36:13
+  stored 12 turns as memories
+  retrieved 3 memories (top score 0.113)
+  answer: "The memories do not contain information about baking for your uncle's birthday party. They mention making a lemon blueberry cake for your **"
+  elapsed: 1.2s
+
+done: 2026-04-19 14:36:14
+hypotheses → C:\Users\sync\codes\yantrikdb-server\docs\phase3d\hypotheses.jsonl

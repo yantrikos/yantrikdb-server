@@ -35,3 +35,4 @@ build/
 *.dylib
 *.dll
 control.db
+brainstorm/

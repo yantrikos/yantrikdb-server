@@ -1,0 +1,13 @@
+Re-running B_self_note x 4
+start: 2026-04-19 10:54:56
+
+>>> B_self_note run=0 (10:54:56)
+  done — 192.8s, ctx=9365c, proposal=8268c, n_constraints=30
+>>> B_self_note run=1 (10:58:08)
+  done — 175.8s, ctx=8710c, proposal=7646c, n_constraints=21
+>>> B_self_note run=2 (11:01:04)
+  done — 178.9s, ctx=9013c, proposal=8620c, n_constraints=21
+>>> B_self_note run=3 (11:04:03)
+  done — 113.1s, ctx=7932c, proposal=8748c, n_constraints=30
+
+done: 2026-04-19 11:05:56

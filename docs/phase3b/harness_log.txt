@@ -1,0 +1,43 @@
+Phase 3B harness — 15 constraints / ~3500 words
+======================================================================
+model = qwen3.6:latest
+conditions = ['A_cold', 'B_self_note', 'C_oracle_note', 'D_raw_transcript']
+runs per condition = 4
+total runs = 16
+start: 2026-04-19 10:06:01
+
+  >>> A_cold run=0 ... (10:06:01)
+    done — 23.8s, ctx=0c, proposal=7885c
+  >>> A_cold run=1 ... (10:06:25)
+    done — 27.6s, ctx=0c, proposal=8825c
+  >>> A_cold run=2 ... (10:06:53)
+    done — 27.2s, ctx=0c, proposal=8700c
+  >>> A_cold run=3 ... (10:07:20)
+    done — 23.2s, ctx=0c, proposal=7372c
+  >>> B_self_note run=0 ... (10:07:43)
+    done — 59.6s, ctx=64c, proposal=8580c
+  >>> B_self_note run=1 ... (10:08:43)
+    done — 88.8s, ctx=64c, proposal=9668c
+  >>> B_self_note run=2 ... (10:10:11)
+    done — 335.4s, ctx=64c, proposal=9345c
+  >>> B_self_note run=3 ... (10:15:47)
+    done — 334.9s, ctx=64c, proposal=10818c
+  >>> C_oracle_note run=0 ... (10:21:22)
+    done — 112.1s, ctx=4830c, proposal=9083c
+  >>> C_oracle_note run=1 ... (10:23:14)
+    done — 134.1s, ctx=4830c, proposal=10470c
+  >>> C_oracle_note run=2 ... (10:25:28)
+    done — 126.5s, ctx=4830c, proposal=9682c
+  >>> C_oracle_note run=3 ... (10:27:34)
+    done — 134.4s, ctx=4830c, proposal=10575c
+  >>> D_raw_transcript run=0 ... (10:29:49)
+    done — 351.0s, ctx=27043c, proposal=15408c
+  >>> D_raw_transcript run=1 ... (10:35:40)
+    done — 286.5s, ctx=27769c, proposal=10341c
+  >>> D_raw_transcript run=2 ... (10:40:26)
+    done — 290.0s, ctx=30220c, proposal=7898c
+  >>> D_raw_transcript run=3 ... (10:45:16)
+    done — 291.3s, ctx=28722c, proposal=10339c
+
+done: 2026-04-19 10:50:08
+All runs saved to C:\Users\sync\codes\yantrikdb-server\docs\phase3b\results.json

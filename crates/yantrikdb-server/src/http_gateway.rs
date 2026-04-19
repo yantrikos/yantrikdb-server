@@ -1535,11 +1535,14 @@ async fn record_move_event(
             .unwrap_or("observed")
             .into(),
         inference_confidence: body.get("inference_confidence").and_then(|v| v.as_f64()),
-        inference_basis: body.get("inference_basis").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        }),
+        inference_basis: body
+            .get("inference_basis")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            }),
         input_claim_ids: string_array("input_claim_ids"),
         output_claim_ids: string_array("output_claim_ids"),
         side_effect_claim_ids: string_array("side_effect_claim_ids"),

@@ -469,7 +469,6 @@ pub fn execute_with_guard(
         Command::Ping => Ok(CommandResult::Pong),
 
         // ── RFC 008 substrate surface ──────────────────────────────
-
         Command::IngestClaimWithLineage {
             src,
             rel_type,
@@ -510,8 +509,8 @@ pub fn execute_with_guard(
                 None,
                 weight,
             )?;
-            let lineage_json = serde_json::to_string(&source_lineage)
-                .unwrap_or_else(|_| "[]".into());
+            let lineage_json =
+                serde_json::to_string(&source_lineage).unwrap_or_else(|_| "[]".into());
             db.conn().execute(
                 "UPDATE claims SET source_lineage = ?1 WHERE claim_id = ?2",
                 rusqlite::params![lineage_json, claim_id],

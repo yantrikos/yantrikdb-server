@@ -1,0 +1,24 @@
+
+Phase 3E Phase 3C rerun with REAL yantrikdb
+running: ['C_yantrikdb'], runs each: 2
+start: 2026-04-19 17:12:49
+
+
+>>> C_yantrikdb run=0 (17:12:49)
+    session 1: remembered=15 think: conflicts=1 consolidated=0 triggers=0
+    session 2: remembered=14 think: conflicts=1 consolidated=2 triggers=1
+    session 3: remembered=15 think: conflicts=1 consolidated=1 triggers=0
+    session 4: remembered=15 think: conflicts=8 consolidated=3 triggers=0
+    session 5: remembered=15 think: conflicts=9 consolidated=3 triggers=10
+    done — 585.1s, probes=15, ctx_chars=6500
+
+>>> C_yantrikdb run=1 (17:22:35)
+    session 1: remembered=15 think: conflicts=10 consolidated=1 triggers=8
+    session 2: remembered=15 think: conflicts=22 consolidated=1 triggers=1
+    session 3: remembered=15 think: conflicts=9 consolidated=0 triggers=2
+    session 4: remembered=15 think: conflicts=10 consolidated=0 triggers=0
+    session 5: remembered=15 think: conflicts=7 consolidated=0 triggers=4
+    done — 500.4s, probes=15, ctx_chars=13800
+
+done: 2026-04-19 17:30:55
+results → C:\Users\sync\codes\yantrikdb-server\docs\phase3e\results_3c_rerun_freshdb.json

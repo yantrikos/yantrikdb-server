@@ -102,3 +102,58 @@ subset: 30 instances
 [20/30] 0e4e4c46 (knowledge-update) — 17:01:17
   ingested 24 turns | think: conflicts=25 consolidated=0
   retrieved 10 (top score 1.014 if any)
+  answer: '132 points'
+  elapsed: 56.8s
+[21/30] 6456829e (multi-session) — 17:02:14
+  ingested 24 turns | think: conflicts=34 consolidated=0
+  retrieved 10 (top score 1.093 if any)
+  answer: 'You initially planted 5 tomato plants. The memories do not specify the initial number of cucumber plants, only that you currently have 3 cuc'
+  elapsed: 58.2s
+[22/30] c7dc5443 (knowledge-update) — 17:03:12
+  ingested 24 turns | think: conflicts=26 consolidated=0
+  retrieved 10 (top score 1.047 if any)
+  answer: 'Based on the retrieved memories, your volleyball team, the Net Ninjas, has a record of **5-2**.\n\n(Note: Memory 3 mentions a previous record '
+  elapsed: 59.8s
+[23/30] 852ce960 (knowledge-update) — 17:04:12
+  ingested 24 turns | think: conflicts=15 consolidated=0
+  retrieved 10 (top score 1.199 if any)
+  answer: 'You were pre-approved for **$350,000** from Wells Fargo.\n\n(Note: Memory 4 mentions a pre-approval of $400,000, but Memories 1, 2, and 3 cons'
+  elapsed: 59.7s
+[24/30] b6025781 (single-session-preference) — 17:05:12
+  ingested 12 turns | think: conflicts=16 consolidated=0
+  retrieved 10 (top score 1.079 if any)
+  answer: 'Based on the retrieved memories, here are suggestions for your meal prep:\n\n1.  **Lentil Bolognese with Quinoa**: A plant-based protein sourc'
+  elapsed: 37.5s
+[25/30] gpt4_6dc9b45b (temporal-reasoning) — 17:05:49
+  ingested 12 turns | think: conflicts=24 consolidated=0
+  retrieved 10 (top score 1.063 if any)
+  answer: "The user attended the Seattle International Film Festival on June 1, 2021. Today's date is October 2, 2021.\n\nFrom June 1 to October 1 is exa"
+  elapsed: 33.6s
+[26/30] afdc33df (single-session-preference) — 17:06:23
+  ingested 14 turns | think: conflicts=14 consolidated=0
+  retrieved 10 (top score 1.044 if any)
+  answer: 'Based on the retrieved memories, here are tips to help keep your kitchen tidy and organized:\n\n*   **Organize Utensils:** Purge duplicate or '
+  elapsed: 39.7s
+[27/30] 6b7dfb22 (single-session-preference) — 17:07:03
+  ingested 16 turns | think: conflicts=16 consolidated=0
+  retrieved 10 (top score 1.094 if any)
+  answer: 'Based on the retrieved memories, you have previously found inspiration from **social media** and started a **30-day painting challenge**. Ad'
+  elapsed: 56.1s
+[28/30] bb7c3b45 (multi-session) — 17:07:59
+  ingested 24 turns | think: conflicts=17 consolidated=0
+  retrieved 10 (top score 1.095 if any)
+  answer: 'You saved $300 on the Jimmy Choo heels. They originally retailed for $500, and you purchased them for $200.'
+  elapsed: 57.3s
+[29/30] bc8a6e93 (single-session-user) — 17:08:56
+  ingested 12 turns | think: conflicts=41 consolidated=0
+  retrieved 10 (top score 0.901 if any)
+  answer: "You baked a lemon blueberry cake for your niece's birthday party."
+  elapsed: 32.1s
+[30/30] bc8a6e93_abs (single-session-user) — 17:09:28
+  ingested 12 turns | think: conflicts=57 consolidated=0
+  retrieved 10 (top score 0.903 if any)
+  answer: "The provided memories do not contain information about what you baked for your uncle's birthday party. They mention making a lemon blueberry"
+  elapsed: 32.8s
+
+done: 2026-04-19 17:10:01
+hypotheses → C:\Users\sync\codes\yantrikdb-server\docs\phase3e\hypotheses_L1_ydb.jsonl

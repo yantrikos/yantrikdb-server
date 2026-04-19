@@ -6,6 +6,8 @@ Vector databases store memories. They don't manage them. After 10,000 memories, 
 
 YantrikDB is different. It's a **cognitive memory engine** — embed it, run it as a server, or connect via MCP. It thinks about what it stores.
 
+**Shortest path to try it:** [MCP setup for Claude Code / Cursor / Windsurf →](#get-started-in-60-seconds--claude-code--cursor--windsurf) (one `pip install`, one config block).
+
 > **The bigger picture:** YantrikDB is the memory layer being built on the road to [YantrikOS](https://github.com/yantrikos) — an AI-native operating system where agents are first-class primitives, not apps on top. Memory was the bottleneck, so we're shipping it first.
 
 [![Crates.io](https://img.shields.io/crates/v/yantrikdb-server)](https://crates.io/crates/yantrikdb-server)
@@ -80,9 +82,79 @@ Full cognitive architecture lives in the [standalone engine repo](https://github
 
 ---
 
-## Three ways to use it
+## Get started in 60 seconds — Claude Code / Cursor / Windsurf
 
-### As a network server
+**The fastest adoption path.** One `pip install`, one config block, and your agent gets persistent memory that auto-recalls on conversation start, auto-remembers decisions, and flags contradictions — without you prompting it.
+
+```bash
+pip install yantrikdb-mcp
+```
+
+Add this to your MCP client config — typically `~/.claude.json` or `.mcp.json` in your project for Claude Code, and the equivalent `mcp` block in settings for Cursor/Windsurf ([Claude Code](https://docs.claude.com/en/docs/claude-code/mcp) · [Cursor](https://docs.cursor.com/context/model-context-protocol) · [Windsurf](https://docs.windsurf.com/windsurf/mcp)):
+
+```json
+{
+  "mcpServers": {
+    "yantrikdb": {
+      "command": "yantrikdb-mcp"
+    }
+  }
+}
+```
+
+That's it. No env vars. Uses a local SQLite memory file at `~/.yantrikdb/memory.db`. First call auto-initializes the schema. Restart your client — the `yantrikdb` MCP server will show up with 15 memory tools (see below).
+
+**Want a shared memory across machines or teammates?** Point at a YantrikDB cluster instead of local SQLite:
+
+```json
+{
+  "mcpServers": {
+    "yantrikdb": {
+      "command": "yantrikdb-mcp",
+      "env": {
+        "YANTRIKDB_SERVER_URL": "http://node1:7438,http://node2:7438",
+        "YANTRIKDB_TOKEN": "ydb_your_database_token"
+      }
+    }
+  }
+}
+```
+
+**Want it over HTTP/SSE instead of stdio?** (For IDE integrations that don't support stdio MCP servers.)
+
+```json
+{
+  "mcpServers": {
+    "yantrikdb": {
+      "type": "sse",
+      "url": "http://your-server:8420/sse",
+      "headers": { "Authorization": "Bearer YOUR_API_KEY" }
+    }
+  }
+}
+```
+
+Then start: `yantrikdb-mcp --transport sse --port 8420`.
+
+### The 15 MCP tools your agent gets
+
+| | Tools |
+|---|---|
+| **Core memory** | `remember` · `recall` · `forget` · `correct` |
+| **Cognition** | `think` (consolidate + conflict-detect) · `memory` · `trigger` (proactive insights) |
+| **Knowledge graph** | `graph` (entities + relations) · `category` |
+| **Conflicts & corrections** | `conflict` (list + resolve contradictions) |
+| **Time** | `session` · `temporal` (stale/upcoming queries) |
+| **Behavior** | `procedure` (strategies) · `personality` (derived traits) |
+| **Ops** | `stats` (engine health + diagnostics) |
+
+Full tool reference and agent-integration patterns: **[yantrikdb-mcp →](https://github.com/yantrikos/yantrikdb-mcp)** · [docs](https://yantrikdb.com/guides/mcp/)
+
+---
+
+## Other ways to use it
+
+### As a network server (binary API + HA cluster)
 
 ```bash
 docker run -p 7438:7438 ghcr.io/yantrikos/yantrikdb:latest
@@ -90,14 +162,6 @@ curl -X POST http://localhost:7438/v1/remember -d '{"text":"hello"}'
 ```
 
 Single Rust binary. HTTP + binary wire protocol. 2-voter + 1-witness HA cluster via Docker Compose or Kubernetes. Per-tenant quotas, Prometheus metrics, AES-256-GCM at-rest encryption, runtime deadlock detection. See [docker-compose.cluster.yml](deploy/docker-compose.cluster.yml) and [k8s manifests](deploy/kubernetes/).
-
-### As an MCP server (Claude Code, Cursor, Windsurf)
-
-```bash
-pip install yantrikdb-mcp
-```
-
-Add to your MCP client config — the agent auto-recalls context, auto-remembers decisions, auto-detects contradictions. No prompting needed. See [yantrikdb-mcp](https://github.com/yantrikos/yantrikdb-mcp).
 
 ### As an embedded library (Python or Rust)
 
@@ -319,11 +383,12 @@ db.upcoming(days=7)  # memories with approaching deadlines
 
 ## Ecosystem
 
-| Package | What | Install |
-|---------|------|---------|
-| [yantrikdb](https://crates.io/crates/yantrikdb) | Rust engine | `cargo add yantrikdb` |
-| [yantrikdb](https://pypi.org/project/yantrikdb/) | Python bindings (PyO3) | `pip install yantrikdb` |
-| [yantrikdb-mcp](https://pypi.org/project/yantrikdb-mcp/) | MCP server for AI agents | `pip install yantrikdb-mcp` |
+| Package | What | Install | Source |
+|---------|------|---------|--------|
+| **[yantrikdb-mcp](https://github.com/yantrikos/yantrikdb-mcp)** | **MCP server for Claude Code / Cursor / Windsurf — start here** | `pip install yantrikdb-mcp` | [GitHub](https://github.com/yantrikos/yantrikdb-mcp) · [PyPI](https://pypi.org/project/yantrikdb-mcp/) |
+| [yantrikdb-server](https://github.com/yantrikos/yantrikdb-server) | HTTP + wire-protocol server, HA cluster | `docker run ghcr.io/yantrikos/yantrikdb` | [GitHub](https://github.com/yantrikos/yantrikdb-server) |
+| [yantrikdb (Rust)](https://crates.io/crates/yantrikdb) | Embedded Rust engine | `cargo add yantrikdb` | [GitHub](https://github.com/yantrikos/yantrikdb) |
+| [yantrikdb (Python)](https://pypi.org/project/yantrikdb/) | Python bindings via PyO3 | `pip install yantrikdb` | [GitHub](https://github.com/yantrikos/yantrikdb) |
 
 ## Roadmap
 

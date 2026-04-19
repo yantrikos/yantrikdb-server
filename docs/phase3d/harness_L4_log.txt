@@ -1,0 +1,90 @@
+Phase 3D L4 — scaling test: plain retrieval at 1x/2x/5x/10x/20x/50x haystack
+target types: ['multi-session', 'temporal-reasoning', 'knowledge-update'], n_per_type=3, scales=[1, 2, 5, 10, 20, 50]
+start: 2026-04-19 15:40:51
+
+loaded 500 _s instances
+selected 9 target instances
+
+### Instance 1/9: gpt4_2ba83207 (multi-session)
+  base_turns=502, distractor_pool=23814
+  scale=1x  turns=  502  recall_hit=True  17.8s  -> 'Based on the provided memories, you spent around **$150** at **Thrive Market** last month on organic'
+  scale=2x  turns= 1004  recall_hit=True  2.1s  -> 'The provided memories do not contain information about which grocery store you spent the most money '
+  scale=5x  turns= 2510  recall_hit=True  1.8s  -> 'The provided memories do not contain information about which grocery store you spent the most money '
+  scale=10x  turns= 5020  recall_hit=False  1.8s  -> 'The provided memories do not contain information about which grocery store you spent the most money '
+  scale=20x  turns=10040  recall_hit=False  2.1s  -> 'The provided memories do not contain information about which specific grocery store you spent the mo'
+  scale=50x  turns=25100  recall_hit=False  3.7s  -> 'Based on the provided memories, specifically memory 1, you spent **$120** at Walmart last Sunday. Th'
+
+### Instance 2/9: 2b8f3739 (multi-session)
+  base_turns=491, distractor_pool=23820
+  scale=1x  turns=  491  recall_hit=True  2.7s  -> 'Based on the retrieved memories, you earned a total of **$270**.\n\n*   **$120** from selling 12 bunch'
+  scale=2x  turns=  982  recall_hit=True  5.6s  -> 'Based on the retrieved memories, you earned **$240** from selling products at the markets.\n\n*   **$1'
+  scale=5x  turns= 2455  recall_hit=True  3.7s  -> 'Based on the retrieved memories, you earned a total of **$120** from selling 12 bunches of fresh org'
+  scale=10x  turns= 4910  recall_hit=True  4.4s  -> 'Based on the retrieved memories, you earned **$120** from selling fresh organic herbs at the farmers'
+  scale=20x  turns= 9820  recall_hit=True  3.5s  -> "Based on memory 9, you earned $250 at the weekly farmers' market and $420 at SummerFest, for a total"
+  scale=50x  turns=24550  recall_hit=True  3.5s  -> 'The provided memories do not contain information about the total amount of money earned from selling'
+
+### Instance 3/9: 6c49646a (multi-session)
+  base_turns=429, distractor_pool=23824
+  scale=1x  turns=  429  recall_hit=True  4.5s  -> 'Based on the retrieved memories, the total distance covered is **3,000 miles**.\n\nThis is calculated '
+  scale=2x  turns=  858  recall_hit=True  9.5s  -> 'Based on the provided memories, the total distance covered in the three road trips mentioned in memo'
+  scale=5x  turns= 2145  recall_hit=True  6.7s  -> 'Based on the provided memories, the total distance covered is **3,000 miles**.\n\nThis is calculated b'
+  scale=10x  turns= 4290  recall_hit=True  5.9s  -> 'Based on the provided memories, there is no single record of a total distance for exactly "four" roa'
+  scale=20x  turns= 8580  recall_hit=True  5.7s  -> 'Based on the provided memories, there is no record of you covering a total distance across **four** '
+  scale=50x  turns=21450  recall_hit=True  7.7s  -> 'Based on the provided memories, there is no single figure for the total distance of "four" road trip'
+
+### Instance 4/9: gpt4_88806d6e (temporal-reasoning)
+  base_turns=493, distractor_pool=23818
+  scale=1x  turns=  493  recall_hit=True  3.9s  -> 'You met Mark and Sarah first. You met them on a beach trip about a month ago (around late April 2023'
+  scale=2x  turns=  986  recall_hit=True  4.0s  -> 'Based on the retrieved memories, you met **Tom** first.\n\nIn memory 15, you state that you met Tom "a'
+  scale=5x  turns= 2465  recall_hit=True  3.4s  -> 'Based on the provided memories, there is no mention of anyone named Tom. The memories only reference'
+  scale=10x  turns= 4930  recall_hit=True  5.1s  -> 'Based on the provided memories, there is no mention of a person named "Tom" that you met. Memory 3 s'
+  scale=20x  turns= 9860  recall_hit=True  3.7s  -> 'Based on the provided memories, there is no mention of a person named Tom. The memories only referen'
+  scale=50x  turns=24650  recall_hit=True  4.0s  -> 'Based on the provided memories, there is no mention of a person named Tom. The memories only discuss'
+
+### Instance 5/9: gpt4_7bc6cf22 (temporal-reasoning)
+  base_turns=519, distractor_pool=23819
+  scale=1x  turns=  519  recall_hit=True  2.1s  -> '14 days ago.'
+  scale=2x  turns= 1038  recall_hit=True  4.2s  -> 'Based on the retrieved memories, specifically Memory 1, you read the March 15th issue of The New Yor'
+  scale=5x  turns= 2595  recall_hit=True  2.2s  -> '17 days ago'
+  scale=10x  turns= 5190  recall_hit=True  1.8s  -> '15 days ago'
+  scale=20x  turns=10380  recall_hit=True  2.0s  -> '17 days ago'
+  scale=50x  turns=25950  recall_hit=True  7.0s  -> "Based on memory 1, you read the March 15th issue of The New Yorker on **March 20, 2023**.\n\nToday's d"
+
+### Instance 6/9: cc6d1ec1 (temporal-reasoning)
+  base_turns=457, distractor_pool=23821
+  scale=1x  turns=  457  recall_hit=True  4.7s  -> 'The provided memories do not state how long you had been bird watching when you attended the worksho'
+  scale=2x  turns=  914  recall_hit=True  4.8s  -> 'The provided memories do not state how long you had been bird watching specifically when you attende'
+  scale=5x  turns= 2285  recall_hit=True  3.8s  -> 'The provided memories do not contain information about how long you had been bird watching specifica'
+  scale=10x  turns= 4570  recall_hit=True  4.4s  -> 'Based on memory 1, you attended the bird watching workshop a month ago. Based on memory 9, you have '
+  scale=20x  turns= 9140  recall_hit=True  5.1s  -> 'The provided memories do not contain information about how long you had been bird watching when you '
+  scale=50x  turns=22850  recall_hit=True  5.1s  -> 'The provided memories do not state how long you had been bird watching when you attended the worksho'
+
+### Instance 7/9: db467c8c (knowledge-update)
+  base_turns=475, distractor_pool=23819
+  scale=1x  turns=  475  recall_hit=True  1.9s  -> 'Nine months.'
+  scale=2x  turns=  950  recall_hit=True  2.1s  -> 'Based on the retrieved memories, your parents have been staying with you in the US for **nine months'
+  scale=5x  turns= 2375  recall_hit=True  1.3s  -> 'Nine months.'
+  scale=10x  turns= 4750  recall_hit=True  1.3s  -> 'Nine months.'
+  scale=20x  turns= 9500  recall_hit=True  1.9s  -> 'Nine months.'
+  scale=50x  turns=23750  recall_hit=True  2.3s  -> 'Nine months.'
+
+### Instance 8/9: ed4ddc30 (knowledge-update)
+  base_turns=543, distractor_pool=23821
+  scale=1x  turns=  543  recall_hit=True  2.1s  -> '20 dozen'
+  scale=2x  turns= 1086  recall_hit=True  1.6s  -> '20 dozen'
+  scale=5x  turns= 2715  recall_hit=True  1.7s  -> '20 dozen'
+  scale=10x  turns= 5430  recall_hit=True  1.7s  -> '20 dozen'
+  scale=20x  turns=10860  recall_hit=True  2.0s  -> '20 dozen'
+  scale=50x  turns=27150  recall_hit=True  2.6s  -> '20 dozen'
+
+### Instance 9/9: a1eacc2a (knowledge-update)
+  base_turns=474, distractor_pool=23823
+  scale=1x  turns=  474  recall_hit=True  2.1s  -> 'You have written 7 short stories.'
+  scale=2x  turns=  948  recall_hit=True  2.1s  -> 'You have written 7 short stories since you started writing regularly.'
+  scale=5x  turns= 2370  recall_hit=True  1.5s  -> '7'
+  scale=10x  turns= 4740  recall_hit=True  2.0s  -> 'You have written 7 short stories since you started writing regularly.'
+  scale=20x  turns= 9480  recall_hit=True  5.9s  -> 'Based on the retrieved memories, the number of short stories mentioned varies by date:\n\n*   **4 shor'
+  scale=50x  turns=23700  recall_hit=True  3.2s  -> 'You have written 7 short stories.'
+
+done: 2026-04-19 15:44:18
+hypotheses → c:\Users\sync\codes\yantrikdb-server\docs\phase3d\hypotheses_L4.jsonl

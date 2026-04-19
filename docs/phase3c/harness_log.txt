@@ -1,0 +1,23 @@
+Phase 3C harness — 5 sessions × 1 conds × 2 runs
+model = qwen3.6:latest, scenario = sessions.json
+start: 2026-04-19 14:02:29
+
+
+>>> D_markdown run=0 (14:02:29)
+    session 1: dump_len=1524
+    session 2: dump_len=3254
+    session 3: dump_len=5053
+    session 4: dump_len=7443
+    session 5: dump_len=7500
+    done — 23.2s, probes=15, ctx=7500c
+
+>>> D_markdown run=1 (14:02:52)
+    session 1: dump_len=1524
+    session 2: dump_len=3254
+    session 3: dump_len=5053
+    session 4: dump_len=7443
+    session 5: dump_len=7500
+    done — 22.1s, probes=15, ctx=7500c
+
+done: 2026-04-19 14:03:14
+results → C:\Users\sync\codes\yantrikdb-server\docs\phase3c\results.json

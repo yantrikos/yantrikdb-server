@@ -1,0 +1,3232 @@
+{
+  "scenario_path": "C:\\Users\\sync\\codes\\yantrikdb-server\\docs\\phase3c\\scenario\\sessions.json",
+  "results": [
+    {
+      "condition": "A_cold",
+      "run": 0,
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 1"
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: VPC Peering, Transit Gateway, and Cloud Interconnect/ExpressRoute for inter-VPC/inter-region traffic.\nSource: Session 1"
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: The customer analytics database (data layer)\nSource: Session 1"
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: AWS Artifact\nSource: Session 1"
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 1"
+        }
+      ],
+      "final_context_chars": 0,
+      "elapsed_s": 27.6
+    },
+    {
+      "condition": "A_cold",
+      "run": 1,
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 1"
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: Hub-and-Spoke (or Spoke-to-Spoke via Hub)\nSource: Session 1"
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: The data layer (or database/storage) must be migrated alongside the compute migration.\nSource: Session 1"
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: AWS Artifact\nSource: Session 1"
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 1"
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 0"
+        }
+      ],
+      "final_context_chars": 0,
+      "elapsed_s": 8.7
+    },
+    {
+      "condition": "B_self_note",
+      "run": 0,
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: SOC 2 Type II\nSource: Session 5"
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: AWS\nSource: Session 5"
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: Maria Delgado\nSource: Session 5"
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: Priya Nair\nSource: Session 5"
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: Okta\nSource: Session 5"
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Answer: PostgreSQL 16\nSource: Session 5"
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: Datadog\nSource: Session 5"
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: AWS Cloud WAN\nSource: Session 5"
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: GitHub Actions Enterprise\nSource: Session 5"
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: Database\nSource: Session 5"
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: Minimum ACU >= 0.5 is required to satisfy SOC 2 audit logging.\nSource: Session 5"
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: $4.8M/year\nSource: Session 5"
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: $4.8M/year\nSource: Session 5"
+        }
+      ],
+      "note_history": [
+        {
+          "session": 1,
+          "note_len": 765
+        },
+        {
+          "session": 2,
+          "note_len": 1500
+        },
+        {
+          "session": 3,
+          "note_len": 1181
+        },
+        {
+          "session": 4,
+          "note_len": 1500
+        },
+        {
+          "session": 5,
+          "note_len": 1500
+        }
+      ],
+      "final_note": "Session 5: 2026-01-29. Final pre-greenlight review. Policy: VP of Cloud Engineering waived dual-vendor approval for AWS-native services (RDS, Aurora, Lambda); dual-vendor rule remains for non-AWS-native (Wiz, Datadog). CI/CD: Jenkins removed (end-of-lifed internally); pivoted to GitHub Actions Enterprise. Security: AWS Inspector removed (cannot scan 3rd-party containers); replaced with Wiz (piloted last quarter). Architecture: CI/CD = GitHub Actions Enterprise; Observability = Datadog (primary); CloudWatch = fallback; Security = Wiz; Identity = Okta; Network = AWS Cloud WAN; Database = PostgreSQL 16 (RDS GA). Workload Rules: Multi-region active-active requires Route 53 health check cost doubling in TCO; Aurora Serverless v2 min ACU >= 0.5 for SOC 2 audit logging. Procurement: AWS AppSync added if offline client support needed. DR: RPO = 15 mins; Cutover: Max 4h downtime; >4h triggers CIO/parent escalation. Project Aurora: Phase 2 engineering ship = May 2026; customer announcement = July 2026. Project Codename: Project Quetzal. Logistics: Weekly status = Thursdays 10am PT in Nexus-North war room; Slack for program updates. Consulting firm HQ = Austin, Texas. Previous facts retained: Entity=Titan Industries; Location=Seattle HQ; CIO=Maria Delgado (PhD CS UC Berkeley); Consulting Lead=Priya Nair; Target Cloud=AWS; Budget cap=$4.8M/year (Maria target $4.2M); New Hire=Sarah Chen (joined IT March 2026); Compliance=SOC 2 Type II; Parent acquired Titan in 2019 for $1.2B; Priya drinks",
+      "final_context_chars": 1500,
+      "elapsed_s": 53.0
+    },
+    {
+      "condition": "B_self_note",
+      "run": 1,
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: AWS\nSource: Session 5"
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Answer: PostgreSQL 16\nSource: Session 5"
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: Datadog\nSource: Session 5"
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: AWS Cloud WAN\nSource: Session 5"
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: GitHub Actions Enterprise\nSource: Session 5"
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: AWS Kinesis infrastructure\nSource: Session 5"
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: VPC endpoints\nSource: Session 5"
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: Minimum ACU of 0.5+ is required because below 0.5, SOC 2 Type II audit logging streaming stops.\nSource: Session 5"
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 5"
+        }
+      ],
+      "note_history": [
+        {
+          "session": 1,
+          "note_len": 700
+        },
+        {
+          "session": 2,
+          "note_len": 1437
+        },
+        {
+          "session": 3,
+          "note_len": 1500
+        },
+        {
+          "session": 4,
+          "note_len": 1500
+        },
+        {
+          "session": 5,
+          "note_len": 1500
+        }
+      ],
+      "final_note": "Session 5 (2026-02-05): Final pre-greenlight review. Vendor Policy: VP of Cloud Engineering waived dual-vendor rule for AWS-native services (RDS, Aurora, Lambda); rule remains for non-AWS (Wiz, Datadog). CI/CD: Jenkins retired (Titan IT EOL, no internal expertise); pivoting to GitHub Actions Enterprise. Security: AWS Inspector removed (cannot scan 3rd-party containers); replaced by Wiz (piloted last quarter). Workload Rules: Multi-region active-active doubles Route 53 health check costs (include in TCO). Aurora Serverless v2: Min ACU 0.5+ required for SOC 2 Type II audit logging (below 0.5 stops streaming). Offline Apps: AWS AppSync needed for client app offline support (separate procurement). DB: PostgreSQL 16 (PG 14 retired). GDPR: Customer analytics Confidential. Network: AWS Cloud WAN (Transit Gateway removed). Observability: Datadog primary (APM/logs/metrics/traces); CloudWatch fallback. Migration: AWS AI (Bedrock/SageMaker) needs VPC endpoints for US residency; Customer analytics migration requires AWS Kinesis infrastructure migration. Aurora/Project Quetzal: Phase 2 announcement July 2026; engineering ship May 2026. DR: RPO 15 mins. People: Maria Delgado PhD CS UC Berkeley. Org: Titan acquired by parent in 2019 ($1.2B). Comms: Slack. Priya drinks espresso neat. Status: Greenlight pending.\n\n[Supersession/Update from Session 4]\n- Changed: CI/CD Jenkins -> GitHub Actions Enterprise.\n- Changed: Security AWS Inspector -> Wiz.\n- Changed: Vendor Policy: Dual-vendor waiver for",
+      "final_context_chars": 1500,
+      "elapsed_s": 45.8
+    },
+    {
+      "condition": "C_structured",
+      "run": 0,
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: SOC 2 Type II\nSource: Session 1",
+          "recall_trace": [
+            {
+              "query": "Titan Industries SOC compliance posture",
+              "results": [
+                {
+                  "id": 5,
+                  "key": "titan.compliance_baseline",
+                  "value": "SOC 2 Type II",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 67,
+                  "key": "company.parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B",
+                  "session": 5,
+                  "score": 0.182
+                },
+                {
+                  "id": 69,
+                  "key": "comms_tool",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.154
+                },
+                {
+                  "id": 65,
+                  "key": "rule.aurora_serverless_soc2",
+                  "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+                  "session": 5,
+                  "score": 0.118
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Based on the retrieved information, Titan Industries' migration is targeting **AWS** (Amazon Web Services). This is confirmed by the record stating \"titan.cloud_provider\" is \"AWS\" and references to AWS-specific services like EC2, DMS, and Cloud WAN in the context of their infrastructure and migration efforts.\n\nAnswer: AWS\nSource: Session 1",
+          "recall_trace": [
+            {
+              "query": "Titan Industries cloud migration target provider",
+              "results": [
+                {
+                  "id": 8,
+                  "key": "titan.budget_target",
+                  "value": "$4.2M operational target",
+                  "session": 1,
+                  "score": 0.2
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.182
+                },
+                {
+                  "id": 67,
+                  "key": "company.parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B",
+                  "session": 5,
+                  "score": 0.167
+                },
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.167
+                },
+                {
+                  "id": 69,
+                  "key": "comms_tool",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.143
+                }
+              ]
+            },
+            {
+              "query": "Titan Industries cloud provider target migration",
+              "results": [
+                {
+                  "id": 8,
+                  "key": "titan.budget_target",
+                  "value": "$4.2M operational target",
+                  "session": 1,
+                  "score": 0.2
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.182
+                },
+                {
+                  "id": 67,
+                  "key": "company.parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B",
+                  "session": 5,
+                  "score": 0.167
+                },
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.167
+                },
+                {
+                  "id": 69,
+                  "key": "comms_tool",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.143
+                }
+              ]
+            },
+            {
+              "query": "Titan Industries migration AWS Azure GCP cloud provider",
+              "results": [
+                {
+                  "id": 47,
+                  "key": "network.architecture",
+                  "value": "AWS Cloud WAN replaces Transit Gateway for better cross-region throughput",
+                  "session": 4,
+                  "score": 0.222
+                },
+                {
+                  "id": 37,
+                  "key": "dms_license_coverage",
+                  "value": "AWS DMS license cost covered by annual cloud budget; must flag in cost model",
+                  "session": 3,
+                  "score": 0.2
+                },
+                {
+                  "id": 6,
+                  "key": "titan.cloud_provider",
+                  "value": "AWS",
+                  "session": 1,
+                  "score": 0.2
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.154
+                },
+                {
+                  "id": 67,
+                  "key": "company.parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B",
+                  "session": 5,
+                  "score": 0.143
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: The provided memory does not contain the name of Titan Industries' CIO.\nSource: Session 3",
+          "recall_trace": [
+            {
+              "query": "Titan Industries CIO",
+              "results": [
+                {
+                  "id": 67,
+                  "key": "company.parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B",
+                  "session": 5,
+                  "score": 0.222
+                },
+                {
+                  "id": 69,
+                  "key": "comms_tool",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.182
+                },
+                {
+                  "id": 35,
+                  "key": "cutover_max_downtime",
+                  "value": "4 hours; longer triggers CIO/parent company escalation",
+                  "session": 3,
+                  "score": 0.182
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: The provided memory does not contain information about who leads the consulting team.\nSource: Session 1",
+          "recall_trace": [
+            {
+              "query": "who leads the consulting team",
+              "results": [
+                {
+                  "id": 9,
+                  "key": "titan.hr_sarah_chen",
+                  "value": "Joined IT team March 2026",
+                  "session": 1,
+                  "score": 0.25
+                },
+                {
+                  "id": 59,
+                  "key": "observability.dashboards_location",
+                  "value": "Ops team daily dashboards are in Datadog, not CloudWatch",
+                  "session": 4,
+                  "score": 0.2
+                }
+              ]
+            },
+            {
+              "query": "consulting team leader head",
+              "results": [
+                {
+                  "id": 9,
+                  "key": "titan.hr_sarah_chen",
+                  "value": "Joined IT team March 2026",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 59,
+                  "key": "observability.dashboards_location",
+                  "value": "Ops team daily dashboards are in Datadog, not CloudWatch",
+                  "session": 4,
+                  "score": 0.182
+                }
+              ]
+            },
+            {
+              "query": "consulting team",
+              "results": [
+                {
+                  "id": 9,
+                  "key": "titan.hr_sarah_chen",
+                  "value": "Joined IT team March 2026",
+                  "session": 1,
+                  "score": 0.286
+                },
+                {
+                  "id": 59,
+                  "key": "observability.dashboards_location",
+                  "value": "Ops team daily dashboards are in Datadog, not CloudWatch",
+                  "session": 4,
+                  "score": 0.222
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Based on the retrieved information, Titan uses **Okta** as its internal identity provider for authentication.\n\nAnswer: Okta\nSource: Session 3",
+          "recall_trace": [
+            {
+              "query": "Titan internal workforce identity provider",
+              "results": [
+                {
+                  "id": 69,
+                  "key": "comms_tool",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.308
+                },
+                {
+                  "id": 36,
+                  "key": "auth_provider",
+                  "value": "Okta for internal auth; not moving to AWS IAM Identity Center",
+                  "session": 3,
+                  "score": 0.286
+                },
+                {
+                  "id": 67,
+                  "key": "company.parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B",
+                  "session": 5,
+                  "score": 0.182
+                },
+                {
+                  "id": 38,
+                  "key": "aurora_phase2_ship_date",
+                  "value": "May 2026 (internal engineering build milestone)",
+                  "session": 3,
+                  "score": 0.182
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal; internal only, not visible in user-facing artifacts",
+                  "session": 4,
+                  "score": 0.167
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: Q3\nSource: Session 1",
+          "recall_trace": [
+            {
+              "query": "Titan cloud migration go-live quarter",
+              "results": [
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.2
+                },
+                {
+                  "id": 67,
+                  "key": "company.parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B",
+                  "session": 5,
+                  "score": 0.182
+                },
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.182
+                },
+                {
+                  "id": 14,
+                  "key": "titan.fiscal_year_alignment",
+                  "value": "Q3 go-live aligns with fiscal year planning",
+                  "session": 1,
+                  "score": 0.167
+                },
+                {
+                  "id": 69,
+                  "key": "comms_tool",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.154
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Based on the retrieved information, the plan was initially for PostgreSQL 14, but it was retired because PostgreSQL 16 support went GA (General Availability). The current planned version is PostgreSQL 16.\n\nAnswer: PostgreSQL 16\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "CURRENT planned PostgreSQL version for the managed RDBMS tier",
+              "results": [
+                {
+                  "id": 24,
+                  "key": "primary_rdbms",
+                  "value": "AWS RDS for PostgreSQL 14 Managed",
+                  "session": 2,
+                  "score": 0.333
+                },
+                {
+                  "id": 57,
+                  "key": "review.rds.update",
+                  "value": "RDS for PostgreSQL 16 support went GA this week",
+                  "session": 4,
+                  "score": 0.143
+                },
+                {
+                  "id": 45,
+                  "key": "db.postgres_version",
+                  "value": "PostgreSQL 16 from start; v14 plan retired due to GA support",
+                  "session": 4,
+                  "score": 0.125
+                },
+                {
+                  "id": 73,
+                  "key": "policy.aws_native_scope",
+                  "value": "Dual-vendor waiver covers RDS, Aurora, Lambda and other AWS managed services",
+                  "session": 5,
+                  "score": 0.118
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Based on the retrieved memory, the primary observability platform is **Datadog**. CloudWatch has been demoted to a fallback role, specifically for AWS-native metrics only.\n\nAnswer: Datadog\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "observability stack primary platform",
+              "results": [
+                {
+                  "id": 48,
+                  "key": "observability.primary_platform",
+                  "value": "Datadog is primary; CloudWatch demoted to fallback for AWS-native metrics only",
+                  "session": 4,
+                  "score": 0.167
+                },
+                {
+                  "id": 30,
+                  "key": "storage_vendor_delay",
+                  "value": "Primary vendor 8-week delay on enterprise contract onboarding",
+                  "session": 3,
+                  "score": 0.167
+                },
+                {
+                  "id": 54,
+                  "key": "dr.rpo_primary",
+                  "value": "15 minutes for primary production workloads between Nexus-North and Nexus-South",
+                  "session": 4,
+                  "score": 0.154
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Based on the latest update in session 4, the current network architecture pattern for inter-VPC/inter-region traffic is **AWS Cloud WAN**, which has replaced AWS Transit Gateway to provide better cross-region throughput.\n\nAnswer: AWS Cloud WAN\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "current network architecture pattern for inter-VPC inter-region traffic",
+              "results": [
+                {
+                  "id": 13,
+                  "key": "titan.next_action",
+                  "value": "architecture deep-dive",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 15,
+                  "key": "session_2_topic",
+                  "value": "Week 2 focused on architecture blueprint deep-dive",
+                  "session": 2,
+                  "score": 0.167
+                }
+              ]
+            },
+            {
+              "query": "inter-VPC inter-region traffic architecture pattern",
+              "results": [
+                {
+                  "id": 13,
+                  "key": "titan.next_action",
+                  "value": "architecture deep-dive",
+                  "session": 1,
+                  "score": 0.25
+                },
+                {
+                  "id": 15,
+                  "key": "session_2_topic",
+                  "value": "Week 2 focused on architecture blueprint deep-dive",
+                  "session": 2,
+                  "score": 0.182
+                }
+              ]
+            },
+            {
+              "query": "network architecture VPC peering transit gateway",
+              "results": [
+                {
+                  "id": 27,
+                  "key": "network_architecture",
+                  "value": "Hub-and-spoke via AWS Transit Gateway in us-west-2",
+                  "session": 2,
+                  "score": 0.308
+                },
+                {
+                  "id": 47,
+                  "key": "network.architecture",
+                  "value": "AWS Cloud WAN replaces Transit Gateway for better cross-region throughput",
+                  "session": 4,
+                  "score": 0.25
+                },
+                {
+                  "id": 13,
+                  "key": "titan.next_action",
+                  "value": "architecture deep-dive",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 15,
+                  "key": "session_2_topic",
+                  "value": "Week 2 focused on architecture blueprint deep-dive",
+                  "session": 2,
+                  "score": 0.167
+                },
+                {
+                  "id": 49,
+                  "key": "migration.rule.ai_services",
+                  "value": "VPC endpoint required for Bedrock/SageMaker to satisfy US-only data residency",
+                  "session": 4,
+                  "score": 0.125
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: Jenkins self-hosted on EC2\nSource: Session 3",
+          "recall_trace": [
+            {
+              "query": "CI/CD platform migration pipeline",
+              "results": [
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.364
+                },
+                {
+                  "id": 55,
+                  "key": "project.quetzal.name",
+                  "value": "Project Quetzal is the internal codename for the customer mobile app migration",
+                  "session": 4,
+                  "score": 0.143
+                },
+                {
+                  "id": 23,
+                  "key": "ny_office_signoff_req",
+                  "value": "Hard requirement: explicit NY office sign-off for East Coast analytics migration/cutover",
+                  "session": 2,
+                  "score": 0.118
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Based on the migration plan, the **Kinesis stream infrastructure** must be migrated alongside the customer analytics workload.\n\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "customer analytics workload migration AWS infrastructure component",
+              "results": [
+                {
+                  "id": 50,
+                  "key": "migration.rule.kinesis_coupling",
+                  "value": "Kinesis stream infrastructure must migrate with customer analytics workload",
+                  "session": 4,
+                  "score": 0.5
+                },
+                {
+                  "id": 55,
+                  "key": "project.quetzal.name",
+                  "value": "Project Quetzal is the internal codename for the customer mobile app migration",
+                  "session": 4,
+                  "score": 0.25
+                },
+                {
+                  "id": 6,
+                  "key": "titan.cloud_provider",
+                  "value": "AWS",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 23,
+                  "key": "ny_office_signoff_req",
+                  "value": "Hard requirement: explicit NY office sign-off for East Coast analytics migration/cutover",
+                  "session": 2,
+                  "score": 0.211
+                },
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.154
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Based on the retrieved information, the specific AWS compliance component required to satisfy US-only data residency for AI services like Amazon Bedrock is a **VPC endpoint**. This ensures that traffic does not traverse the public internet and remains within the AWS network infrastructure, helping to enforce data residency constraints.\n\nAnswer: VPC endpoint\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "AWS compliance component US-only data residency Amazon Bedrock",
+              "results": [
+                {
+                  "id": 49,
+                  "key": "migration.rule.ai_services",
+                  "value": "VPC endpoint required for Bedrock/SageMaker to satisfy US-only data residency",
+                  "session": 4,
+                  "score": 0.444
+                },
+                {
+                  "id": 16,
+                  "key": "data_residency",
+                  "value": "US-only; no EU/APAC regions or cross-border data movement",
+                  "session": 2,
+                  "score": 0.25
+                },
+                {
+                  "id": 6,
+                  "key": "titan.cloud_provider",
+                  "value": "AWS",
+                  "session": 1,
+                  "score": 0.2
+                },
+                {
+                  "id": 24,
+                  "key": "primary_rdbms",
+                  "value": "AWS RDS for PostgreSQL 14 Managed",
+                  "session": 2,
+                  "score": 0.143
+                },
+                {
+                  "id": 34,
+                  "key": "security_scanning_tool",
+                  "value": "AWS Inspector for runtime VMs and container images",
+                  "session": 3,
+                  "score": 0.133
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: The minimum ACU configuration required is 0.5 ACUs. This is necessary to ensure continuous audit logging coverage, as configurations below this threshold may not reliably support the SOC 2 audit logging continuity requirements.\nSource: Session 5",
+          "recall_trace": [
+            {
+              "query": "Aurora Serverless v2 minimum ACU audit logging requirement",
+              "results": [
+                {
+                  "id": 65,
+                  "key": "rule.aurora_serverless_soc2",
+                  "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+                  "session": 5,
+                  "score": 0.6
+                },
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.308
+                },
+                {
+                  "id": 56,
+                  "key": "review.gdpr.auditor",
+                  "value": "GDPR audit conducted jointly with Morrison & Brooks",
+                  "session": 4,
+                  "score": 0.133
+                },
+                {
+                  "id": 46,
+                  "key": "data.classification.customer_analytics",
+                  "value": "Reclassified to Confidential after GDPR audit; stricter controls apply",
+                  "session": 4,
+                  "score": 0.118
+                },
+                {
+                  "id": 73,
+                  "key": "policy.aws_native_scope",
+                  "value": "Dual-vendor waiver covers RDS, Aurora, Lambda and other AWS managed services",
+                  "session": 5,
+                  "score": 0.105
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "[max_rounds]",
+          "recall_trace": [
+            {
+              "query": "Project Aurora program budget",
+              "results": [
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.222
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal; internal only, not visible in user-facing artifacts",
+                  "session": 4,
+                  "score": 0.182
+                },
+                {
+                  "id": 69,
+                  "key": "comms_tool",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.167
+                },
+                {
+                  "id": 55,
+                  "key": "project.quetzal.name",
+                  "value": "Project Quetzal is the internal codename for the customer mobile app migration",
+                  "session": 4,
+                  "score": 0.154
+                },
+                {
+                  "id": 73,
+                  "key": "policy.aws_native_scope",
+                  "value": "Dual-vendor waiver covers RDS, Aurora, Lambda and other AWS managed services",
+                  "session": 5,
+                  "score": 0.133
+                }
+              ]
+            },
+            {
+              "query": "Aurora customer-facing mobile app budget cost",
+              "results": [
+                {
+                  "id": 55,
+                  "key": "project.quetzal.name",
+                  "value": "Project Quetzal is the internal codename for the customer mobile app migration",
+                  "session": 4,
+                  "score": 0.267
+                },
+                {
+                  "id": 37,
+                  "key": "dms_license_coverage",
+                  "value": "AWS DMS license cost covered by annual cloud budget; must flag in cost model",
+                  "session": 3,
+                  "score": 0.222
+                },
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.182
+                },
+                {
+                  "id": 73,
+                  "key": "policy.aws_native_scope",
+                  "value": "Dual-vendor waiver covers RDS, Aurora, Lambda and other AWS managed services",
+                  "session": 5,
+                  "score": 0.118
+                },
+                {
+                  "id": 65,
+                  "key": "rule.aurora_serverless_soc2",
+                  "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+                  "session": 5,
+                  "score": 0.111
+                }
+              ]
+            },
+            {
+              "query": "Project Aurora budget amount dollars",
+              "results": [
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.2
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal; internal only, not visible in user-facing artifacts",
+                  "session": 4,
+                  "score": 0.167
+                },
+                {
+                  "id": 55,
+                  "key": "project.quetzal.name",
+                  "value": "Project Quetzal is the internal codename for the customer mobile app migration",
+                  "session": 4,
+                  "score": 0.143
+                },
+                {
+                  "id": 73,
+                  "key": "policy.aws_native_scope",
+                  "value": "Dual-vendor waiver covers RDS, Aurora, Lambda and other AWS managed services",
+                  "session": 5,
+                  "score": 0.125
+                },
+                {
+                  "id": 65,
+                  "key": "rule.aurora_serverless_soc2",
+                  "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+                  "session": 5,
+                  "score": 0.118
+                }
+              ]
+            },
+            {
+              "query": "Project Aurora budget",
+              "results": [
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.25
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal; internal only, not visible in user-facing artifacts",
+                  "session": 4,
+                  "score": 0.2
+                },
+                {
+                  "id": 55,
+                  "key": "project.quetzal.name",
+                  "value": "Project Quetzal is the internal codename for the customer mobile app migration",
+                  "session": 4,
+                  "score": 0.167
+                },
+                {
+                  "id": 73,
+                  "key": "policy.aws_native_scope",
+                  "value": "Dual-vendor waiver covers RDS, Aurora, Lambda and other AWS managed services",
+                  "session": 5,
+                  "score": 0.143
+                },
+                {
+                  "id": 65,
+                  "key": "rule.aurora_serverless_soc2",
+                  "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+                  "session": 5,
+                  "score": 0.133
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: $4.8M\nSource: Session 1",
+          "recall_trace": [
+            {
+              "query": "Titan annual cloud spend budget cap",
+              "results": [
+                {
+                  "id": 37,
+                  "key": "dms_license_coverage",
+                  "value": "AWS DMS license cost covered by annual cloud budget; must flag in cost model",
+                  "session": 3,
+                  "score": 0.333
+                },
+                {
+                  "id": 7,
+                  "key": "titan.budget_cap",
+                  "value": "$4.8M hard cap",
+                  "session": 1,
+                  "score": 0.2
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.182
+                },
+                {
+                  "id": 67,
+                  "key": "company.parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B",
+                  "session": 5,
+                  "score": 0.167
+                },
+                {
+                  "id": 69,
+                  "key": "comms_tool",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.143
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "session_traces": [
+        {
+          "session": 1,
+          "calls_made": 15
+        },
+        {
+          "session": 2,
+          "calls_made": 15
+        },
+        {
+          "session": 3,
+          "calls_made": 15
+        },
+        {
+          "session": 4,
+          "calls_made": 15
+        },
+        {
+          "session": 5,
+          "calls_made": 14
+        }
+      ],
+      "memory_summary": {
+        "n_memories": 74,
+        "by_session": {
+          "1": 15,
+          "2": 15,
+          "3": 15,
+          "4": 15,
+          "5": 14
+        },
+        "n_writes": 74,
+        "n_queries": 0,
+        "total_chars": 4994
+      },
+      "final_context_chars": 4994,
+      "write_log": [
+        {
+          "session": 1,
+          "idx": 0,
+          "key": "titan.meeting_date",
+          "value": "2026-01-15"
+        },
+        {
+          "session": 1,
+          "idx": 1,
+          "key": "titan.meeting_location",
+          "value": "Seattle headquarters"
+        },
+        {
+          "session": 1,
+          "idx": 2,
+          "key": "titan.cio",
+          "value": "Maria Delgado"
+        },
+        {
+          "session": 1,
+          "idx": 3,
+          "key": "titan.consulting_lead",
+          "value": "Priya Nair"
+        },
+        {
+          "session": 1,
+          "idx": 4,
+          "key": "titan.go_live_target",
+          "value": "Q3 2026"
+        },
+        {
+          "session": 1,
+          "idx": 5,
+          "key": "titan.compliance_baseline",
+          "value": "SOC 2 Type II"
+        },
+        {
+          "session": 1,
+          "idx": 6,
+          "key": "titan.cloud_provider",
+          "value": "AWS"
+        },
+        {
+          "session": 1,
+          "idx": 7,
+          "key": "titan.budget_cap",
+          "value": "$4.8M hard cap"
+        },
+        {
+          "session": 1,
+          "idx": 8,
+          "key": "titan.budget_target",
+          "value": "$4.2M operational target"
+        },
+        {
+          "session": 1,
+          "idx": 9,
+          "key": "titan.hr_sarah_chen",
+          "value": "Joined IT team March 2026"
+        },
+        {
+          "session": 1,
+          "idx": 10,
+          "key": "project_aurora.budget",
+          "value": "$2.4M for full cloud buildout"
+        },
+        {
+          "session": 1,
+          "idx": 11,
+          "key": "project_aurora_lite.budget",
+          "value": "$120K for staff testing"
+        },
+        {
+          "session": 1,
+          "idx": 12,
+          "key": "project_aurora_lite.tech",
+          "value": "ECS Fargate, no auth, staff-only"
+        },
+        {
+          "session": 1,
+          "idx": 13,
+          "key": "titan.next_action",
+          "value": "architecture deep-dive"
+        },
+        {
+          "session": 1,
+          "idx": 14,
+          "key": "titan.fiscal_year_alignment",
+          "value": "Q3 go-live aligns with fiscal year planning"
+        },
+        {
+          "session": 2,
+          "idx": 15,
+          "key": "session_2_topic",
+          "value": "Week 2 focused on architecture blueprint deep-dive"
+        },
+        {
+          "session": 2,
+          "idx": 16,
+          "key": "data_residency",
+          "value": "US-only; no EU/APAC regions or cross-border data movement"
+        },
+        {
+          "session": 2,
+          "idx": 17,
+          "key": "primary_region",
+          "value": "us-west-2 (Oregon)"
+        },
+        {
+          "session": 2,
+          "idx": 18,
+          "key": "dr_region",
+          "value": "us-east-1 (Virginia)"
+        },
+        {
+          "session": 2,
+          "idx": 19,
+          "key": "primary_codename",
+          "value": "Nexus-North"
+        },
+        {
+          "session": 2,
+          "idx": 20,
+          "key": "dr_codename",
+          "value": "Nexus-South (warm-standby, reduced scale)"
+        },
+        {
+          "session": 2,
+          "idx": 21,
+          "key": "legal_counsel",
+          "value": "Morrison & Brooks LLP"
+        },
+        {
+          "session": 2,
+          "idx": 22,
+          "key": "data_classification",
+          "value": "PHI, PII, general business; analytics dataset is Internal (not Confidential)"
+        },
+        {
+          "session": 2,
+          "idx": 23,
+          "key": "ny_office_signoff_req",
+          "value": "Hard requirement: explicit NY office sign-off for East Coast analytics migration/cutover"
+        },
+        {
+          "session": 2,
+          "idx": 24,
+          "key": "primary_rdbms",
+          "value": "AWS RDS for PostgreSQL 14 Managed"
+        },
+        {
+          "session": 2,
+          "idx": 25,
+          "key": "analytics_db",
+          "value": "Separate Aurora Serverless clusters"
+        },
+        {
+          "session": 2,
+          "idx": 26,
+          "key": "procurement_threshold",
+          "value": "Over $500K requires dual-vendor approval and documentation"
+        },
+        {
+          "session": 2,
+          "idx": 27,
+          "key": "network_architecture",
+          "value": "Hub-and-spoke via AWS Transit Gateway in us-west-2"
+        },
+        {
+          "session": 2,
+          "idx": 28,
+          "key": "building_renovation",
+          "value": "Renovated in 2024; lobby differs from older photos"
+        },
+        {
+          "session": 2,
+          "idx": 29,
+          "key": "next_session_topic",
+          "value": "Procurement and delivery timeline"
+        },
+        {
+          "session": 3,
+          "idx": 30,
+          "key": "storage_vendor_delay",
+          "value": "Primary vendor 8-week delay on enterprise contract onboarding"
+        },
+        {
+          "session": 3,
+          "idx": 31,
+          "key": "go_live_date",
+          "value": "Pushed from Q3 2026 to Q4 2026 by steering committee"
+        },
+        {
+          "session": 3,
+          "idx": 32,
+          "key": "ci_cd_tool",
+          "value": "Jenkins self-hosted on EC2 for migration pipeline"
+        },
+        {
+          "session": 3,
+          "idx": 33,
+          "key": "observability_tool",
+          "value": "CloudWatch (AWS-native only)"
+        },
+        {
+          "session": 3,
+          "idx": 34,
+          "key": "security_scanning_tool",
+          "value": "AWS Inspector for runtime VMs and container images"
+        },
+        {
+          "session": 3,
+          "idx": 35,
+          "key": "cutover_max_downtime",
+          "value": "4 hours; longer triggers CIO/parent company escalation"
+        },
+        {
+          "session": 3,
+          "idx": 36,
+          "key": "auth_provider",
+          "value": "Okta for internal auth; not moving to AWS IAM Identity Center"
+        },
+        {
+          "session": 3,
+          "idx": 37,
+          "key": "dms_license_coverage",
+          "value": "AWS DMS license cost covered by annual cloud budget; must flag in cost model"
+        },
+        {
+          "session": 3,
+          "idx": 38,
+          "key": "aurora_phase2_ship_date",
+          "value": "May 2026 (internal engineering build milestone)"
+        },
+        {
+          "session": 3,
+          "idx": 39,
+          "key": "weekly_meeting_schedule",
+          "value": "Every Thursday at 10am PT in Nexus-North war room"
+        },
+        {
+          "session": 3,
+          "idx": 40,
+          "key": "consulting_firm_location",
+          "value": "Headquartered in Austin, Texas"
+        },
+        {
+          "session": 3,
+          "idx": 41,
+          "key": "next_session_topic",
+          "value": "Post-audit revisions"
+        },
+        {
+          "session": 3,
+          "idx": 42,
+          "key": "session_number",
+          "value": "3"
+        },
+        {
+          "session": 3,
+          "idx": 43,
+          "key": "session_week",
+          "value": "Week 3"
+        },
+        {
+          "session": 3,
+          "idx": 44,
+          "key": "session_topic",
+          "value": "Procurement + delivery plan"
+        },
+        {
+          "session": 4,
+          "idx": 45,
+          "key": "db.postgres_version",
+          "value": "PostgreSQL 16 from start; v14 plan retired due to GA support"
+        },
+        {
+          "session": 4,
+          "idx": 46,
+          "key": "data.classification.customer_analytics",
+          "value": "Reclassified to Confidential after GDPR audit; stricter controls apply"
+        },
+        {
+          "session": 4,
+          "idx": 47,
+          "key": "network.architecture",
+          "value": "AWS Cloud WAN replaces Transit Gateway for better cross-region throughput"
+        },
+        {
+          "session": 4,
+          "idx": 48,
+          "key": "observability.primary_platform",
+          "value": "Datadog is primary; CloudWatch demoted to fallback for AWS-native metrics only"
+        },
+        {
+          "session": 4,
+          "idx": 49,
+          "key": "migration.rule.ai_services",
+          "value": "VPC endpoint required for Bedrock/SageMaker to satisfy US-only data residency"
+        },
+        {
+          "session": 4,
+          "idx": 50,
+          "key": "migration.rule.kinesis_coupling",
+          "value": "Kinesis stream infrastructure must migrate with customer analytics workload"
+        },
+        {
+          "session": 4,
+          "idx": 51,
+          "key": "project.quetzal.phase2_announcement",
+          "value": "July 2026; marketing/PR moment, later than engineering ship date"
+        },
+        {
+          "session": 4,
+          "idx": 52,
+          "key": "person.maria.credentials",
+          "value": "Maria has PhD in CS from UC Berkeley"
+        },
+        {
+          "session": 4,
+          "idx": 53,
+          "key": "project.internal_codename",
+          "value": "Project Quetzal; internal only, not visible in user-facing artifacts"
+        },
+        {
+          "session": 4,
+          "idx": 54,
+          "key": "dr.rpo_primary",
+          "value": "15 minutes for primary production workloads between Nexus-North and Nexus-South"
+        },
+        {
+          "session": 4,
+          "idx": 55,
+          "key": "project.quetzal.name",
+          "value": "Project Quetzal is the internal codename for the customer mobile app migration"
+        },
+        {
+          "session": 4,
+          "idx": 56,
+          "key": "review.gdpr.auditor",
+          "value": "GDPR audit conducted jointly with Morrison & Brooks"
+        },
+        {
+          "session": 4,
+          "idx": 57,
+          "key": "review.rds.update",
+          "value": "RDS for PostgreSQL 16 support went GA this week"
+        },
+        {
+          "session": 4,
+          "idx": 58,
+          "key": "dr.replication_posture",
+          "value": "Continuous replication between Nexus-North and Nexus-South driven by 15-min RPO"
+        },
+        {
+          "session": 4,
+          "idx": 59,
+          "key": "observability.dashboards_location",
+          "value": "Ops team daily dashboards are in Datadog, not CloudWatch"
+        },
+        {
+          "session": 5,
+          "idx": 60,
+          "key": "week5_status",
+          "value": "Final review before steering committee greenlight pending"
+        },
+        {
+          "session": 5,
+          "idx": 61,
+          "key": "policy.aws_dual_vendor_waiver",
+          "value": "VP waived dual-vendor rule for AWS-native services; applies only to non-AWS like Wiz/Datadog"
+        },
+        {
+          "session": 5,
+          "idx": 62,
+          "key": "cicd_platform",
+          "value": "Jenkins EOL'd; pivoting to GitHub Actions Enterprise"
+        },
+        {
+          "session": 5,
+          "idx": 63,
+          "key": "security_scanner",
+          "value": "Replacing AWS Inspector with Wiz due to limited third-party container scanning"
+        },
+        {
+          "session": 5,
+          "idx": 64,
+          "key": "rule.multi_region_route53_cost",
+          "value": "Multi-region active-active doubles Route 53 health check costs; fold into TCO"
+        },
+        {
+          "session": 5,
+          "idx": 65,
+          "key": "rule.aurora_serverless_soc2",
+          "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity"
+        },
+        {
+          "session": 5,
+          "idx": 66,
+          "key": "procurement.appsync",
+          "value": "AWS AppSync needed for offline client apps; separate procurement cycle required"
+        },
+        {
+          "session": 5,
+          "idx": 67,
+          "key": "company.parent_acquisition",
+          "value": "Parent acquired Titan in 2019 for $1.2B"
+        },
+        {
+          "session": 5,
+          "idx": 68,
+          "key": "person.priya.coffee",
+          "value": "Priya drinks espresso, neat"
+        },
+        {
+          "session": 5,
+          "idx": 69,
+          "key": "comms_tool",
+          "value": "Slack is Titan's internal comms tool for program updates"
+        },
+        {
+          "session": 5,
+          "idx": 70,
+          "key": "perk.cafeteria",
+          "value": "Cafeteria serving free Tuesday breakfast all quarter"
+        },
+        {
+          "session": 5,
+          "idx": 71,
+          "key": "person.priya_role",
+          "value": "Priya announced VP policy waiver and led session 5 review"
+        },
+        {
+          "session": 5,
+          "idx": 72,
+          "key": "session_number",
+          "value": "Session 5 is Week 5, the final plan before greenlight"
+        },
+        {
+          "session": 5,
+          "idx": 73,
+          "key": "policy.aws_native_scope",
+          "value": "Dual-vendor waiver covers RDS, Aurora, Lambda and other AWS managed services"
+        }
+      ],
+      "elapsed_s": 288.0
+    },
+    {
+      "condition": "C_structured",
+      "run": 1,
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: SOC 2 Type II\nSource: Session 1",
+          "recall_trace": [
+            {
+              "query": "Titan Industries SOC compliance posture",
+              "results": [
+                {
+                  "id": 5,
+                  "key": "titan.compliance_baseline",
+                  "value": "SOC 2 Type II",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.182
+                },
+                {
+                  "id": 69,
+                  "key": "titan_internal_comms",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.154
+                },
+                {
+                  "id": 67,
+                  "key": "titan_parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B, causing board-level visibility",
+                  "session": 5,
+                  "score": 0.143
+                },
+                {
+                  "id": 42,
+                  "key": "jenkins_platform_history",
+                  "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it",
+                  "session": 3,
+                  "score": 0.133
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Based on the retrieved facts, Titan Industries' migration is targeting **AWS** (Amazon Web Services). This is evidenced by the mention of \"AWS DMS license\" for SQL Server migration, the use of \"EC2\" for the Jenkins self-hosted migration pipeline, and the adoption of \"AWS Cloud WAN\" for network architecture.\n\nAnswer: AWS\nSource: Session 3",
+          "recall_trace": [
+            {
+              "query": "Titan Industries cloud migration target provider",
+              "results": [
+                {
+                  "id": 37,
+                  "key": "dms_licensing",
+                  "value": "AWS DMS license required for SQL Server migration, covered by annual cloud budget",
+                  "session": 3,
+                  "score": 0.222
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.182
+                },
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.167
+                },
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.167
+                },
+                {
+                  "id": 47,
+                  "key": "network.architecture",
+                  "value": "AWS Cloud WAN replaces Transit Gateway",
+                  "session": 4,
+                  "score": 0.154
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Based on the available memory records, there is no specific name listed for Titan Industries' Chief Information Officer (CIO). The records only mention that the maximum acceptable downtime triggers \"CIO escalation\" and that Titan was acquired by its parent company in 2019.\n\nAnswer: The name of Titan Industries' CIO is not specified in the available records.\nSource: Session 3",
+          "recall_trace": [
+            {
+              "query": "Titan Industries CIO",
+              "results": [
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.222
+                },
+                {
+                  "id": 69,
+                  "key": "titan_internal_comms",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.182
+                },
+                {
+                  "id": 67,
+                  "key": "titan_parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B, causing board-level visibility",
+                  "session": 5,
+                  "score": 0.167
+                },
+                {
+                  "id": 35,
+                  "key": "cutover_max_downtime",
+                  "value": "Maximum acceptable downtime is 4 hours; longer triggers CIO escalation",
+                  "session": 3,
+                  "score": 0.167
+                },
+                {
+                  "id": 42,
+                  "key": "jenkins_platform_history",
+                  "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it",
+                  "session": 3,
+                  "score": 0.154
+                }
+              ]
+            },
+            {
+              "query": "Titan Industries Chief Information Officer name",
+              "results": [
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.167
+                },
+                {
+                  "id": 69,
+                  "key": "titan_internal_comms",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.143
+                },
+                {
+                  "id": 67,
+                  "key": "titan_parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B, causing board-level visibility",
+                  "session": 5,
+                  "score": 0.133
+                },
+                {
+                  "id": 42,
+                  "key": "jenkins_platform_history",
+                  "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it",
+                  "session": 3,
+                  "score": 0.125
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Based on the available memory records, there is no information specifying who leads the consulting team. The retrieved facts only mention DMS license cost flagging, a Security team's pilot of Wiz, and Titan's Jenkins platform history.\n\nAnswer: Information not available in memory.\nSource: Session 3",
+          "recall_trace": [
+            {
+              "query": "who leads the consulting team",
+              "results": [
+                {
+                  "id": 43,
+                  "key": "dms_cost_flagging",
+                  "value": "Team needs to flag DMS license cost in the cost model",
+                  "session": 3,
+                  "score": 0.182
+                },
+                {
+                  "id": 73,
+                  "key": "security_wiz_pilot_status",
+                  "value": "Security team already piloted Wiz on a smaller project last quarter",
+                  "session": 5,
+                  "score": 0.154
+                },
+                {
+                  "id": 42,
+                  "key": "jenkins_platform_history",
+                  "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it",
+                  "session": 3,
+                  "score": 0.154
+                }
+              ]
+            },
+            {
+              "query": "consulting team leader head manager",
+              "results": [
+                {
+                  "id": 43,
+                  "key": "dms_cost_flagging",
+                  "value": "Team needs to flag DMS license cost in the cost model",
+                  "session": 3,
+                  "score": 0.154
+                },
+                {
+                  "id": 73,
+                  "key": "security_wiz_pilot_status",
+                  "value": "Security team already piloted Wiz on a smaller project last quarter",
+                  "session": 5,
+                  "score": 0.133
+                },
+                {
+                  "id": 42,
+                  "key": "jenkins_platform_history",
+                  "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it",
+                  "session": 3,
+                  "score": 0.133
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Based on the retrieved information, Titan uses **Okta** for internal authentication.\n\nAnswer: Okta\nSource: Session 3",
+          "recall_trace": [
+            {
+              "query": "Titan internal workforce identity provider",
+              "results": [
+                {
+                  "id": 69,
+                  "key": "titan_internal_comms",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.308
+                },
+                {
+                  "id": 36,
+                  "key": "auth_provider",
+                  "value": "Okta for internal authentication; not moving to AWS IAM Identity Center",
+                  "session": 3,
+                  "score": 0.286
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal (internal only)",
+                  "session": 4,
+                  "score": 0.222
+                },
+                {
+                  "id": 46,
+                  "key": "gdpr.analytics_classification",
+                  "value": "Customer analytics is Confidential, not Internal",
+                  "session": 4,
+                  "score": 0.2
+                },
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.182
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Based on the retrieved information, the current planned go-live quarter for Titan's cloud migration is **Q3 2026**. This timing was selected to align with fiscal year planning.\n\nAnswer: Q3 2026\nSource: Session 1",
+          "recall_trace": [
+            {
+              "query": "Titan cloud migration go-live quarter",
+              "results": [
+                {
+                  "id": 37,
+                  "key": "dms_licensing",
+                  "value": "AWS DMS license required for SQL Server migration, covered by annual cloud budget",
+                  "session": 3,
+                  "score": 0.235
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.2
+                },
+                {
+                  "id": 70,
+                  "key": "titan_cafeteria_offer",
+                  "value": "Free Tuesday breakfast all quarter",
+                  "session": 5,
+                  "score": 0.182
+                },
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.182
+                },
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.182
+                }
+              ]
+            },
+            {
+              "query": "Titan cloud migration timeline schedule date",
+              "results": [
+                {
+                  "id": 37,
+                  "key": "dms_licensing",
+                  "value": "AWS DMS license required for SQL Server migration, covered by annual cloud budget",
+                  "session": 3,
+                  "score": 0.222
+                },
+                {
+                  "id": 29,
+                  "key": "next_week_focus",
+                  "value": "Procurement and delivery timeline",
+                  "session": 2,
+                  "score": 0.2
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.182
+                },
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.167
+                },
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.167
+                }
+              ]
+            },
+            {
+              "query": "Titan cloud migration go-live",
+              "results": [
+                {
+                  "id": 37,
+                  "key": "dms_licensing",
+                  "value": "AWS DMS license required for SQL Server migration, covered by annual cloud budget",
+                  "session": 3,
+                  "score": 0.25
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.2
+                },
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.2
+                },
+                {
+                  "id": 47,
+                  "key": "network.architecture",
+                  "value": "AWS Cloud WAN replaces Transit Gateway",
+                  "session": 4,
+                  "score": 0.182
+                },
+                {
+                  "id": 23,
+                  "key": "ny_office_signoff",
+                  "value": "Required for East Coast analytics migration/cutover",
+                  "session": 2,
+                  "score": 0.182
+                },
+                {
+                  "id": 69,
+                  "key": "titan_internal_comms",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.167
+                },
+                {
+                  "id": 14,
+                  "key": "titan.fiscal_year_alignment",
+                  "value": "Q3 2026 go-live aligns with fiscal year planning",
+                  "session": 1,
+                  "score": 0.167
+                },
+                {
+                  "id": 67,
+                  "key": "titan_parent_acquisition",
+                  "value": "Parent acquired Titan in 2019 for $1.2B, causing board-level visibility",
+                  "session": 5,
+                  "score": 0.154
+                },
+                {
+                  "id": 42,
+                  "key": "jenkins_platform_history",
+                  "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it",
+                  "session": 3,
+                  "score": 0.143
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Based on the retrieved information, the current planned PostgreSQL version for the managed RDBMS tier is **PostgreSQL 16**. The previous plan for version 14 has been retired.\n\nAnswer: PostgreSQL 16\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "CURRENT planned PostgreSQL version for managed RDBMS tier",
+              "results": [
+                {
+                  "id": 24,
+                  "key": "primary_rdbms",
+                  "value": "AWS RDS for PostgreSQL 14 Managed",
+                  "session": 2,
+                  "score": 0.333
+                },
+                {
+                  "id": 45,
+                  "key": "db.postgres_version",
+                  "value": "PostgreSQL 16 from start; v14 plan retired",
+                  "session": 4,
+                  "score": 0.154
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: Datadog\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "observability stack primary platform",
+              "results": [
+                {
+                  "id": 48,
+                  "key": "observability.primary_platform",
+                  "value": "Datadog primary; CloudWatch fallback only",
+                  "session": 4,
+                  "score": 0.222
+                },
+                {
+                  "id": 54,
+                  "key": "dr.rpo_primary",
+                  "value": "15 minutes for primary production workloads",
+                  "session": 4,
+                  "score": 0.2
+                },
+                {
+                  "id": 30,
+                  "key": "storage_vendor_delay",
+                  "value": "Primary vendor for storage modernization has 8-week delay in enterprise contract onboarding",
+                  "session": 3,
+                  "score": 0.143
+                },
+                {
+                  "id": 42,
+                  "key": "jenkins_platform_history",
+                  "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it",
+                  "session": 3,
+                  "score": 0.143
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Based on general cloud networking best practices (as no specific historical context was found in memory), the current standard network architecture pattern for inter-VPC and inter-region traffic typically involves:\n\n1.  **VPC Peering** or **Transit Gateways** (e.g., AWS Transit Gateway, Azure Hub-and-Spoke, GCP Cloud Interconnect/Router) for inter-VPC connectivity within the same region or across regions.\n2.  **Global Accelerator** or **Cloud Load Balancing** (e.g., AWS Global Accelerator, Azure Front Door, Google Cloud Load Balancing) for inter-region traffic to improve latency and availability.\n3.  **Direct Connect / ExpressRoute / Cloud Interconnect** for dedicated, high-throughput, low-latency connections between on-premises and cloud, or between cloud regions.\n\nAnswer: The current pattern typically uses Transit Gateways or VPC Peering for inter-VPC connectivity and Global Accelerators or Cloud Load Balancers for inter-region traffic.\nSource: General Knowledge",
+          "recall_trace": [
+            {
+              "query": "current network architecture pattern for inter-VPC inter-region traffic",
+              "results": [
+                {
+                  "id": 13,
+                  "key": "titan.next_week_action",
+                  "value": "architecture deep-dive",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 15,
+                  "key": "week2_focus",
+                  "value": "Architecture deep-dive session",
+                  "session": 2,
+                  "score": 0.2
+                }
+              ]
+            },
+            {
+              "query": "network architecture inter-VPC inter-region traffic pattern",
+              "results": [
+                {
+                  "id": 13,
+                  "key": "titan.next_week_action",
+                  "value": "architecture deep-dive",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 15,
+                  "key": "week2_focus",
+                  "value": "Architecture deep-dive session",
+                  "session": 2,
+                  "score": 0.2
+                }
+              ]
+            },
+            {
+              "query": "inter-VPC traffic peering",
+              "results": []
+            }
+          ]
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: Jenkins self-hosted on EC2\nSource: Session 3",
+          "recall_trace": [
+            {
+              "query": "CI/CD platform migration pipeline",
+              "results": [
+                {
+                  "id": 32,
+                  "key": "ci_cd_tool",
+                  "value": "Jenkins self-hosted on EC2 for migration pipeline",
+                  "session": 3,
+                  "score": 0.364
+                },
+                {
+                  "id": 23,
+                  "key": "ny_office_signoff",
+                  "value": "Required for East Coast analytics migration/cutover",
+                  "session": 2,
+                  "score": 0.167
+                },
+                {
+                  "id": 42,
+                  "key": "jenkins_platform_history",
+                  "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it",
+                  "session": 3,
+                  "score": 0.133
+                },
+                {
+                  "id": 37,
+                  "key": "dms_licensing",
+                  "value": "AWS DMS license required for SQL Server migration, covered by annual cloud budget",
+                  "session": 3,
+                  "score": 0.118
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Based on the plan, the additional infrastructure component that must be migrated alongside the customer analytics workload is **Kinesis**.\n\nAnswer: Kinesis\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "customer analytics workload migration AWS infrastructure component",
+              "results": [
+                {
+                  "id": 50,
+                  "key": "migration.kinesis_coupling",
+                  "value": "Kinesis migrates with customer analytics workload",
+                  "session": 4,
+                  "score": 0.462
+                },
+                {
+                  "id": 46,
+                  "key": "gdpr.analytics_classification",
+                  "value": "Customer analytics is Confidential, not Internal",
+                  "session": 4,
+                  "score": 0.333
+                },
+                {
+                  "id": 23,
+                  "key": "ny_office_signoff",
+                  "value": "Required for East Coast analytics migration/cutover",
+                  "session": 2,
+                  "score": 0.286
+                },
+                {
+                  "id": 6,
+                  "key": "titan.target_cloud",
+                  "value": "AWS",
+                  "session": 1,
+                  "score": 0.222
+                },
+                {
+                  "id": 37,
+                  "key": "dms_licensing",
+                  "value": "AWS DMS license required for SQL Server migration, covered by annual cloud budget",
+                  "session": 3,
+                  "score": 0.211
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: AWS GovCloud (US) regions\nSource: Session 4",
+          "recall_trace": [
+            {
+              "query": "Amazon Bedrock US data residency compliance component",
+              "results": [
+                {
+                  "id": 49,
+                  "key": "migration.ai_vpc_endpoint_rule",
+                  "value": "VPC endpoint required for Bedrock/SageMaker for US residency",
+                  "session": 4,
+                  "score": 0.4
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: The minimum ACU configuration required is 0.5. This is because Aurora Serverless v2 instances below 0.5 ACU do not support streaming audit logs, which is a requirement for SOC 2 compliance.\nSource: Session 5",
+          "recall_trace": [
+            {
+              "query": "Aurora Serverless v2 minimum ACU audit logging requirement",
+              "results": [
+                {
+                  "id": 65,
+                  "key": "aurora_serverless_soc2_rule",
+                  "value": "Aurora Serverless v2 min ACU must be 0.5+ for SOC 2 audit logging; below 0.5 stops streaming",
+                  "session": 5,
+                  "score": 0.545
+                },
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.308
+                },
+                {
+                  "id": 72,
+                  "key": "policy.aws_managed_services_list",
+                  "value": "RDS, Aurora, Lambda are AWS-native and exempt from dual-vendor rule",
+                  "session": 5,
+                  "score": 0.125
+                },
+                {
+                  "id": 38,
+                  "key": "aurora_phase2_ship_date",
+                  "value": "Project Aurora Phase 2 engineering ship date set for May 2026",
+                  "session": 3,
+                  "score": 0.118
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "[max_rounds]",
+          "recall_trace": [
+            {
+              "query": "Project Aurora program budget",
+              "results": [
+                {
+                  "id": 38,
+                  "key": "aurora_phase2_ship_date",
+                  "value": "Project Aurora Phase 2 engineering ship date set for May 2026",
+                  "session": 3,
+                  "score": 0.308
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal (internal only)",
+                  "session": 4,
+                  "score": 0.25
+                },
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.222
+                },
+                {
+                  "id": 69,
+                  "key": "titan_internal_comms",
+                  "value": "Slack is Titan's internal comms tool for program updates",
+                  "session": 5,
+                  "score": 0.167
+                },
+                {
+                  "id": 72,
+                  "key": "policy.aws_managed_services_list",
+                  "value": "RDS, Aurora, Lambda are AWS-native and exempt from dual-vendor rule",
+                  "session": 5,
+                  "score": 0.167
+                }
+              ]
+            },
+            {
+              "query": "Project Aurora budget cost funding",
+              "results": [
+                {
+                  "id": 38,
+                  "key": "aurora_phase2_ship_date",
+                  "value": "Project Aurora Phase 2 engineering ship date set for May 2026",
+                  "session": 3,
+                  "score": 0.286
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal (internal only)",
+                  "session": 4,
+                  "score": 0.222
+                },
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.2
+                },
+                {
+                  "id": 72,
+                  "key": "policy.aws_managed_services_list",
+                  "value": "RDS, Aurora, Lambda are AWS-native and exempt from dual-vendor rule",
+                  "session": 5,
+                  "score": 0.154
+                },
+                {
+                  "id": 43,
+                  "key": "dms_cost_flagging",
+                  "value": "Team needs to flag DMS license cost in the cost model",
+                  "session": 3,
+                  "score": 0.154
+                }
+              ]
+            },
+            {
+              "query": "Project Aurora mobile app budget",
+              "results": [
+                {
+                  "id": 38,
+                  "key": "aurora_phase2_ship_date",
+                  "value": "Project Aurora Phase 2 engineering ship date set for May 2026",
+                  "session": 3,
+                  "score": 0.286
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal (internal only)",
+                  "session": 4,
+                  "score": 0.222
+                },
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.2
+                },
+                {
+                  "id": 72,
+                  "key": "policy.aws_managed_services_list",
+                  "value": "RDS, Aurora, Lambda are AWS-native and exempt from dual-vendor rule",
+                  "session": 5,
+                  "score": 0.154
+                },
+                {
+                  "id": 73,
+                  "key": "security_wiz_pilot_status",
+                  "value": "Security team already piloted Wiz on a smaller project last quarter",
+                  "session": 5,
+                  "score": 0.133
+                }
+              ]
+            },
+            {
+              "query": "Project Aurora customer-facing mobile app budget amount",
+              "results": [
+                {
+                  "id": 38,
+                  "key": "aurora_phase2_ship_date",
+                  "value": "Project Aurora Phase 2 engineering ship date set for May 2026",
+                  "session": 3,
+                  "score": 0.25
+                },
+                {
+                  "id": 53,
+                  "key": "project.internal_codename",
+                  "value": "Project Quetzal (internal only)",
+                  "session": 4,
+                  "score": 0.182
+                },
+                {
+                  "id": 25,
+                  "key": "analytics_db",
+                  "value": "Separate Aurora Serverless clusters",
+                  "session": 2,
+                  "score": 0.167
+                },
+                {
+                  "id": 72,
+                  "key": "policy.aws_managed_services_list",
+                  "value": "RDS, Aurora, Lambda are AWS-native and exempt from dual-vendor rule",
+                  "session": 5,
+                  "score": 0.133
+                },
+                {
+                  "id": 73,
+                  "key": "security_wiz_pilot_status",
+                  "value": "Security team already piloted Wiz on a smaller project last quarter",
+                  "session": 5,
+                  "score": 0.118
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: $4.8M\nSource: Session 1",
+          "recall_trace": [
+            {
+              "query": "Titan annual cloud spend budget cap",
+              "results": [
+                {
+                  "id": 37,
+                  "key": "dms_licensing",
+                  "value": "AWS DMS license required for SQL Server migration, covered by annual cloud budget",
+                  "session": 3,
+                  "score": 0.333
+                },
+                {
+                  "id": 7,
+                  "key": "titan.budget_hard_cap",
+                  "value": "$4.8M annual ceiling",
+                  "session": 1,
+                  "score": 0.2
+                },
+                {
+                  "id": 10,
+                  "key": "project_aurora.budget",
+                  "value": "$2.4M for full cloud buildout",
+                  "session": 1,
+                  "score": 0.182
+                },
+                {
+                  "id": 57,
+                  "key": "project.quetzal_scope",
+                  "value": "Not visible outside Titan; no user-facing artifacts",
+                  "session": 4,
+                  "score": 0.167
+                },
+                {
+                  "id": 47,
+                  "key": "network.architecture",
+                  "value": "AWS Cloud WAN replaces Transit Gateway",
+                  "session": 4,
+                  "score": 0.154
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "session_traces": [
+        {
+          "session": 1,
+          "calls_made": 15
+        },
+        {
+          "session": 2,
+          "calls_made": 15
+        },
+        {
+          "session": 3,
+          "calls_made": 15
+        },
+        {
+          "session": 4,
+          "calls_made": 15
+        },
+        {
+          "session": 5,
+          "calls_made": 14
+        }
+      ],
+      "memory_summary": {
+        "n_memories": 74,
+        "by_session": {
+          "1": 15,
+          "2": 15,
+          "3": 15,
+          "4": 15,
+          "5": 14
+        },
+        "n_writes": 74,
+        "n_queries": 0,
+        "total_chars": 4972
+      },
+      "final_context_chars": 4972,
+      "write_log": [
+        {
+          "session": 1,
+          "idx": 0,
+          "key": "titan.migration.kickoff_date",
+          "value": "2026-01-15"
+        },
+        {
+          "session": 1,
+          "idx": 1,
+          "key": "titan.migration.kickoff_location",
+          "value": "Seattle headquarters"
+        },
+        {
+          "session": 1,
+          "idx": 2,
+          "key": "titan.cio",
+          "value": "Maria Delgado"
+        },
+        {
+          "session": 1,
+          "idx": 3,
+          "key": "titan.migration.go_live_target",
+          "value": "Q3 2026"
+        },
+        {
+          "session": 1,
+          "idx": 4,
+          "key": "titan.consulting_lead",
+          "value": "Priya Nair"
+        },
+        {
+          "session": 1,
+          "idx": 5,
+          "key": "titan.compliance_baseline",
+          "value": "SOC 2 Type II"
+        },
+        {
+          "session": 1,
+          "idx": 6,
+          "key": "titan.target_cloud",
+          "value": "AWS"
+        },
+        {
+          "session": 1,
+          "idx": 7,
+          "key": "titan.budget_hard_cap",
+          "value": "$4.8M annual ceiling"
+        },
+        {
+          "session": 1,
+          "idx": 8,
+          "key": "titan.budget_internal_target",
+          "value": "$4.2M operational aspiration"
+        },
+        {
+          "session": 1,
+          "idx": 9,
+          "key": "titan.hr_sarah_chen_join_date",
+          "value": "March 2026"
+        },
+        {
+          "session": 1,
+          "idx": 10,
+          "key": "project_aurora.budget",
+          "value": "$2.4M for full cloud buildout"
+        },
+        {
+          "session": 1,
+          "idx": 11,
+          "key": "project_aurora_lite.budget",
+          "value": "$120K for staff testing"
+        },
+        {
+          "session": 1,
+          "idx": 12,
+          "key": "project_aurora_lite.tech_stack",
+          "value": "ECS Fargate, no auth"
+        },
+        {
+          "session": 1,
+          "idx": 13,
+          "key": "titan.next_week_action",
+          "value": "architecture deep-dive"
+        },
+        {
+          "session": 1,
+          "idx": 14,
+          "key": "titan.fiscal_year_alignment",
+          "value": "Q3 2026 go-live aligns with fiscal year planning"
+        },
+        {
+          "session": 2,
+          "idx": 15,
+          "key": "week2_focus",
+          "value": "Architecture deep-dive session"
+        },
+        {
+          "session": 2,
+          "idx": 16,
+          "key": "data_residency",
+          "value": "US-only; no EU/APAC or cross-border movement"
+        },
+        {
+          "session": 2,
+          "idx": 17,
+          "key": "primary_region",
+          "value": "us-west-2 (Oregon)"
+        },
+        {
+          "session": 2,
+          "idx": 18,
+          "key": "dr_region",
+          "value": "us-east-1 (Virginia)"
+        },
+        {
+          "session": 2,
+          "idx": 19,
+          "key": "primary_codename",
+          "value": "Nexus-North"
+        },
+        {
+          "session": 2,
+          "idx": 20,
+          "key": "dr_codename",
+          "value": "Nexus-South (warm-standby, reduced scale)"
+        },
+        {
+          "session": 2,
+          "idx": 21,
+          "key": "legal_counsel",
+          "value": "Morrison & Brooks LLP"
+        },
+        {
+          "session": 2,
+          "idx": 22,
+          "key": "data_classification",
+          "value": "PHI, PII, general business; analytics dataset is Internal"
+        },
+        {
+          "session": 2,
+          "idx": 23,
+          "key": "ny_office_signoff",
+          "value": "Required for East Coast analytics migration/cutover"
+        },
+        {
+          "session": 2,
+          "idx": 24,
+          "key": "primary_rdbms",
+          "value": "AWS RDS for PostgreSQL 14 Managed"
+        },
+        {
+          "session": 2,
+          "idx": 25,
+          "key": "analytics_db",
+          "value": "Separate Aurora Serverless clusters"
+        },
+        {
+          "session": 2,
+          "idx": 26,
+          "key": "procurement_threshold",
+          "value": ">$500K requires dual-vendor approval and documentation"
+        },
+        {
+          "session": 2,
+          "idx": 27,
+          "key": "network_arch",
+          "value": "Hub-and-spoke via AWS Transit Gateway in us-west-2"
+        },
+        {
+          "session": 2,
+          "idx": 28,
+          "key": "building_status",
+          "value": "Renovated in 2024; lobby differs from old photos"
+        },
+        {
+          "session": 2,
+          "idx": 29,
+          "key": "next_week_focus",
+          "value": "Procurement and delivery timeline"
+        },
+        {
+          "session": 3,
+          "idx": 30,
+          "key": "storage_vendor_delay",
+          "value": "Primary vendor for storage modernization has 8-week delay in enterprise contract onboarding"
+        },
+        {
+          "session": 3,
+          "idx": 31,
+          "key": "go_live_date",
+          "value": "Formally pushed from Q3 2026 to Q4 2026 by steering committee"
+        },
+        {
+          "session": 3,
+          "idx": 32,
+          "key": "ci_cd_tool",
+          "value": "Jenkins self-hosted on EC2 for migration pipeline"
+        },
+        {
+          "session": 3,
+          "idx": 33,
+          "key": "observability_tool",
+          "value": "CloudWatch (AWS-native), nothing else for now"
+        },
+        {
+          "session": 3,
+          "idx": 34,
+          "key": "security_scanning_tool",
+          "value": "AWS Inspector for both runtime VMs and container images"
+        },
+        {
+          "session": 3,
+          "idx": 35,
+          "key": "cutover_max_downtime",
+          "value": "Maximum acceptable downtime is 4 hours; longer triggers CIO escalation"
+        },
+        {
+          "session": 3,
+          "idx": 36,
+          "key": "auth_provider",
+          "value": "Okta for internal authentication; not moving to AWS IAM Identity Center"
+        },
+        {
+          "session": 3,
+          "idx": 37,
+          "key": "dms_licensing",
+          "value": "AWS DMS license required for SQL Server migration, covered by annual cloud budget"
+        },
+        {
+          "session": 3,
+          "idx": 38,
+          "key": "aurora_phase2_ship_date",
+          "value": "Project Aurora Phase 2 engineering ship date set for May 2026"
+        },
+        {
+          "session": 3,
+          "idx": 39,
+          "key": "weekly_meeting_schedule",
+          "value": "Weekly status meetings every Thursday at 10am PT in Nexus-North war room"
+        },
+        {
+          "session": 3,
+          "idx": 40,
+          "key": "consulting_firm_location",
+          "value": "Headquartered in Austin, Texas"
+        },
+        {
+          "session": 3,
+          "idx": 41,
+          "key": "next_session_topic",
+          "value": "Post-audit revisions"
+        },
+        {
+          "session": 3,
+          "idx": 42,
+          "key": "jenkins_platform_history",
+          "value": "Titan's Jenkins platform has run production for 6+ years; team is deeply familiar with it"
+        },
+        {
+          "session": 3,
+          "idx": 43,
+          "key": "dms_cost_flagging",
+          "value": "Team needs to flag DMS license cost in the cost model"
+        },
+        {
+          "session": 3,
+          "idx": 44,
+          "key": "okta_scope",
+          "value": "Existing Okta deployment serves every internal tool"
+        },
+        {
+          "session": 4,
+          "idx": 45,
+          "key": "db.postgres_version",
+          "value": "PostgreSQL 16 from start; v14 plan retired"
+        },
+        {
+          "session": 4,
+          "idx": 46,
+          "key": "gdpr.analytics_classification",
+          "value": "Customer analytics is Confidential, not Internal"
+        },
+        {
+          "session": 4,
+          "idx": 47,
+          "key": "network.architecture",
+          "value": "AWS Cloud WAN replaces Transit Gateway"
+        },
+        {
+          "session": 4,
+          "idx": 48,
+          "key": "observability.primary_platform",
+          "value": "Datadog primary; CloudWatch fallback only"
+        },
+        {
+          "session": 4,
+          "idx": 49,
+          "key": "migration.ai_vpc_endpoint_rule",
+          "value": "VPC endpoint required for Bedrock/SageMaker for US residency"
+        },
+        {
+          "session": 4,
+          "idx": 50,
+          "key": "migration.kinesis_coupling",
+          "value": "Kinesis migrates with customer analytics workload"
+        },
+        {
+          "session": 4,
+          "idx": 51,
+          "key": "project.quetzal_announcement",
+          "value": "Phase 2 announcement July 2026"
+        },
+        {
+          "session": 4,
+          "idx": 52,
+          "key": "person.maria_credentials",
+          "value": "PhD CS UC Berkeley"
+        },
+        {
+          "session": 4,
+          "idx": 53,
+          "key": "project.internal_codename",
+          "value": "Project Quetzal (internal only)"
+        },
+        {
+          "session": 4,
+          "idx": 54,
+          "key": "dr.rpo_primary",
+          "value": "15 minutes for primary production workloads"
+        },
+        {
+          "session": 4,
+          "idx": 55,
+          "key": "gdpr.audit_reviewer",
+          "value": "Morrison & Brooks reviewed analytics classification"
+        },
+        {
+          "session": 4,
+          "idx": 56,
+          "key": "network.throughput_issue",
+          "value": "Transit Gateway had cross-region throughput limits"
+        },
+        {
+          "session": 4,
+          "idx": 57,
+          "key": "project.quetzal_scope",
+          "value": "Not visible outside Titan; no user-facing artifacts"
+        },
+        {
+          "session": 4,
+          "idx": 58,
+          "key": "dr.replication_posture",
+          "value": "Continuous replication between Nexus-North and Nexus-South"
+        },
+        {
+          "session": 4,
+          "idx": 59,
+          "key": "project.announcement_rationale",
+          "value": "July 2026 allows for app-store review and marketing warm-up"
+        },
+        {
+          "session": 5,
+          "idx": 60,
+          "key": "week5_status",
+          "value": "Final review before steering committee greenlight pending"
+        },
+        {
+          "session": 5,
+          "idx": 61,
+          "key": "policy.aws_dual_vendor_waiver",
+          "value": "VP waived dual-vendor rule for AWS-native services; applies to non-AWS like Wiz/Datadog"
+        },
+        {
+          "session": 5,
+          "idx": 62,
+          "key": "ci_cd_platform",
+          "value": "Pivoted to GitHub Actions Enterprise; Jenkins EOL'd end of last quarter"
+        },
+        {
+          "session": 5,
+          "idx": 63,
+          "key": "security_scanner",
+          "value": "Replacing AWS Inspector with Wiz due to Inspector's inability to scan third-party containers"
+        },
+        {
+          "session": 5,
+          "idx": 64,
+          "key": "tcu_route53_cost_rule",
+          "value": "Multi-region active-active doubles Route 53 health check costs (independent checks per region)"
+        },
+        {
+          "session": 5,
+          "idx": 65,
+          "key": "aurora_serverless_soc2_rule",
+          "value": "Aurora Serverless v2 min ACU must be 0.5+ for SOC 2 audit logging; below 0.5 stops streaming"
+        },
+        {
+          "session": 5,
+          "idx": 66,
+          "key": "procurement_appsync_condition",
+          "value": "Add AWS AppSync if client apps need offline support; separate procurement cycle"
+        },
+        {
+          "session": 5,
+          "idx": 67,
+          "key": "titan_parent_acquisition",
+          "value": "Parent acquired Titan in 2019 for $1.2B, causing board-level visibility"
+        },
+        {
+          "session": 5,
+          "idx": 68,
+          "key": "priya_coffee_pref",
+          "value": "Takes espresso, neat"
+        },
+        {
+          "session": 5,
+          "idx": 69,
+          "key": "titan_internal_comms",
+          "value": "Slack is Titan's internal comms tool for program updates"
+        },
+        {
+          "session": 5,
+          "idx": 70,
+          "key": "titan_cafeteria_offer",
+          "value": "Free Tuesday breakfast all quarter"
+        },
+        {
+          "session": 5,
+          "idx": 71,
+          "key": "week5_session_number",
+          "value": "Session 5 of multi-session intake"
+        },
+        {
+          "session": 5,
+          "idx": 72,
+          "key": "policy.aws_managed_services_list",
+          "value": "RDS, Aurora, Lambda are AWS-native and exempt from dual-vendor rule"
+        },
+        {
+          "session": 5,
+          "idx": 73,
+          "key": "security_wiz_pilot_status",
+          "value": "Security team already piloted Wiz on a smaller project last quarter"
+        }
+      ],
+      "elapsed_s": 413.2
+    },
+    {
+      "condition": "D_markdown",
+      "run": 0,
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: SOC 2 Type II\nSource: Session 4"
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: AWS\nSource: Session 3"
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 3"
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 3"
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: Okta\nSource: Session 3"
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: Q4 2026\nSource: Session 3"
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Answer: PostgreSQL 16\nSource: Session 4"
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: Datadog\nSource: Session 4"
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: AWS Cloud WAN\nSource: Session 4"
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: GitHub Actions Enterprise\nSource: Session 5"
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: AWS Kinesis stream infrastructure\nSource: Session 4"
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: A VPC endpoint\nSource: Session 4"
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: The minimum ACU configuration is 0.5 or higher; below 0.5 the instance goes idle and audit log streaming stops.\nSource: Session 5"
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 3"
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 3"
+        }
+      ],
+      "final_markdown_len": 7500,
+      "final_markdown": "ta includes PHI (via their wellness vertical), PII, and general business data. The customer analytics dataset was classified as Internal \u2014 not Confidential \u2014 based on the types of fields captured. Morrison & Brooks also flagged that if the migration ever touches East Coast analytics data (including any anonymized derivatives), we need explicit NY office sign-off from them before the cutover \u2014 this is a hard requirement.\n\nThe database plan: the primary RDBMS target is AWS RDS for PostgreSQL 14 Managed. Our analytics workloads will run on separate Aurora Serverless clusters. Procurement rules were reviewed: under Titan's current policy, ANY procurement over $500K requires dual-vendor approval \u2014 you have to price at least two vendors and document why you picked one. This is a hard gate for all AWS line items over that threshold.\n\nNetwork architecture will be hub-and-spoke via AWS Transit Gateway, with all VPCs attached to a central transit hub in us-west-2.\n\nThe building was renovated in 2024, by the way \u2014 whoever visits will see a different lobby than the older photos online. Next week: procurement and delivery timeline.\n\n## Session 3 \u2014 Week 3 \u2014 Procurement + delivery plan\n\nWeek 3's session opened with some hard news: the primary vendor for the storage modernization piece informed us of an 8-week delay in their enterprise contract onboarding. After reviewing the chain of dependencies, the steering committee formally pushed the go-live date from Q3 2026 to Q4 2026. The rest of the plan adjusts around this.\n\nCI/CD was decided: we will use Jenkins self-hosted on EC2 for the migration pipeline. Titan's Jenkins platform has been running production for 6+ years and the team is deeply familiar with it. Observability will use CloudWatch \u2014 AWS-native, and nothing else for now. For security scanning, we will use AWS Inspector for both runtime VMs and container images.\n\nThe migration cutover window was scoped: maximum acceptable downtime for the cutover itself is 4 hours. Anything longer triggers escalation to the CIO and potentially to the parent company. Titan is keeping Okta for internal authentication \u2014 their existing Okta deployment serves every internal tool and they're not moving to AWS IAM Identity Center for workforce identity.\n\nWorkload-specific planning was also discussed. If the team migrates Titan's on-premise SQL Server to the cloud, AWS DMS (Database Migration Service) licensing is required; the DMS license cost is covered by the annual cloud budget, but the team needs to flag it in the cost model.\n\nOn the consumer-app side, Priya flagged that Project Aurora's 'Phase 2' engineering ship date is currently set for May 2026 \u2014 that's the internal ship milestone, when the engineering build is ready. Weekly status meetings happen every Thursday at 10am PT and are held in the Nexus-North war room. The consulting firm is headquartered in Austin, Texas.\n\nNext session: post-audit revisions.\n\n## Session 4 \u2014 Week 4 \u2014 Post-audit revisions\n\nWeek 4's session was driven by revisions after two reviews: an RDS service update and a GDPR audit of the analytics dataset.\n\nFirst: RDS for PostgreSQL 16 support went GA this week, which means our managed-tier upgrade path is now open. The database plan is revised: we'll provision PostgreSQL 16 from the start, not PostgreSQL 14. The 14 plan is retired.\n\nSecond: the GDPR audit flagged cross-border query patterns in the customer analytics dataset. After joint review with Morrison & Brooks, the classification was revised: customer analytics is now Confidential, not Internal. This pulls stricter retention, access, and audit controls.\n\nDuring load testing of the Transit Gateway design, the team hit throughput limits on cross-region traffic. After benchmarking, we switched the network architecture from Transit Gateway to AWS Cloud WAN, which gives us better cross-region throughput and policy management. Transit Gateway is no longer in the design.\n\nObservability stack was also expanded: we've added Datadog as the primary observability platform (APM, logs, metrics, traces), with CloudWatch demoted to a fallback for AWS-native metrics only. The dashboards the ops team will look at every day are in Datadog, not CloudWatch.\n\nThe migration roadmap also explicitly called out two new workload-specific rules: if the AWS managed AI services (Bedrock or SageMaker) are used in any tier, a VPC endpoint is required to satisfy our US-only data residency. And if the customer analytics workload migrates, we also migrate the AWS Kinesis stream infrastructure along with it \u2014 they're coupled.\n\nFor Aurora (the customer mobile app), Maria clarified the schedule: the Phase 2 customer announcement date is July 2026 \u2014 that's the marketing/PR moment, which is deliberately later than the engineering ship date to give time for the app-store review and the marketing warm-up. Maria herself, by the way, has a PhD in computer science from UC Berkeley, which comes up occasionally in her architecture reviews. The project codename, internally, is Project Quetzal; that's not visible to anyone outside Titan and doesn't appear in any user-facing artifacts.\n\nDisaster recovery: the RPO (recovery point objective) is 15 minutes for the primary production workloads. That drives the continuous replication posture between Nexus-North and Nexus-South.\n\n## Session 5 \u2014 Week 5 \u2014 Final plan before greenlight\n\nWeek 5's session was the final review before the steering committee greenlight.\n\nPriya announced that the VP of Cloud Engineering formally waived the dual-vendor approval requirement for AWS-native services \u2014 since there is only one vendor for managed AWS services, the policy did not make sense for that category. The dual-vendor rule still applies to any non-AWS-native procurements (like Wiz, Datadog, etc.) but not to RDS, Aurora, Lambda, and the other AWS managed services. This is an important policy update.\n\nThe CI/CD plan changed: Titan IT formally end-of-lifed the self-hosted Jenkins platform at the end of last quarter (the company is no longer staffing Jenkins expertise internally), so the migration plan pivots to GitHub Actions Enterprise. The pipeline work needs rework but it's tractable. Jenkins is out.\n\nSecurity scanning: AWS Inspector turned out to be limited \u2014 it couldn't scan our third-party container images in the way the security team needs. We're replacing it with Wiz, which the security team already piloted on a smaller project last quarter. Inspector is out of the plan.\n\nTwo more workload rules were added: if we go with multi-region active-active for any tier, Route 53 health check costs double because you need independent checks per region \u2014 fold this into the TCO model. And if we adopt Aurora Serverless v2 for variable-load workloads, the minimum ACU must be configured at 0.5 or higher to satisfy the SOC 2 Type II audit logging requirement (below 0.5 the instance goes idle and audit log streaming stops).\n\nFinally, if any of the client apps need to support offline use, AWS AppSync has to be added to the procurement list \u2014 it's not in the current plan and would be a separate procurement cycle.\n\nHousekeeping: Titan's parent company acquired Titan in 2019 for $1.2B, which is why the migration has board-level visibility. Priya takes her coffee as espresso, neat. Slack is Titan's internal comms tool and will be used for program updates. Titan's cafeteria is serving free Tuesday breakfast all quarter \u2014 genuinely a highlight.\n\nThe steering committee greenlight is pending.",
+      "final_context_chars": 7500,
+      "elapsed_s": 23.2
+    },
+    {
+      "condition": "D_markdown",
+      "run": 1,
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: SOC 2 Type II\nSource: Session 4"
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: AWS\nSource: Session 3"
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 3"
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session <N>"
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: Okta\nSource: Session 3"
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: Q4 2026\nSource: Session 3"
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Answer: PostgreSQL 16\nSource: Session 4"
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: Datadog\nSource: Session 4"
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: AWS Cloud WAN\nSource: Session 4"
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: GitHub Actions Enterprise\nSource: Session 5"
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: AWS Kinesis stream infrastructure\nSource: Session 4"
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: A VPC endpoint is required.\nSource: Session 4"
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: The minimum ACU configuration is 0.5 or higher; below 0.5 the instance goes idle and audit log streaming stops.\nSource: Session 5"
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 3"
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: UNKNOWN\nSource: Session 3"
+        }
+      ],
+      "final_markdown_len": 7500,
+      "final_markdown": "ta includes PHI (via their wellness vertical), PII, and general business data. The customer analytics dataset was classified as Internal \u2014 not Confidential \u2014 based on the types of fields captured. Morrison & Brooks also flagged that if the migration ever touches East Coast analytics data (including any anonymized derivatives), we need explicit NY office sign-off from them before the cutover \u2014 this is a hard requirement.\n\nThe database plan: the primary RDBMS target is AWS RDS for PostgreSQL 14 Managed. Our analytics workloads will run on separate Aurora Serverless clusters. Procurement rules were reviewed: under Titan's current policy, ANY procurement over $500K requires dual-vendor approval \u2014 you have to price at least two vendors and document why you picked one. This is a hard gate for all AWS line items over that threshold.\n\nNetwork architecture will be hub-and-spoke via AWS Transit Gateway, with all VPCs attached to a central transit hub in us-west-2.\n\nThe building was renovated in 2024, by the way \u2014 whoever visits will see a different lobby than the older photos online. Next week: procurement and delivery timeline.\n\n## Session 3 \u2014 Week 3 \u2014 Procurement + delivery plan\n\nWeek 3's session opened with some hard news: the primary vendor for the storage modernization piece informed us of an 8-week delay in their enterprise contract onboarding. After reviewing the chain of dependencies, the steering committee formally pushed the go-live date from Q3 2026 to Q4 2026. The rest of the plan adjusts around this.\n\nCI/CD was decided: we will use Jenkins self-hosted on EC2 for the migration pipeline. Titan's Jenkins platform has been running production for 6+ years and the team is deeply familiar with it. Observability will use CloudWatch \u2014 AWS-native, and nothing else for now. For security scanning, we will use AWS Inspector for both runtime VMs and container images.\n\nThe migration cutover window was scoped: maximum acceptable downtime for the cutover itself is 4 hours. Anything longer triggers escalation to the CIO and potentially to the parent company. Titan is keeping Okta for internal authentication \u2014 their existing Okta deployment serves every internal tool and they're not moving to AWS IAM Identity Center for workforce identity.\n\nWorkload-specific planning was also discussed. If the team migrates Titan's on-premise SQL Server to the cloud, AWS DMS (Database Migration Service) licensing is required; the DMS license cost is covered by the annual cloud budget, but the team needs to flag it in the cost model.\n\nOn the consumer-app side, Priya flagged that Project Aurora's 'Phase 2' engineering ship date is currently set for May 2026 \u2014 that's the internal ship milestone, when the engineering build is ready. Weekly status meetings happen every Thursday at 10am PT and are held in the Nexus-North war room. The consulting firm is headquartered in Austin, Texas.\n\nNext session: post-audit revisions.\n\n## Session 4 \u2014 Week 4 \u2014 Post-audit revisions\n\nWeek 4's session was driven by revisions after two reviews: an RDS service update and a GDPR audit of the analytics dataset.\n\nFirst: RDS for PostgreSQL 16 support went GA this week, which means our managed-tier upgrade path is now open. The database plan is revised: we'll provision PostgreSQL 16 from the start, not PostgreSQL 14. The 14 plan is retired.\n\nSecond: the GDPR audit flagged cross-border query patterns in the customer analytics dataset. After joint review with Morrison & Brooks, the classification was revised: customer analytics is now Confidential, not Internal. This pulls stricter retention, access, and audit controls.\n\nDuring load testing of the Transit Gateway design, the team hit throughput limits on cross-region traffic. After benchmarking, we switched the network architecture from Transit Gateway to AWS Cloud WAN, which gives us better cross-region throughput and policy management. Transit Gateway is no longer in the design.\n\nObservability stack was also expanded: we've added Datadog as the primary observability platform (APM, logs, metrics, traces), with CloudWatch demoted to a fallback for AWS-native metrics only. The dashboards the ops team will look at every day are in Datadog, not CloudWatch.\n\nThe migration roadmap also explicitly called out two new workload-specific rules: if the AWS managed AI services (Bedrock or SageMaker) are used in any tier, a VPC endpoint is required to satisfy our US-only data residency. And if the customer analytics workload migrates, we also migrate the AWS Kinesis stream infrastructure along with it \u2014 they're coupled.\n\nFor Aurora (the customer mobile app), Maria clarified the schedule: the Phase 2 customer announcement date is July 2026 \u2014 that's the marketing/PR moment, which is deliberately later than the engineering ship date to give time for the app-store review and the marketing warm-up. Maria herself, by the way, has a PhD in computer science from UC Berkeley, which comes up occasionally in her architecture reviews. The project codename, internally, is Project Quetzal; that's not visible to anyone outside Titan and doesn't appear in any user-facing artifacts.\n\nDisaster recovery: the RPO (recovery point objective) is 15 minutes for the primary production workloads. That drives the continuous replication posture between Nexus-North and Nexus-South.\n\n## Session 5 \u2014 Week 5 \u2014 Final plan before greenlight\n\nWeek 5's session was the final review before the steering committee greenlight.\n\nPriya announced that the VP of Cloud Engineering formally waived the dual-vendor approval requirement for AWS-native services \u2014 since there is only one vendor for managed AWS services, the policy did not make sense for that category. The dual-vendor rule still applies to any non-AWS-native procurements (like Wiz, Datadog, etc.) but not to RDS, Aurora, Lambda, and the other AWS managed services. This is an important policy update.\n\nThe CI/CD plan changed: Titan IT formally end-of-lifed the self-hosted Jenkins platform at the end of last quarter (the company is no longer staffing Jenkins expertise internally), so the migration plan pivots to GitHub Actions Enterprise. The pipeline work needs rework but it's tractable. Jenkins is out.\n\nSecurity scanning: AWS Inspector turned out to be limited \u2014 it couldn't scan our third-party container images in the way the security team needs. We're replacing it with Wiz, which the security team already piloted on a smaller project last quarter. Inspector is out of the plan.\n\nTwo more workload rules were added: if we go with multi-region active-active for any tier, Route 53 health check costs double because you need independent checks per region \u2014 fold this into the TCO model. And if we adopt Aurora Serverless v2 for variable-load workloads, the minimum ACU must be configured at 0.5 or higher to satisfy the SOC 2 Type II audit logging requirement (below 0.5 the instance goes idle and audit log streaming stops).\n\nFinally, if any of the client apps need to support offline use, AWS AppSync has to be added to the procurement list \u2014 it's not in the current plan and would be a separate procurement cycle.\n\nHousekeeping: Titan's parent company acquired Titan in 2019 for $1.2B, which is why the migration has board-level visibility. Priya takes her coffee as espresso, neat. Slack is Titan's internal comms tool and will be used for program updates. Titan's cafeteria is serving free Tuesday breakfast all quarter \u2014 genuinely a highlight.\n\nThe steering committee greenlight is pending.",
+      "final_context_chars": 7500,
+      "elapsed_s": 22.1
+    }
+  ]
+}

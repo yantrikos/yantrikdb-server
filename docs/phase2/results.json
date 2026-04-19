@@ -1,0 +1,3283 @@
+{
+  "cases": [
+    {
+      "id": "A_rumor_amplification",
+      "title": "Drug efficacy: 5 citing one study vs 2 independent RCTs",
+      "narrative": "Consider the following evidence about the drug XJ-417:\n\n(1) Nova Pharma (manufacturer) published a Nov 2022 press release claiming their observational study showed a 34% reduction in cardiac events in Population Group A. n=412.\n\n(2) Reuters Medical reported the Nova Pharma finding (Nov 28, 2022), citing the company release.\n(3) STAT News reported it the same week, citing Nova Pharma.\n(4) Bloomberg Health Daily reported it in early December, citing Nova Pharma.\n(5) Medscape published a summary, citing Nova Pharma.\n\n(6) Tokyo University Cardiology ran a pre-registered randomized controlled trial (n=2,847) completing in August 2023, looking at the same outcome in the same population. Result: no significant effect (HR 0.97, p=0.68).\n(7) Mayo Clinic, independently, ran a separate RCT (n=3,104) completing in October 2023, same question. Result: no significant effect (HR 1.01, p=0.41).",
+      "question": "Question: based on this evidence, does XJ-417 significantly reduce cardiac mortality in Population Group A?",
+      "ground_truth": "no",
+      "why_substrate_matters": "Naive count is 5-to-2 for 'yes'. The 5 positives all derive from Nova Pharma's single observational study. The 2 negatives are independent pre-registered RCTs. The substrate should show dependence discount on the 5 and full independence on the 2.",
+      "prop": {
+        "src": "XJ_417",
+        "rel_type": "reduces_mortality_in",
+        "dst": "cardiac_population_A"
+      },
+      "claims": [
+        {
+          "src": "XJ_417",
+          "rel_type": "reduces_mortality_in",
+          "dst": "cardiac_population_A",
+          "polarity": 1,
+          "extractor": "nova_pharma_release",
+          "source_lineage": [
+            "nova_pharma"
+          ]
+        },
+        {
+          "src": "XJ_417",
+          "rel_type": "reduces_mortality_in",
+          "dst": "cardiac_population_A",
+          "polarity": 1,
+          "extractor": "reuters_medical",
+          "source_lineage": [
+            "nova_pharma",
+            "reuters_medical"
+          ]
+        },
+        {
+          "src": "XJ_417",
+          "rel_type": "reduces_mortality_in",
+          "dst": "cardiac_population_A",
+          "polarity": 1,
+          "extractor": "stat_news",
+          "source_lineage": [
+            "nova_pharma",
+            "stat_news"
+          ]
+        },
+        {
+          "src": "XJ_417",
+          "rel_type": "reduces_mortality_in",
+          "dst": "cardiac_population_A",
+          "polarity": 1,
+          "extractor": "bloomberg_health",
+          "source_lineage": [
+            "nova_pharma",
+            "bloomberg_health"
+          ]
+        },
+        {
+          "src": "XJ_417",
+          "rel_type": "reduces_mortality_in",
+          "dst": "cardiac_population_A",
+          "polarity": 1,
+          "extractor": "medscape",
+          "source_lineage": [
+            "nova_pharma",
+            "medscape"
+          ]
+        },
+        {
+          "src": "XJ_417",
+          "rel_type": "reduces_mortality_in",
+          "dst": "cardiac_population_A",
+          "polarity": -1,
+          "extractor": "tokyo_u_rct",
+          "source_lineage": [
+            "tokyo_u"
+          ]
+        },
+        {
+          "src": "XJ_417",
+          "rel_type": "reduces_mortality_in",
+          "dst": "cardiac_population_A",
+          "polarity": -1,
+          "extractor": "mayo_clinic_rct",
+          "source_lineage": [
+            "mayo_clinic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "B_temporal_state_change",
+      "title": "Who is CEO of Acme: 2017 or 2024?",
+      "narrative": "Consider the following sources about Acme Corp's leadership:\n\n(1) Reuters, 2016-03-15: \"Alice Chen named CEO of Acme Corp, effective immediately.\"\n(2) Bloomberg, 2017-02-08: \"Acme CEO Alice Chen to lead strategic review.\"\n(3) Wall Street Journal, 2018-11-22: \"Alice Chen, CEO of Acme, testified before Congress.\"\n\n(4) Financial Times, 2023-06-10: \"Bob Torres named new CEO of Acme Corp, succeeding outgoing chief.\"\n(5) Reuters, 2023-09-22: \"Acme CEO Bob Torres announces Q3 results.\"\n(6) Bloomberg, 2024-05-14: \"Bob Torres, CEO of Acme, unveils new product line.\"\n\nAlice's tenure ended mid-2023. Bob's began mid-2023.",
+      "question": "Question: was Alice Chen the CEO of Acme Corp in 2017?",
+      "ground_truth": "yes",
+      "why_substrate_matters": "Naive polarity might register 3-vs-3 as a deadlock or pick 'Bob' by recency. The substrate should show temporal_separable_opposition=9 (all 3x3 pairs) and temporal_overlap_conflict=0: this is a state change, not a present-tense contradiction. The 2017 question is unambiguously yes, and the substrate's temporal split makes that legible.",
+      "prop": {
+        "src": "alice_chen",
+        "rel_type": "is_ceo_of",
+        "dst": "acme_corp"
+      },
+      "claims": [
+        {
+          "src": "alice_chen",
+          "rel_type": "is_ceo_of",
+          "dst": "acme_corp",
+          "polarity": 1,
+          "extractor": "reuters_2016",
+          "source_lineage": [
+            "reuters"
+          ],
+          "valid_from": 1458000000.0,
+          "valid_to": 1688000000.0
+        },
+        {
+          "src": "alice_chen",
+          "rel_type": "is_ceo_of",
+          "dst": "acme_corp",
+          "polarity": 1,
+          "extractor": "bloomberg_2017",
+          "source_lineage": [
+            "bloomberg"
+          ],
+          "valid_from": 1486000000.0,
+          "valid_to": 1688000000.0
+        },
+        {
+          "src": "alice_chen",
+          "rel_type": "is_ceo_of",
+          "dst": "acme_corp",
+          "polarity": 1,
+          "extractor": "wsj_2018",
+          "source_lineage": [
+            "wsj"
+          ],
+          "valid_from": 1542000000.0,
+          "valid_to": 1688000000.0
+        },
+        {
+          "src": "alice_chen",
+          "rel_type": "is_ceo_of",
+          "dst": "acme_corp",
+          "polarity": -1,
+          "extractor": "ft_2023",
+          "source_lineage": [
+            "ft"
+          ],
+          "valid_from": 1686000000.0
+        },
+        {
+          "src": "alice_chen",
+          "rel_type": "is_ceo_of",
+          "dst": "acme_corp",
+          "polarity": -1,
+          "extractor": "reuters_2023",
+          "source_lineage": [
+            "reuters"
+          ],
+          "valid_from": 1695000000.0
+        },
+        {
+          "src": "alice_chen",
+          "rel_type": "is_ceo_of",
+          "dst": "acme_corp",
+          "polarity": -1,
+          "extractor": "bloomberg_2024",
+          "source_lineage": [
+            "bloomberg"
+          ],
+          "valid_from": 1715000000.0
+        }
+      ]
+    },
+    {
+      "id": "C_same_source_retraction",
+      "title": "Reuters asserts then retracts; syndicators only saw the original",
+      "narrative": "Consider claims about whether the recent SEC filing by Company Q contained misstated revenue:\n\n(1) Reuters, 2018-04-10: \"Analysis of Company Q's filing shows misstated revenue of ~$200M.\" (Original investigative report.)\n(2) BBC, 2018-04-11: \"Reuters reports Company Q revenue misstatement.\" (Citing Reuters.)\n(3) CNN, 2018-04-12: \"Reuters analysis finds Company Q revenue issue.\" (Citing Reuters.)\n(4) Associated Press, 2018-04-14: \"Per Reuters investigation, Company Q's filing allegedly misstated revenue.\" (Citing Reuters.)\n\n(5) Reuters, 2022-03-22: CORRECTION. \"Our 2018 analysis of Company Q's filing contained an error in the aggregation methodology. After review with the company's CFO and independent review, we find the original filing was accurate. We retract the 2018 finding.\"\n\nThe syndicator outlets (BBC, CNN, AP) did not issue corrections; their archives still carry the 2018 story.",
+      "question": "Question: based on all available evidence, did Company Q's 2018 SEC filing contain misstated revenue?",
+      "ground_truth": "no",
+      "why_substrate_matters": "Naive count: 4 sources say 'yes' (Reuters 2018 + 3 syndicators), 1 says 'no' (Reuters 2022 correction). Majority picks 'yes'. Substrate should fire SAME_SOURCE_CONFLICT flag (same normalized lineage [reuters] with opposite polarity) \u2014 Reuters retracted itself. The 3 syndicators are all downstream of the retracted original. Correct answer: no misstatement; Reuters retracted.",
+      "prop": {
+        "src": "company_q_2018_filing",
+        "rel_type": "contains",
+        "dst": "misstated_revenue"
+      },
+      "claims": [
+        {
+          "src": "company_q_2018_filing",
+          "rel_type": "contains",
+          "dst": "misstated_revenue",
+          "polarity": 1,
+          "extractor": "reuters_original",
+          "source_lineage": [
+            "reuters"
+          ]
+        },
+        {
+          "src": "company_q_2018_filing",
+          "rel_type": "contains",
+          "dst": "misstated_revenue",
+          "polarity": 1,
+          "extractor": "bbc_2018",
+          "source_lineage": [
+            "reuters",
+            "bbc"
+          ]
+        },
+        {
+          "src": "company_q_2018_filing",
+          "rel_type": "contains",
+          "dst": "misstated_revenue",
+          "polarity": 1,
+          "extractor": "cnn_2018",
+          "source_lineage": [
+            "reuters",
+            "cnn"
+          ]
+        },
+        {
+          "src": "company_q_2018_filing",
+          "rel_type": "contains",
+          "dst": "misstated_revenue",
+          "polarity": 1,
+          "extractor": "ap_2018",
+          "source_lineage": [
+            "reuters",
+            "ap"
+          ]
+        },
+        {
+          "src": "company_q_2018_filing",
+          "rel_type": "contains",
+          "dst": "misstated_revenue",
+          "polarity": -1,
+          "extractor": "reuters_correction",
+          "source_lineage": [
+            "reuters"
+          ]
+        }
+      ]
+    }
+  ],
+  "results": [
+    {
+      "case_id": "A_rumor_amplification",
+      "condition": "C1_bare",
+      "run": 0,
+      "elapsed_s": 141.4,
+      "tool_calls": 0,
+      "raw_answer": "no",
+      "ground_truth": "no",
+      "correct": true,
+      "final_text": "Based on the provided evidence, XJ-417 does not significantly reduce cardiac mortality in Population Group A. Here is the step-by-step analytical reasoning:\n\n1. **Hierarchy of Evidence & Potential Bias:** The initial claim of a 34% reduction comes from a small (n=412), manufacturer-sponsored observational study. Observational studies are inherently susceptible to confounding variables, selection bias, and industry sponsorship bias. The subsequent reports from Reuters, STAT, Bloomberg, and Medscape merely relayed the company's press release without independent peer review or verification.\n\n2. **Independent Validation via Gold Standard Design:** Two large, independent, pre-registered randomized controlled trials (RCTs) were conducted to answer the exact same clinical question. RCTs are the highest level of clinical evidence for establishing causal efficacy because randomization minimizes confounding and blinding reduces bias.\n\n3. **Statistical Interpretation:** \n   - Tokyo University trial (n=2,847): HR = 0.97, p = 0.68\n   - Mayo Clinic trial (n=3,104): HR = 1.01, p = 0.41\n   Both hazard ratios are extremely close to 1.0 (indicating virtually no difference between treatment and control), and both p-values are well above the standard threshold for statistical significance (p < 0.05). The large sample sizes and pre-registration further confirm that these null findings are robust and not due to underpowering or data dredging.\n\n4. **Synthesis:** The high-quality, independent RCT data directly contradicts the manufacturer's preliminary observational data. In evidence-based medicine, well-conducted independent RCTs override smaller, non-randomized, sponsor-driven studies. Additionally, while the evidence specifically measures \"cardiac events\" rather than strictly \"cardiac mortality,\" a lack of significant effect on the broader composite outcome in large-scale trials definitively indicates no significant mortality benefit.\n\nConclusion: no",
+      "trace": []
+    },
+    {
+      "case_id": "A_rumor_amplification",
+      "condition": "C1_bare",
+      "run": 1,
+      "elapsed_s": 133.3,
+      "tool_calls": 0,
+      "raw_answer": "unclear",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "Based on the provided evidence, XJ-417 does not significantly reduce cardiac mortality (or cardiac events) in Population Group A. Here is the step-by-step reasoning:\n\n1. **Hierarchy of Evidence:** The initial claim of a 34% reduction originates from a manufacturer-sponsored observational study. Observational studies are inherently prone to confounding variables, selection bias, and cannot establish causality as reliably as randomized controlled trials (RCTs).\n2. **Sample Size and Statistical Power:** The observational study had a small sample size (n=412). In contrast, the two independent studies were pre-registered RCTs with substantially larger sample sizes (n=2,847 and n=3,104), giving them far greater statistical power to reliably detect true effects or confirm their absence.\n3. **Results Comparison:** The Tokyo University and Mayo Clinic RCTs both reported hazard ratios extremely close to 1.0 (0.97 and 1.01) with high p-values (0.68 and 0.41). This indicates no statistically significant difference between the treatment and control groups. The prompt explicitly states these trials investigated the \"same outcome\" in the \"same population.\"\n4. **Source Bias vs. Independent Verification:** The early media reports (Reuters, STAT, Bloomberg, Medscape) simply repeated the manufacturer's press release without independent verification. The subsequent high-quality, independent trials directly contradict the initial claim.\n5. **Scientific Consensus:** In evidence-based medicine, when large, independent RCTs conflict with smaller, observational, or industry-sponsored studies, the RCTs take precedence. The consistent null results across two rigorously designed trials strongly indicate that XJ-417 does not produce a significant reduction in cardiac outcomes in this population.\n\nConclusion: no",
+      "trace": []
+    },
+    {
+      "case_id": "A_rumor_amplification",
+      "condition": "C2_tools_framed",
+      "run": 0,
+      "elapsed_s": 263.8,
+      "tool_calls": 9,
+      "raw_answer": "unknown",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "Nova Pharma",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4ec-0eeb-7a3d-b80c-1b549018d815",
+            "namespace": "default",
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "Reuters Medical",
+            "source_lineage": [
+              "Reuters Medical",
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4ec-16e6-7997-afa4-061f8e198baa",
+            "namespace": "default",
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "source_lineage": [
+              "Reuters Medical",
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "STAT News",
+            "source_lineage": [
+              "STAT News",
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4ec-1edb-7ee2-ab73-c957c1689726",
+            "namespace": "default",
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "source_lineage": [
+              "STAT News",
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "Bloomberg Health Daily",
+            "source_lineage": [
+              "Bloomberg Health Daily",
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4ec-26d6-7d61-a79d-292b32358d4b",
+            "namespace": "default",
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "source_lineage": [
+              "Bloomberg Health Daily",
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "Medscape",
+            "source_lineage": [
+              "Medscape",
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4ec-2ed0-76e6-b052-1268a0241787",
+            "namespace": "default",
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "source_lineage": [
+              "Medscape",
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": -1,
+            "extractor": "Tokyo University Cardiology",
+            "source_lineage": [
+              "Tokyo University Cardiology"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4ec-36ce-7774-8312-d15b9fdeae56",
+            "namespace": "default",
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "source_lineage": [
+              "Tokyo University Cardiology"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": -1,
+            "extractor": "Mayo Clinic",
+            "source_lineage": [
+              "Mayo Clinic"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4ec-3ed8-7f05-b15f-73dddafc397c",
+            "namespace": "default",
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "source_lineage": [
+              "Mayo Clinic"
+            ]
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 2,
+              "attack_effective_independence": 2.0,
+              "attack_mass": 2.0,
+              "computed_at": 1776588439,
+              "content_hash": "c8948cac32b9e43562739c45dc3dfaa88a70cd947f5fd51501e36fbdfe80fc51",
+              "derivation_version": 1,
+              "heuristic_flags": 16,
+              "live_claim_count": 7,
+              "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 5,
+              "support_effective_independence": 4.545454545454545,
+              "support_mass": 4.545454545454545,
+              "temporal_overlap_conflict_count": 10,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 16,
+              "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": [
+                [
+                  "019da4ec-0eeb-7a3d-b80c-1b549018d815",
+                  "019da4ec-36ce-7774-8312-d15b9fdeae56"
+                ],
+                [
+                  "019da4ec-0eeb-7a3d-b80c-1b549018d815",
+                  "019da4ec-3ed8-7f05-b15f-73dddafc397c"
+                ],
+                [
+                  "019da4ec-16e6-7997-afa4-061f8e198baa",
+                  "019da4ec-36ce-7774-8312-d15b9fdeae56"
+                ],
+                [
+                  "019da4ec-16e6-7997-afa4-061f8e198baa",
+                  "019da4ec-3ed8-7f05-b15f-73dddafc397c"
+                ],
+                [
+                  "019da4ec-1edb-7ee2-ab73-c957c1689726",
+                  "019da4ec-36ce-7774-8312-d15b9fdeae56"
+                ],
+                [
+                  "019da4ec-1edb-7ee2-ab73-c957c1689726",
+                  "019da4ec-3ed8-7f05-b15f-73dddafc397c"
+                ],
+                [
+                  "019da4ec-26d6-7d61-a79d-292b32358d4b",
+                  "019da4ec-36ce-7774-8312-d15b9fdeae56"
+                ],
+                [
+                  "019da4ec-26d6-7d61-a79d-292b32358d4b",
+                  "019da4ec-3ed8-7f05-b15f-73dddafc397c"
+                ],
+                [
+                  "019da4ec-2ed0-76e6-b052-1268a0241787",
+                  "019da4ec-36ce-7774-8312-d15b9fdeae56"
+                ],
+                [
+                  "019da4ec-2ed0-76e6-b052-1268a0241787",
+                  "019da4ec-3ed8-7f05-b15f-73dddafc397c"
+                ]
+              ]
+            },
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac mortality in Population Group A"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 2.0,
+              "computed_at": 1776588439,
+              "contamination_risk": null,
+              "content_hash": "0daf62525fed7df7c6c45c4ffa9db3c72752fcf198895c6160ea8b9de644635b",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 7,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776588439.2577722,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 4.545454545454545,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da4ec-0ef4-7b83-ace3-c9ed6a9b8ee9",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "A_rumor_amplification",
+      "condition": "C2_tools_framed",
+      "run": 1,
+      "elapsed_s": 234.2,
+      "tool_calls": 9,
+      "raw_answer": "unclear",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "Conclusion: no",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "Nova Pharma",
+            "source_lineage": []
+          },
+          "result": {
+            "claim_id": "019da4f0-236e-7840-b3d8-539f0336c9f8",
+            "namespace": "default",
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "source_lineage": []
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "Reuters Medical",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f0-2b68-74e5-84fd-65b96530a5fc",
+            "namespace": "default",
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "STAT News",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f0-335f-7e85-9f24-b37a8ea23881",
+            "namespace": "default",
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "Bloomberg Health Daily",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f0-3b53-7b0d-b250-4f0c7e52264c",
+            "namespace": "default",
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "Medscape",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f0-4344-72c6-b5e6-d2e490815937",
+            "namespace": "default",
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": -1,
+            "extractor": "Tokyo University Cardiology",
+            "source_lineage": []
+          },
+          "result": {
+            "claim_id": "019da4f0-4b36-76cc-9b12-f1aa169b2310",
+            "namespace": "default",
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "source_lineage": []
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": -1,
+            "extractor": "Mayo Clinic",
+            "source_lineage": []
+          },
+          "result": {
+            "claim_id": "019da4f0-5321-71dd-95d7-0afcfa95f3a5",
+            "namespace": "default",
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "source_lineage": []
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 0,
+              "attack_effective_independence": 2.0,
+              "attack_mass": 2.0,
+              "computed_at": 1776588706,
+              "content_hash": "51fd781bebf31cfc1802441aa720f0309228422122bad7da67a0a33f20400eef",
+              "derivation_version": 1,
+              "heuristic_flags": 16,
+              "live_claim_count": 7,
+              "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 1,
+              "support_effective_independence": 3.666666666666666,
+              "support_mass": 3.666666666666666,
+              "temporal_overlap_conflict_count": 10,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 16,
+              "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": [
+                [
+                  "019da4f0-236e-7840-b3d8-539f0336c9f8",
+                  "019da4f0-4b36-76cc-9b12-f1aa169b2310"
+                ],
+                [
+                  "019da4f0-236e-7840-b3d8-539f0336c9f8",
+                  "019da4f0-5321-71dd-95d7-0afcfa95f3a5"
+                ],
+                [
+                  "019da4f0-2b68-74e5-84fd-65b96530a5fc",
+                  "019da4f0-4b36-76cc-9b12-f1aa169b2310"
+                ],
+                [
+                  "019da4f0-2b68-74e5-84fd-65b96530a5fc",
+                  "019da4f0-5321-71dd-95d7-0afcfa95f3a5"
+                ],
+                [
+                  "019da4f0-335f-7e85-9f24-b37a8ea23881",
+                  "019da4f0-4b36-76cc-9b12-f1aa169b2310"
+                ],
+                [
+                  "019da4f0-335f-7e85-9f24-b37a8ea23881",
+                  "019da4f0-5321-71dd-95d7-0afcfa95f3a5"
+                ],
+                [
+                  "019da4f0-3b53-7b0d-b250-4f0c7e52264c",
+                  "019da4f0-4b36-76cc-9b12-f1aa169b2310"
+                ],
+                [
+                  "019da4f0-3b53-7b0d-b250-4f0c7e52264c",
+                  "019da4f0-5321-71dd-95d7-0afcfa95f3a5"
+                ],
+                [
+                  "019da4f0-4344-72c6-b5e6-d2e490815937",
+                  "019da4f0-4b36-76cc-9b12-f1aa169b2310"
+                ],
+                [
+                  "019da4f0-4344-72c6-b5e6-d2e490815937",
+                  "019da4f0-5321-71dd-95d7-0afcfa95f3a5"
+                ]
+              ]
+            },
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac events in Population Group A"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 2.0,
+              "computed_at": 1776588706,
+              "contamination_risk": null,
+              "content_hash": "af95b0aa9ab2c29c7ba26ed93d1aa5e7d7eac122390d1bc5971b3e8946bedd53",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 7,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776588706.5945225,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 3.666666666666666,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da4f0-236e-7840-b3d8-53a03ccabd66",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "A_rumor_amplification",
+      "condition": "C3_tools_authority",
+      "run": 0,
+      "elapsed_s": 235.0,
+      "tool_calls": 9,
+      "raw_answer": "unclear",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "Conclusion: no",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "Nova Pharma",
+            "source_lineage": [
+              "Nova Pharma"
+            ],
+            "valid_from": 1667260800,
+            "valid_to": 1672531200
+          },
+          "result": {
+            "claim_id": "019da4f3-fb8b-7c3b-8814-3e414a122ec5",
+            "namespace": "default",
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "source_lineage": [
+              "Nova Pharma"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "Reuters Medical",
+            "source_lineage": [
+              "Nova Pharma",
+              "Reuters Medical"
+            ],
+            "valid_from": 1669612800,
+            "valid_to": 1672531200
+          },
+          "result": {
+            "claim_id": "019da4f4-03a3-7cfb-b403-9e402ba5ed27",
+            "namespace": "default",
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "source_lineage": [
+              "Nova Pharma",
+              "Reuters Medical"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "STAT News",
+            "source_lineage": [
+              "Nova Pharma",
+              "STAT News"
+            ],
+            "valid_from": 1669612800,
+            "valid_to": 1672531200
+          },
+          "result": {
+            "claim_id": "019da4f4-0b9c-7cf2-8d1d-ae281054b50b",
+            "namespace": "default",
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "source_lineage": [
+              "Nova Pharma",
+              "STAT News"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "Bloomberg Health Daily",
+            "source_lineage": [
+              "Nova Pharma",
+              "Bloomberg Health Daily"
+            ],
+            "valid_from": 1670044800,
+            "valid_to": 1672531200
+          },
+          "result": {
+            "claim_id": "019da4f4-139b-7827-8ff1-c044e3c7f1bb",
+            "namespace": "default",
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "source_lineage": [
+              "Nova Pharma",
+              "Bloomberg Health Daily"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": 1,
+            "extractor": "Medscape",
+            "source_lineage": [
+              "Nova Pharma",
+              "Medscape"
+            ],
+            "valid_from": 1670044800,
+            "valid_to": 1672531200
+          },
+          "result": {
+            "claim_id": "019da4f4-1ba2-7120-90c6-55d9ef20993a",
+            "namespace": "default",
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "source_lineage": [
+              "Nova Pharma",
+              "Medscape"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": -1,
+            "extractor": "Tokyo University Cardiology",
+            "source_lineage": [
+              "Tokyo University Cardiology"
+            ],
+            "valid_from": 1691020800,
+            "valid_to": 1693526400
+          },
+          "result": {
+            "claim_id": "019da4f4-23a2-7e61-8f4e-818349e508e4",
+            "namespace": "default",
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "source_lineage": [
+              "Tokyo University Cardiology"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A",
+            "polarity": -1,
+            "extractor": "Mayo Clinic",
+            "source_lineage": [
+              "Mayo Clinic"
+            ],
+            "valid_from": 1697587200,
+            "valid_to": 1699920000
+          },
+          "result": {
+            "claim_id": "019da4f4-2ba6-7f3b-83fc-352307add032",
+            "namespace": "default",
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "source_lineage": [
+              "Mayo Clinic"
+            ]
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 2,
+              "attack_effective_independence": 2.0,
+              "attack_mass": 2.0,
+              "computed_at": 1776588958,
+              "content_hash": "b4d6a55debabf720d3303a65dee0ea362a03de62c4f1a05618956059433c9db8",
+              "derivation_version": 1,
+              "heuristic_flags": 0,
+              "live_claim_count": 7,
+              "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 5,
+              "support_effective_independence": 4.545454545454545,
+              "support_mass": 4.545454545454545,
+              "temporal_overlap_conflict_count": 0,
+              "temporal_separable_opposition_count": 10
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 0,
+              "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": []
+            },
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "significantly reduces",
+            "dst": "cardiac events in Population Group A"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 2.0,
+              "computed_at": 1776588958,
+              "contamination_risk": null,
+              "content_hash": "72896338df1dd4797e28837adaef849ad5648525c864588c034309d719bf8398",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 7,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776588958.6325343,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 4.545454545454545,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da4f3-fb8b-7c3b-8814-3e42c4ce13d5",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "A_rumor_amplification",
+      "condition": "C3_tools_authority",
+      "run": 1,
+      "elapsed_s": 253.7,
+      "tool_calls": 9,
+      "raw_answer": "unclear",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "Based on the evidence provided and the substrate's analysis:\n\n1.  **Evidence Hierarchy**: The claim of a 34% reduction comes from an **observational study** published by the manufacturer (Nova Pharma) in Nov 2022. This claim was propagated by several news outlets (Reuters, STAT, Bloomberg, Medscape), but they are derivative sources dependent on the original press release.\n2.  **Contradictory High-Quality Evidence**: Two independent, pre-registered **randomized controlled trials (RCTs)** completed in 2023 (Tokyo University and Mayo Clinic) investigated the same outcome in the same population. Both found **no significant effect** (p=0.68 and p=0.41, respectively).\n3.  **Substrate Analysis**:\n    *   The substrate identifies a `PRESENT_TENSE_CONFLICT` (heuristic flag 16), recognizing the temporal and methodological discrepancy between the earlier observational data and the later RCTs.\n    *   While the `support_mass` appears numerically higher (5.0 vs 2.0), the support sources are largely dependent on a single origin (Nova Pharma). The attack sources (Tokyo University and Mayo Clinic) are independent and represent the gold standard of clinical evidence (RCTs).\n    *   In clinical research, RCTs supersede observational studies for establishing causality. The failure of two large RCTs to replicate the observational finding indicates that the initial observation was likely due to confounding factors or bias.\n\nSince the highest quality evidence (RCTs) shows no statistically significant reduction in cardiac mortality, the answer is no.\n\nConclusion: no",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "Nova Pharma",
+            "source_lineage": [
+              "Nova Pharma Nov 2022 press release"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f7-792e-7cef-9407-f6950cd1b25a",
+            "namespace": "default",
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "source_lineage": [
+              "Nova Pharma Nov 2022 press release"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "Reuters Medical",
+            "source_lineage": [
+              "Reuters Medical Nov 28 2022"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f7-813a-7bb0-811b-a234a27cc01c",
+            "namespace": "default",
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "source_lineage": [
+              "Reuters Medical Nov 28 2022"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "STAT News",
+            "source_lineage": [
+              "STAT News"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f7-893e-7ecf-94e5-ee4ee46d76b4",
+            "namespace": "default",
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "source_lineage": [
+              "STAT News"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "Bloomberg Health Daily",
+            "source_lineage": [
+              "Bloomberg Health Daily Dec 2022"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f7-914d-71f6-bedd-160c5e63a6cc",
+            "namespace": "default",
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "source_lineage": [
+              "Bloomberg Health Daily Dec 2022"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": 1,
+            "extractor": "Medscape",
+            "source_lineage": [
+              "Medscape"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f7-9952-732e-be50-1afa487eca22",
+            "namespace": "default",
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "source_lineage": [
+              "Medscape"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": -1,
+            "extractor": "Tokyo University Cardiology",
+            "source_lineage": [
+              "Tokyo University RCT Aug 2023"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f7-a13c-7e1c-8387-e00c4c651fbe",
+            "namespace": "default",
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "source_lineage": [
+              "Tokyo University RCT Aug 2023"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A",
+            "polarity": -1,
+            "extractor": "Mayo Clinic",
+            "source_lineage": [
+              "Mayo Clinic RCT Oct 2023"
+            ]
+          },
+          "result": {
+            "claim_id": "019da4f7-a92d-72e0-b5df-9faa33be949d",
+            "namespace": "default",
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "source_lineage": [
+              "Mayo Clinic RCT Oct 2023"
+            ]
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 2,
+              "attack_effective_independence": 2.0,
+              "attack_mass": 2.0,
+              "computed_at": 1776589187,
+              "content_hash": "935ed6f90fc0e76bc3a10e3e222bd006c1dc74bb1952affe1a58a2f1ac7a4627",
+              "derivation_version": 1,
+              "heuristic_flags": 16,
+              "live_claim_count": 7,
+              "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 5,
+              "support_effective_independence": 5.0,
+              "support_mass": 5.0,
+              "temporal_overlap_conflict_count": 10,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 16,
+              "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": [
+                [
+                  "019da4f7-792e-7cef-9407-f6950cd1b25a",
+                  "019da4f7-a13c-7e1c-8387-e00c4c651fbe"
+                ],
+                [
+                  "019da4f7-792e-7cef-9407-f6950cd1b25a",
+                  "019da4f7-a92d-72e0-b5df-9faa33be949d"
+                ],
+                [
+                  "019da4f7-813a-7bb0-811b-a234a27cc01c",
+                  "019da4f7-a13c-7e1c-8387-e00c4c651fbe"
+                ],
+                [
+                  "019da4f7-813a-7bb0-811b-a234a27cc01c",
+                  "019da4f7-a92d-72e0-b5df-9faa33be949d"
+                ],
+                [
+                  "019da4f7-893e-7ecf-94e5-ee4ee46d76b4",
+                  "019da4f7-a13c-7e1c-8387-e00c4c651fbe"
+                ],
+                [
+                  "019da4f7-893e-7ecf-94e5-ee4ee46d76b4",
+                  "019da4f7-a92d-72e0-b5df-9faa33be949d"
+                ],
+                [
+                  "019da4f7-914d-71f6-bedd-160c5e63a6cc",
+                  "019da4f7-a13c-7e1c-8387-e00c4c651fbe"
+                ],
+                [
+                  "019da4f7-914d-71f6-bedd-160c5e63a6cc",
+                  "019da4f7-a92d-72e0-b5df-9faa33be949d"
+                ],
+                [
+                  "019da4f7-9952-732e-be50-1afa487eca22",
+                  "019da4f7-a13c-7e1c-8387-e00c4c651fbe"
+                ],
+                [
+                  "019da4f7-9952-732e-be50-1afa487eca22",
+                  "019da4f7-a92d-72e0-b5df-9faa33be949d"
+                ]
+              ]
+            },
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "XJ-417",
+            "rel_type": "reduces",
+            "dst": "cardiac mortality in Population Group A"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 2.0,
+              "computed_at": 1776589187,
+              "contamination_risk": null,
+              "content_hash": "914ad8a35cd64da6933759165e3c60e6028adfe1dd9c71d83a65439077c6a6fa",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 7,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776589187.3754807,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 5.0,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da4f7-792e-7cef-9407-f69620f71109",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "B_temporal_state_change",
+      "condition": "C1_bare",
+      "run": 0,
+      "elapsed_s": 63.0,
+      "tool_calls": 0,
+      "raw_answer": "unclear",
+      "ground_truth": "yes",
+      "correct": false,
+      "final_text": "Based on the provided sources, Alice Chen was appointed CEO of Acme Corp in March 2016 (Source 1). Source 2, dated February 8, 2017, explicitly refers to her as \"Acme CEO Alice Chen,\" directly confirming she held the position during that year. This aligns with the additional context stating her tenure ended mid-2023, meaning she was CEO throughout 2017.\n\nConclusion: yes",
+      "trace": []
+    },
+    {
+      "case_id": "B_temporal_state_change",
+      "condition": "C1_bare",
+      "run": 1,
+      "elapsed_s": 65.8,
+      "tool_calls": 0,
+      "raw_answer": "unclear",
+      "ground_truth": "yes",
+      "correct": false,
+      "final_text": "Based on the provided information, Alice Chen was appointed CEO of Acme Corp on March 15, 2016 (Source 1). Source 2, dated February 8, 2017, explicitly refers to her as \"Acme CEO Alice Chen.\" Additionally, the prompt confirms that her tenure ended mid-2023, meaning she held the position continuously from her 2016 appointment through mid-2023. This timeline definitively places her in the CEO role for the entirety of 2017.\n\nConclusion: yes",
+      "trace": []
+    },
+    {
+      "case_id": "B_temporal_state_change",
+      "condition": "C2_tools_framed",
+      "run": 0,
+      "elapsed_s": 227.0,
+      "tool_calls": 8,
+      "raw_answer": "yes",
+      "ground_truth": "yes",
+      "correct": true,
+      "final_text": "Based on the ingested claims and the substrate's analysis, multiple independent sources (Reuters, Bloomberg, and Wall Street Journal) confirm that Alice Chen was the CEO of Acme Corp starting in 2016 and continuing until mid-2023. The year 2017 falls squarely within this tenure. The substrate confirms strong, independent support for this proposition during that timeframe.\n\nConclusion: yes",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 2016,
+            "valid_to": 2023.5
+          },
+          "result": {
+            "claim_id": "019da4fd-9a1e-75c0-863b-cb33b9fb3157",
+            "namespace": "default",
+            "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+            "source_lineage": [
+              "Reuters"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Bloomberg",
+            "source_lineage": [
+              "Bloomberg"
+            ],
+            "valid_from": 2017,
+            "valid_to": 2023.5
+          },
+          "result": {
+            "claim_id": "019da4fd-a228-7c8e-a9df-0003ce5c888e",
+            "namespace": "default",
+            "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+            "source_lineage": [
+              "Bloomberg"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Wall Street Journal",
+            "source_lineage": [
+              "Wall Street Journal"
+            ],
+            "valid_from": 2018,
+            "valid_to": 2023.5
+          },
+          "result": {
+            "claim_id": "019da4fd-aa21-7629-bf8c-5fb635e8214f",
+            "namespace": "default",
+            "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+            "source_lineage": [
+              "Wall Street Journal"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Financial Times",
+            "source_lineage": [
+              "Financial Times"
+            ],
+            "valid_from": 2023.5,
+            "valid_to": 2024.5
+          },
+          "result": {
+            "claim_id": "019da4fd-b226-73ef-99ff-a37c7156d1ba",
+            "namespace": "default",
+            "proposition_id": "019da4fd-b226-73ef-99ff-a37d7217854d",
+            "source_lineage": [
+              "Financial Times"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 2023.5,
+            "valid_to": 2024.5
+          },
+          "result": {
+            "claim_id": "019da4fd-ba11-715a-9aec-74c74e4b5aed",
+            "namespace": "default",
+            "proposition_id": "019da4fd-b226-73ef-99ff-a37d7217854d",
+            "source_lineage": [
+              "Reuters"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Bloomberg",
+            "source_lineage": [
+              "Bloomberg"
+            ],
+            "valid_from": 2024,
+            "valid_to": 2024.5
+          },
+          "result": {
+            "claim_id": "019da4fd-c21b-7510-8e3b-1dd70f809168",
+            "namespace": "default",
+            "proposition_id": "019da4fd-b226-73ef-99ff-a37d7217854d",
+            "source_lineage": [
+              "Bloomberg"
+            ]
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 0,
+              "attack_effective_independence": 0.0,
+              "attack_mass": 0.0,
+              "computed_at": 1776589580,
+              "content_hash": "32f5cae0cf9d0f1bda77ae5e78b501599f73aa0dfde2ab9046fcbbee73bf0091",
+              "derivation_version": 1,
+              "heuristic_flags": 0,
+              "live_claim_count": 3,
+              "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 3,
+              "support_effective_independence": 3.0,
+              "support_mass": 3.0,
+              "temporal_overlap_conflict_count": 0,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 0,
+              "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": []
+            },
+            "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 0.0,
+              "computed_at": 1776589580,
+              "contamination_risk": null,
+              "content_hash": "7396bee0283aebcdac15750fd81d379a972a56f2331722ea9296eed81dc53a99",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 3,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776589580.8350182,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 3.0,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "B_temporal_state_change",
+      "condition": "C2_tools_framed",
+      "run": 1,
+      "elapsed_s": 160.7,
+      "tool_calls": 8,
+      "raw_answer": "unclear",
+      "ground_truth": "yes",
+      "correct": false,
+      "final_text": "Based on the evidence provided:\n\n1.  **Reuters (2016-03-15)** states that Alice Chen was named CEO of Acme Corp, effective immediately. This establishes her tenure began in March 2016.\n2.  **Bloomberg (2017-02-08)** refers to Alice Chen as the CEO of Acme Corp. This confirms she was still in the role in February 2017.\n3.  **Wall Street Journal (2018-11-22)** also refers to Alice Chen as the CEO of Acme Corp, further confirming her tenure extended at least until late 2018.\n4.  The prompt explicitly states that Alice's tenure ended mid-2023 and Bob's began mid-2023.\n\nSince Alice Chen's tenure as CEO started in March 2016 and ended in mid-2023, she was undoubtedly the CEO of Acme Corp in 2017. The database supports this with a support mass of 3.0 from three independent sources (Reuters, Bloomberg, WSJ) for the proposition that Alice Chen was CEO of Acme Corp.\n\nConclusion: yes",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters_2016-03-15"
+            ]
+          },
+          "result": {
+            "claim_id": "019da500-1b0f-76b2-bb48-b5cdc4a6a27b",
+            "namespace": "default",
+            "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+            "source_lineage": [
+              "Reuters_2016-03-15"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Bloomberg",
+            "source_lineage": [
+              "Bloomberg_2017-02-08"
+            ]
+          },
+          "result": {
+            "claim_id": "019da500-2322-7ae7-8c57-0b586fe59a43",
+            "namespace": "default",
+            "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+            "source_lineage": [
+              "Bloomberg_2017-02-08"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "WSJ",
+            "source_lineage": [
+              "WSJ_2018-11-22"
+            ]
+          },
+          "result": {
+            "claim_id": "019da500-2b24-744b-b7e8-ab0530172c22",
+            "namespace": "default",
+            "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+            "source_lineage": [
+              "WSJ_2018-11-22"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Financial Times",
+            "source_lineage": [
+              "FT_2023-06-10"
+            ]
+          },
+          "result": {
+            "claim_id": "019da500-3326-7b5d-9407-3cd6bbe4dd3f",
+            "namespace": "default",
+            "proposition_id": "019da500-3327-7913-aede-da1d51fb4e2d",
+            "source_lineage": [
+              "FT_2023-06-10"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters_2023-09-22"
+            ]
+          },
+          "result": {
+            "claim_id": "019da500-3b1c-73ac-92c7-8df48de8af8d",
+            "namespace": "default",
+            "proposition_id": "019da500-3327-7913-aede-da1d51fb4e2d",
+            "source_lineage": [
+              "Reuters_2023-09-22"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Bloomberg",
+            "source_lineage": [
+              "Bloomberg_2024-05-14"
+            ]
+          },
+          "result": {
+            "claim_id": "019da500-4313-7ab0-a476-0ade8b701ab7",
+            "namespace": "default",
+            "proposition_id": "019da500-3327-7913-aede-da1d51fb4e2d",
+            "source_lineage": [
+              "Bloomberg_2024-05-14"
+            ]
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 0,
+              "attack_effective_independence": 0.0,
+              "attack_mass": 0.0,
+              "computed_at": 1776589744,
+              "content_hash": "0aa3dea18c4f11bc51368a79ca5555c1eab2fd98b73dfcf14c6944de77469834",
+              "derivation_version": 1,
+              "heuristic_flags": 0,
+              "live_claim_count": 3,
+              "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 3,
+              "support_effective_independence": 3.0,
+              "support_mass": 3.0,
+              "temporal_overlap_conflict_count": 0,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 0,
+              "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": []
+            },
+            "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 0.0,
+              "computed_at": 1776589744,
+              "contamination_risk": null,
+              "content_hash": "bd62cfe20c42e7c315189351e97bc828b810d5f51d28de15f6cc9f48ea6965c1",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 3,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776589744.9335191,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 3.0,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "B_temporal_state_change",
+      "condition": "C3_tools_authority",
+      "run": 0,
+      "elapsed_s": 268.6,
+      "tool_calls": 8,
+      "raw_answer": "yes",
+      "ground_truth": "yes",
+      "correct": true,
+      "final_text": "Based on the provided sources and the substrate state:\n\n1.  **Source (1)** from Reuters (2016-03-15) establishes Alice Chen became CEO effective immediately.\n2.  **Source (2)** from Bloomberg (2017-02-08) explicitly states \"Acme CEO Alice Chen,\" confirming her tenure in 2017.\n3.  **Source (3)** from Wall Street Journal (2018-11-22) further confirms she was CEO in 2018.\n4.  The substrate's `get_contest_state` and `get_mobility_state` for the proposition `(Alice Chen, is CEO of, Acme Corp)` show a `support_mass` of 3.0 and `live_claim_count` of 3, with no `attack_mass`. This indicates strong, consistent support for this proposition from the ingested sources.\n5.  The problem description notes Alice's tenure ended mid-2023, which is after 2017.\n\nTherefore, the evidence confirms Alice Chen was the CEO of Acme Corp in 2017.\n\nConclusion: yes",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 1458000000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Bloomberg",
+            "source_lineage": [
+              "Bloomberg"
+            ],
+            "valid_from": 1486500000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Wall Street Journal",
+            "source_lineage": [
+              "Wall Street Journal"
+            ],
+            "valid_from": 1542800000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Financial Times",
+            "source_lineage": [
+              "Financial Times"
+            ],
+            "valid_from": 1686336000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 1695331200
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Bloomberg",
+            "source_lineage": [
+              "Bloomberg"
+            ],
+            "valid_from": 1715644800
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 0,
+              "attack_effective_independence": 0.0,
+              "attack_mass": 0.0,
+              "computed_at": 1776589997,
+              "content_hash": "91a24188ffb98cceac3ea253ed1a43f506272efc9e23050ad96a6598ae998237",
+              "derivation_version": 1,
+              "heuristic_flags": 0,
+              "live_claim_count": 3,
+              "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 3,
+              "support_effective_independence": 3.0,
+              "support_mass": 3.0,
+              "temporal_overlap_conflict_count": 0,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 0,
+              "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": []
+            },
+            "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "is CEO of",
+            "dst": "Acme Corp"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 0.0,
+              "computed_at": 1776589580,
+              "contamination_risk": null,
+              "content_hash": "7396bee0283aebcdac15750fd81d379a972a56f2331722ea9296eed81dc53a99",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 3,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776589580.8350182,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 3.0,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da4fd-9a1e-75c0-863b-cb347d3cbe30",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "B_temporal_state_change",
+      "condition": "C3_tools_authority",
+      "run": 1,
+      "elapsed_s": 306.9,
+      "tool_calls": 8,
+      "raw_answer": "unclear",
+      "ground_truth": "yes",
+      "correct": false,
+      "final_text": "Conclusion: yes",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 1458000000,
+            "valid_to": 1688160000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Bloomberg",
+            "source_lineage": [
+              "Bloomberg"
+            ],
+            "valid_from": 1486502400,
+            "valid_to": 1688160000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Wall Street Journal",
+            "source_lineage": [
+              "Wall Street Journal"
+            ],
+            "valid_from": 1542844800,
+            "valid_to": 1688160000
+          },
+          "result": {
+            "claim_id": "019da508-7bea-7d87-b347-5a70faccd915",
+            "namespace": "default",
+            "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+            "source_lineage": [
+              "Wall Street Journal"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Financial Times",
+            "source_lineage": [
+              "Financial Times"
+            ],
+            "valid_from": 1688160000,
+            "valid_to": "None"
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 1695340800,
+            "valid_to": "None"
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Bob Torres",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp",
+            "polarity": 1,
+            "extractor": "Bloomberg",
+            "source_lineage": [
+              "Bloomberg"
+            ],
+            "valid_from": 1715654400,
+            "valid_to": "None"
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 0,
+              "attack_effective_independence": 0.0,
+              "attack_mass": 0.0,
+              "computed_at": 1776590289,
+              "content_hash": "96691c3e6a2550aca825d79580e63ec050e2b0e82440dd8db9dd9fdd2c4b5397",
+              "derivation_version": 1,
+              "heuristic_flags": 0,
+              "live_claim_count": 4,
+              "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 4,
+              "support_effective_independence": 4.0,
+              "support_mass": 4.0,
+              "temporal_overlap_conflict_count": 0,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 0,
+              "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": []
+            },
+            "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "Alice Chen",
+            "rel_type": "CEO of",
+            "dst": "Acme Corp"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 0.0,
+              "computed_at": 1776590289,
+              "contamination_risk": null,
+              "content_hash": "9ef4c03a8fe869b3930a0c107e13dee46b48b5240e3516fd1e92be2765756f40",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 4,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776590289.9007597,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 4.0,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da500-1b10-757a-a3c0-6ca9c773f2dc",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "C_same_source_retraction",
+      "condition": "C1_bare",
+      "run": 0,
+      "elapsed_s": 83.9,
+      "tool_calls": 0,
+      "raw_answer": "no",
+      "ground_truth": "no",
+      "correct": true,
+      "final_text": "The initial allegation of misstated revenue originated from a 2018 Reuters investigative report, which was subsequently cited by BBC, CNN, and AP. However, in March 2022, Reuters issued a formal correction and retraction of that original report. Reuters explicitly stated that the 2018 analysis contained an error in its aggregation methodology and, after reviewing the data with Company Q's CFO and conducting an independent review, concluded that the original SEC filing was accurate. \n\nIn factual and journalistic analysis, a formal retraction by the original investigative source directly invalidates the initial claim, as it represents the most current, authoritative, and methodologically sound assessment of the evidence. The fact that syndicated outlets did not issue corrections only means their archives contain outdated information; it does not constitute evidence supporting the original allegation, nor does it override the primary source's explicit retraction. Therefore, based on the totality of the available evidence, the 2018 SEC filing was accurate and did not contain misstated revenue.\n\nConclusion: no",
+      "trace": []
+    },
+    {
+      "case_id": "C_same_source_retraction",
+      "condition": "C1_bare",
+      "run": 1,
+      "elapsed_s": 91.2,
+      "tool_calls": 0,
+      "raw_answer": "unclear",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "Based on the provided evidence, the initial 2018 reports from Reuters and the syndicated outlets claimed that Company Q's SEC filing contained a ~$200M revenue misstatement. However, this claim was formally superseded in March 2022 when Reuters issued a correction and retraction. The retraction explicitly states that the original 2018 analysis contained an error in its aggregation methodology. More importantly, it confirms that after reviewing the filing with Company Q's CFO and conducting an independent review, Reuters found the original SEC filing to be accurate.\n\nThe fact that BBC, CNN, and AP did not issue corrections or update their archives is relevant only to the current state of their historical records, not to the factual accuracy of the SEC filing itself. Outdated syndicator archives do not override a direct, authoritative retraction from the original source, especially when that retraction is backed by independent verification and company confirmation. When evaluating all available evidence, the 2022 retraction definitively corrects the record and establishes that the initial 2018 finding was erroneous.\n\nConclusion: no",
+      "trace": []
+    },
+    {
+      "case_id": "C_same_source_retraction",
+      "condition": "C2_tools_framed",
+      "run": 0,
+      "elapsed_s": 183.9,
+      "tool_calls": 7,
+      "raw_answer": "unclear",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "Based on the available evidence, the answer is **no**.\n\n**Reasoning:**\n1. **Primary Source Retraction:** The original investigative report by Reuters (the primary source for all subsequent claims) was formally retracted in 2022. Reuters explicitly stated that the 2018 analysis contained an error in methodology and that the original filing was accurate. This retraction directly negates the factual basis of the allegation.\n2. **Dependency of Syndicators:** The claims by BBC, CNN, and AP were derivative, citing Reuters as their sole source. When the primary source retracts its finding, the dependent claims lose their evidentiary value, even if the syndicators' archives remain unchanged.\n3. **Epistemic Weight:** While the database shows a higher `support_mass` (~3.76) for the allegation due to the volume of 2018 reports, the `attack_mass` (1.0) from the primary source's retraction carries decisive weight regarding factual accuracy. The retraction resolves the factual dispute in favor of the company's accuracy.\n\nConclusion: no",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters",
+              "2018-04-10"
+            ]
+          },
+          "result": {
+            "claim_id": "019da50d-c0e8-7085-9ee7-ecf1226a569c",
+            "namespace": "default",
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "source_lineage": [
+              "Reuters",
+              "2018-04-10"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": 1,
+            "extractor": "BBC",
+            "source_lineage": [
+              "BBC",
+              "2018-04-11",
+              "Reuters"
+            ]
+          },
+          "result": {
+            "claim_id": "019da50d-c8ed-7de3-b2cc-99bd00ac8e24",
+            "namespace": "default",
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "source_lineage": [
+              "BBC",
+              "2018-04-11",
+              "Reuters"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": 1,
+            "extractor": "CNN",
+            "source_lineage": [
+              "CNN",
+              "2018-04-12",
+              "Reuters"
+            ]
+          },
+          "result": {
+            "claim_id": "019da50d-d0eb-7cc1-931b-cd6e7aa3ab70",
+            "namespace": "default",
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "source_lineage": [
+              "CNN",
+              "2018-04-12",
+              "Reuters"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": 1,
+            "extractor": "Associated Press",
+            "source_lineage": [
+              "Associated Press",
+              "2018-04-14",
+              "Reuters"
+            ]
+          },
+          "result": {
+            "claim_id": "019da50d-d8df-7087-afdd-89e06b5eaf63",
+            "namespace": "default",
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "source_lineage": [
+              "Associated Press",
+              "2018-04-14",
+              "Reuters"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": -1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters",
+              "2022-03-22",
+              "CORRECTION"
+            ]
+          },
+          "result": {
+            "claim_id": "019da50d-e0d6-799f-a6f6-fc275daca451",
+            "namespace": "default",
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "source_lineage": [
+              "Reuters",
+              "2022-03-22",
+              "CORRECTION"
+            ]
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 3,
+              "attack_effective_independence": 1.0,
+              "attack_mass": 1.0,
+              "computed_at": 1776590643,
+              "content_hash": "25d1fc443d05988f62573d4dc12922043fb09f4c2c552cd85229470048bc169a",
+              "derivation_version": 1,
+              "heuristic_flags": 16,
+              "live_claim_count": 5,
+              "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 8,
+              "support_effective_independence": 3.764705882352941,
+              "support_mass": 3.764705882352941,
+              "temporal_overlap_conflict_count": 4,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 16,
+              "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": [
+                [
+                  "019da50d-c0e8-7085-9ee7-ecf1226a569c",
+                  "019da50d-e0d6-799f-a6f6-fc275daca451"
+                ],
+                [
+                  "019da50d-c8ed-7de3-b2cc-99bd00ac8e24",
+                  "019da50d-e0d6-799f-a6f6-fc275daca451"
+                ],
+                [
+                  "019da50d-d0eb-7cc1-931b-cd6e7aa3ab70",
+                  "019da50d-e0d6-799f-a6f6-fc275daca451"
+                ],
+                [
+                  "019da50d-d8df-7087-afdd-89e06b5eaf63",
+                  "019da50d-e0d6-799f-a6f6-fc275daca451"
+                ]
+              ]
+            },
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 1.0,
+              "computed_at": 1776590643,
+              "contamination_risk": null,
+              "content_hash": "6c1e30b8cd5e8a2ca07cd8cdd28dd235d2edbe9c5e4dabd188612d4537fc77ab",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 5,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776590643.4162407,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 3.764705882352941,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "C_same_source_retraction",
+      "condition": "C2_tools_framed",
+      "run": 1,
+      "elapsed_s": 227.0,
+      "tool_calls": 7,
+      "raw_answer": "no",
+      "ground_truth": "no",
+      "correct": true,
+      "final_text": "The evidence provided consists of an initial report by Reuters in 2018 alleging misstated revenue, followed by derivative reports from BBC, CNN, and AP citing Reuters. Crucially, Reuters issued a correction in 2022, explicitly retracting the 2018 finding and stating that the original filing was accurate after review with the company's CFO and independent review.\n\nAlthough BBC, CNN, and AP did not issue their own corrections, their reports were entirely dependent on the original Reuters investigation. They did not conduct independent verification. When the primary source (Reuters) retracts its claim and affirms the accuracy of the filing, the derivative claims lose their evidentiary basis. The retraction serves as a definitive negation of the original assertion. Therefore, the available evidence indicates that the filing did not contain misstated revenue.\n\nConclusion: no",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters_2018-04-10"
+            ]
+          },
+          "result": {
+            "claim_id": "019da511-3a16-77cb-8b61-f8051bacd86c",
+            "namespace": "default",
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "source_lineage": [
+              "Reuters_2018-04-10"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": 1,
+            "extractor": "BBC",
+            "source_lineage": [
+              "BBC_2018-04-11",
+              "Reuters_2018-04-10"
+            ]
+          },
+          "result": {
+            "claim_id": "019da511-420c-76c7-b4a2-827699d66027",
+            "namespace": "default",
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "source_lineage": [
+              "BBC_2018-04-11",
+              "Reuters_2018-04-10"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": 1,
+            "extractor": "CNN",
+            "source_lineage": [
+              "CNN_2018-04-12",
+              "Reuters_2018-04-10"
+            ]
+          },
+          "result": {
+            "claim_id": "019da511-4a09-74ed-a948-929ac2c6f49b",
+            "namespace": "default",
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "source_lineage": [
+              "CNN_2018-04-12",
+              "Reuters_2018-04-10"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": 1,
+            "extractor": "AP",
+            "source_lineage": [
+              "AP_2018-04-14",
+              "Reuters_2018-04-10"
+            ]
+          },
+          "result": {
+            "claim_id": "019da511-5204-70d0-9db2-c544ed3adcca",
+            "namespace": "default",
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "source_lineage": [
+              "AP_2018-04-14",
+              "Reuters_2018-04-10"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": -1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters_2022-03-22"
+            ]
+          },
+          "result": {
+            "claim_id": "019da511-59f9-7502-a510-178b1afec141",
+            "namespace": "default",
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "source_lineage": [
+              "Reuters_2022-03-22"
+            ]
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 1,
+              "attack_effective_independence": 1.0,
+              "attack_mass": 1.0,
+              "computed_at": 1776590871,
+              "content_hash": "ca07eb0a5698414f0ccfd6b2d383c5b3c065b87611c1fa2f81aa76bbdf745305",
+              "derivation_version": 1,
+              "heuristic_flags": 16,
+              "live_claim_count": 5,
+              "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 4,
+              "support_effective_independence": 3.5555555555555554,
+              "support_mass": 3.5555555555555554,
+              "temporal_overlap_conflict_count": 4,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 16,
+              "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": [
+                [
+                  "019da511-3a16-77cb-8b61-f8051bacd86c",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ],
+                [
+                  "019da511-420c-76c7-b4a2-827699d66027",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ],
+                [
+                  "019da511-4a09-74ed-a948-929ac2c6f49b",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ],
+                [
+                  "019da511-5204-70d0-9db2-c544ed3adcca",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ]
+              ]
+            },
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 1,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 1.0,
+              "computed_at": 1776590871,
+              "contamination_risk": null,
+              "content_hash": "6f4702df10ec7633d5aa3787bdf094774d095b46c60831e8d03dd5043068f774",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 5,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776590871.0351217,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 3.5555555555555554,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "C_same_source_retraction",
+      "condition": "C3_tools_authority",
+      "run": 0,
+      "elapsed_s": 421.3,
+      "tool_calls": 7,
+      "raw_answer": "unclear",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "Conclusion: no",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 1523318400,
+            "valid_to": 1647936000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": 1,
+            "extractor": "BBC",
+            "source_lineage": [
+              "BBC",
+              "Reuters"
+            ],
+            "valid_from": 1523404800,
+            "valid_to": 1647936000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": 1,
+            "extractor": "CNN",
+            "source_lineage": [
+              "CNN",
+              "Reuters"
+            ],
+            "valid_from": 1523491200,
+            "valid_to": 1647936000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": 1,
+            "extractor": "Associated Press",
+            "source_lineage": [
+              "Associated Press",
+              "Reuters"
+            ],
+            "valid_from": 1523664000,
+            "valid_to": 1647936000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue",
+            "polarity": -1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 1647936000
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 3,
+              "attack_effective_independence": 1.0,
+              "attack_mass": 1.0,
+              "computed_at": 1776591171,
+              "content_hash": "c2f09fc5ee132844d961095e4a50c0d0f3df730aabc0e17364a664e029bbd9d7",
+              "derivation_version": 1,
+              "heuristic_flags": 16,
+              "live_claim_count": 5,
+              "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 8,
+              "support_effective_independence": 3.764705882352941,
+              "support_mass": 3.764705882352941,
+              "temporal_overlap_conflict_count": 4,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 16,
+              "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": [
+                [
+                  "019da50d-c0e8-7085-9ee7-ecf1226a569c",
+                  "019da50d-e0d6-799f-a6f6-fc275daca451"
+                ],
+                [
+                  "019da50d-c8ed-7de3-b2cc-99bd00ac8e24",
+                  "019da50d-e0d6-799f-a6f6-fc275daca451"
+                ],
+                [
+                  "019da50d-d0eb-7cc1-931b-cd6e7aa3ab70",
+                  "019da50d-e0d6-799f-a6f6-fc275daca451"
+                ],
+                [
+                  "019da50d-d8df-7087-afdd-89e06b5eaf63",
+                  "019da50d-e0d6-799f-a6f6-fc275daca451"
+                ]
+              ]
+            },
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "Company Q's 2018 SEC filing",
+            "rel_type": "contained",
+            "dst": "misstated revenue"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 1.0,
+              "computed_at": 1776590643,
+              "contamination_risk": null,
+              "content_hash": "6c1e30b8cd5e8a2ca07cd8cdd28dd235d2edbe9c5e4dabd188612d4537fc77ab",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 5,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776590643.4162407,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 3.764705882352941,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da50d-c0e8-7085-9ee7-ecf27e342c99",
+            "regime": "default"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "C_same_source_retraction",
+      "condition": "C3_tools_authority",
+      "run": 1,
+      "elapsed_s": 387.4,
+      "tool_calls": 7,
+      "raw_answer": "unclear",
+      "ground_truth": "no",
+      "correct": false,
+      "final_text": "Conclusion: no",
+      "trace": [
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": 1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 1523299200,
+            "valid_to": 1647897600
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": 1,
+            "extractor": "BBC",
+            "source_lineage": [
+              "BBC",
+              "Reuters"
+            ],
+            "valid_from": 1523385600,
+            "valid_to": 1647897600
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": 1,
+            "extractor": "CNN",
+            "source_lineage": [
+              "CNN",
+              "Reuters"
+            ],
+            "valid_from": 1523472000,
+            "valid_to": 1647897600
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": 1,
+            "extractor": "Associated Press",
+            "source_lineage": [
+              "Associated Press",
+              "Reuters"
+            ],
+            "valid_from": 1523644800,
+            "valid_to": 1647897600
+          },
+          "result": {
+            "claim_id": "019da51c-0450-73fb-9d43-0c57fed0cdf0",
+            "namespace": "default",
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "source_lineage": [
+              "Associated Press",
+              "Reuters"
+            ]
+          }
+        },
+        {
+          "round": 0,
+          "tool": "ingest_claim",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing",
+            "polarity": -1,
+            "extractor": "Reuters",
+            "source_lineage": [
+              "Reuters"
+            ],
+            "valid_from": 1647897600
+          },
+          "result": {
+            "__error__": "HTTP 500: {\"error\":\"Query returned no rows\"}"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "get_contest_state",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing"
+          },
+          "result": {
+            "contest_state": {
+              "attack_distinct_source_count": 1,
+              "attack_effective_independence": 1.0,
+              "attack_mass": 1.0,
+              "computed_at": 1776591572,
+              "content_hash": "0c02b7b653a0f41edb5666d7ee8dfe44959b1b85597cb19022201ae864aaf33c",
+              "derivation_version": 1,
+              "heuristic_flags": 16,
+              "live_claim_count": 6,
+              "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+              "referent_schema_heterogeneity_count": 0,
+              "regime": "default",
+              "same_artifact_extractor_polarity_conflict_count": 0,
+              "same_source_opposite_polarity_count": 0,
+              "state_status": "fresh",
+              "support_distinct_source_count": 6,
+              "support_effective_independence": 4.6923076923076925,
+              "support_mass": 4.6923076923076925,
+              "temporal_overlap_conflict_count": 5,
+              "temporal_separable_opposition_count": 0
+            },
+            "exemplar_pairs": {
+              "heuristic_flags": 16,
+              "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+              "regime": "default",
+              "same_artifact_extractor_conflict_pairs": [],
+              "same_source_opposite_polarity_pairs": [],
+              "temporal_overlap_conflict_pairs": [
+                [
+                  "019da511-3a16-77cb-8b61-f8051bacd86c",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ],
+                [
+                  "019da511-420c-76c7-b4a2-827699d66027",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ],
+                [
+                  "019da511-4a09-74ed-a948-929ac2c6f49b",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ],
+                [
+                  "019da511-5204-70d0-9db2-c544ed3adcca",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ],
+                [
+                  "019da51c-0450-73fb-9d43-0c57fed0cdf0",
+                  "019da511-59f9-7502-a510-178b1afec141"
+                ]
+              ]
+            },
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "regime": "default"
+          }
+        },
+        {
+          "round": 0,
+          "tool": "get_mobility_state",
+          "args": {
+            "src": "Company Q",
+            "rel_type": "has_misstated_revenue",
+            "dst": "2018 SEC filing"
+          },
+          "result": {
+            "mobility_state": {
+              "attack_mass": 1.0,
+              "computed_at": 1776591570,
+              "contamination_risk": null,
+              "content_hash": "34a4d3d369631538ea2bb783bfd0e7dee61189c41e664226ecf9dbcf65a47ca1",
+              "effective_independence": null,
+              "formula_version": 1,
+              "live_claim_count": 6,
+              "load_bearingness": null,
+              "modality_consilience": 0.16666666666666666,
+              "mutability": null,
+              "novelty_isolation": null,
+              "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+              "regime": "default",
+              "self_gen_ancestral": null,
+              "self_gen_local": 0.0,
+              "snapshot_ts": 1776591570.0023897,
+              "source_diversity": null,
+              "state_status": "fresh",
+              "support_mass": 4.6923076923076925,
+              "temporal_coherence": null,
+              "tier_bg_components": [],
+              "tier_read_components": [],
+              "tier_write_components": [
+                "support_mass",
+                "attack_mass",
+                "modality_consilience",
+                "self_gen_local"
+              ],
+              "transportability": null
+            },
+            "proposition_id": "019da511-3a16-77cb-8b61-f806efec0628",
+            "regime": "default"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "A": {
+    "sigma": 3.333333333333333,
+    "alpha": 2.0,
+    "flags": 16,
+    "correct": false
+  },
+  "B": {
+    "overlap": 0,
+    "separable": 9,
+    "flags": 2,
+    "correct": true
+  },
+  "C": {
+    "same_source_count": 1,
+    "flags": 18,
+    "correct": true
+  }
+}

@@ -20,8 +20,8 @@ import sys
 import time
 import urllib.request
 
-# Use fresh_p3e DB token
-os.environ["YDB_TOKEN"] = "ydb_0989d4b0d904501524c1dc735b4099e636e7e61201c64fd7bd0077211b4da4fb"
+# Use fresh_p3e_v2 DB token (clean DB after batch-ingest fix 2026-04-19)
+os.environ["YDB_TOKEN"] = "ydb_7fee22741b5761f89451d2a7dd045edf8157a303248c2d7b55db7107f9097dd4"
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from yantrikdb_client import YantrikStore
@@ -62,7 +62,9 @@ def call_qwen(messages, num_predict=500, timeout=300):
 
 
 def ingest_instance(instance: dict, store: YantrikStore) -> int:
-    count = 0
+    """Batch-encode all turns in this haystack, then POST each. ~20x faster
+    on CPU than per-turn encode()."""
+    items = []
     for si, session in enumerate(instance["haystack_sessions"]):
         session_id = instance["haystack_session_ids"][si] if si < len(instance["haystack_session_ids"]) else f"sess_{si}"
         date = instance["haystack_dates"][si] if si < len(instance["haystack_dates"]) else "unknown"
@@ -71,11 +73,13 @@ def ingest_instance(instance: dict, store: YantrikStore) -> int:
             if not content:
                 continue
             role = turn.get("role", "unknown")
-            key = f"{session_id}:t{ti}:{role}"
-            value = f"[{date}] {role}: {content}"[:500]
-            store.remember(key, value, si + 1)
-            count += 1
-    return count
+            items.append({
+                "key": f"{session_id}:t{ti}:{role}",
+                "value": f"[{date}] {role}: {content}"[:500],
+                "session": si + 1,
+            })
+    store.remember_batch(items)
+    return len(items)
 
 
 def generate_answer(question: str, retrieved: list[dict], question_date: str) -> str:

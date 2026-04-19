@@ -1,0 +1,158 @@
+Phase 3E — LongMemEval L3 (_s, 550 turns) with REAL yantrikdb (fresh_p3e DB)
+n_per_type=5, top_k=20, think-on
+start: 2026-04-19 18:13:48
+
+subset: 30 instances
+
+[1/30] gpt4_372c3eed_abs (multi-session) — 18:13:51
+  ingested 490 turns | think: conflicts=42 consolidated=14
+  retrieved 20 (top score 0.934)
+  recall_hit=True answer: 'The provided memories do not contain information about your specific educational timeline or the number of years spent in formal education. '
+  elapsed: 37.3s
+[2/30] 3249768e (single-session-assistant) — 18:14:28
+  ingested 475 turns | think: conflicts=37 consolidated=11
+  retrieved 20 (top score 1.219)
+  recall_hit=True answer: 'Based on the retrieved memories, the assistant recommended the following five bottles for gin-based cocktails:\n\n1. Gin\n2. Vodka\n3. Rum\n4. Sw'
+  elapsed: 36.7s
+[3/30] ac031881 (single-session-assistant) — 18:15:05
+  ingested 529 turns | think: conflicts=15 consolidated=9
+  retrieved 20 (top score 1.165)
+  recall_hit=True answer: 'The designation on my jumpsuit was "LIV". I realized that LIV is the Roman numeral for 54, which helped me locate the correct file in the re'
+  elapsed: 39.7s
+[4/30] 6f9b354f (single-session-user) — 18:15:45
+  ingested 500 turns | think: conflicts=30 consolidated=10
+  retrieved 20 (top score 0.834)
+  recall_hit=True answer: 'Lighter shade of gray'
+  elapsed: 38.2s
+[5/30] 6ade9755 (single-session-user) — 18:16:23
+  ingested 513 turns | think: conflicts=16 consolidated=7
+  retrieved 20 (top score 1.181)
+  recall_hit=True answer: 'The provided memories do not contain specific information about where you take yoga classes. They mention that you practice at home using th'
+  elapsed: 42.4s
+[6/30] gpt4_e072b769 (temporal-reasoning) — 18:17:05
+  ingested 444 turns | think: conflicts=24 consolidated=9
+  retrieved 20 (top score 1.097)
+  recall_hit=True answer: 'The provided memories do not contain information about when you started using the cashback app \'Ibotta\'. Memory 3 mentions that you "just do'
+  elapsed: 36.4s
+[7/30] 27016adc (multi-session) — 18:17:42
+  ingested 491 turns | think: conflicts=14 consolidated=7
+  retrieved 20 (top score 1.136)
+  recall_hit=True answer: 'The provided memories do not contain information about the price of the countryside property in relation to your renovation costs, as these '
+  elapsed: 41.1s
+[8/30] eac54adc (temporal-reasoning) — 18:18:23
+  ingested 464 turns | think: conflicts=32 consolidated=8
+  retrieved 20 (top score 1.050)
+  recall_hit=True answer: 'Based on the retrieved memories, the user signed a contract with their first client on **2023/03/01** (Memory 1 and Memory 8). The user laun'
+  elapsed: 42.5s
+[9/30] f523d9fe (single-session-assistant) — 18:19:05
+  ingested 484 turns | think: conflicts=19 consolidated=6
+  retrieved 20 (top score 1.214)
+  recall_hit=True answer: 'The show you used as an example was "Doc Martin".'
+  elapsed: 41.5s
+[10/30] 4dfccbf7 (temporal-reasoning) — 18:19:47
+  ingested 521 turns | think: conflicts=17 consolidated=5
+  retrieved 20 (top score 1.234)
+  recall_hit=True answer: 'Based on the retrieved memories, the user started taking ukulele lessons on **2023/02/01** (Memory 1) and decided to take their Taylor GS Mi'
+  elapsed: 46.9s
+[11/30] 505af2f5 (single-session-preference) — 18:20:34
+  ingested 501 turns | think: conflicts=19 consolidated=5
+  retrieved 20 (top score 1.100)
+  recall_hit=True answer: 'Based on the retrieved memories, you have already started making your own flavored creamer using **almond milk, vanilla extract, and honey**'
+  elapsed: 46.7s
+[12/30] cc6d1ec1 (temporal-reasoning) — 18:21:20
+  ingested 457 turns | think: conflicts=12 consolidated=3
+  retrieved 20 (top score 1.121)
+  recall_hit=True answer: 'The provided memories do not contain information about how long you had been bird watching before attending the workshop.'
+  elapsed: 43.0s
+[13/30] 94f70d80 (single-session-user) — 18:22:03
+  ingested 510 turns | think: conflicts=22 consolidated=3
+  retrieved 20 (top score 1.246)
+  recall_hit=True answer: 'It took you 4 hours to assemble the IKEA bookshelf.'
+  elapsed: 46.6s
+[14/30] 3fdac837 (multi-session) — 18:22:50
+  ingested 453 turns | think: conflicts=14 consolidated=3
+  retrieved 20 (top score 1.036)
+  recall_hit=True answer: 'Based on the retrieved memories, you spent **7 days** in Japan (April 15th to 22nd) and **4 days** in Chicago.\n\nTotal: **11 days**.'
+  elapsed: 44.6s
+[15/30] b01defab (knowledge-update) — 18:23:35
+  ingested 503 turns | think: conflicts=51 consolidated=4
+  retrieved 20 (top score 1.153)
+  recall_hit=True answer: 'Yes, you finished reading "The Nightingale" by Kristin Hannah.'
+  elapsed: 51.7s
+[16/30] 6a27ffc2 (knowledge-update) — 18:24:26
+  ingested 493 turns | think: conflicts=6 consolidated=5
+  retrieved 20 (top score 1.066)
+  recall_hit=True answer: "You have completed 30 videos of Corey Schafer's Python series."
+  elapsed: 46.5s
+[17/30] 3e321797 (single-session-assistant) — 18:25:13
+  ingested 490 turns | think: conflicts=8 consolidated=3
+  retrieved 20 (top score 1.177)
+  recall_hit=True answer: 'You should leave the tomato juice mixed with lemon juice on for 10 minutes before washing it off with cold water.'
+  elapsed: 44.8s
+[18/30] 7161e7e2 (single-session-assistant) — 18:25:58
+  ingested 550 turns | think: conflicts=19 consolidated=4
+  retrieved 20 (top score 1.222)
+  recall_hit=True answer: 'Based on the retrieved memories, the shift rotation sheet for GM social media agents was created for a week starting on **Sunday** and endin'
+  elapsed: 52.7s
+[19/30] 54026fce (single-session-preference) — 18:26:50
+  ingested 472 turns | think: conflicts=16 consolidated=1
+  retrieved 20 (top score 1.293)
+  recall_hit=True answer: 'Based on the retrieved memories, here are suggestions for staying connected with colleagues:\n\n1.  **Propose Virtual Coffee Breaks**: Introdu'
+  elapsed: 51.2s
+[20/30] 0e4e4c46 (knowledge-update) — 18:27:42
+  ingested 481 turns | think: conflicts=12 consolidated=2
+  retrieved 20 (top score 1.025)
+  recall_hit=True answer: 'Your current highest score in Ticket to Ride is 132 points.'
+  elapsed: 51.3s
+[21/30] 6456829e (multi-session) — 18:28:33
+  ingested 488 turns | think: conflicts=12 consolidated=2
+  retrieved 20 (top score 1.129)
+  recall_hit=True answer: 'You initially planted 5 tomato plants. The memories do not specify the initial number of cucumber plants, only that you currently have 3 cuc'
+  elapsed: 47.3s
+[22/30] c7dc5443 (knowledge-update) — 18:29:20
+  ingested 478 turns | think: conflicts=17 consolidated=1
+  retrieved 20 (top score 1.086)
+  recall_hit=True answer: 'Based on the retrieved memories, your volleyball team, the Net Ninjas, has a record of **5-2**.\n\n(Note: Memory 13 mentions a 3-2 record from'
+  elapsed: 46.2s
+[23/30] 852ce960 (knowledge-update) — 18:30:06
+  ingested 396 turns | think: conflicts=7 consolidated=1
+  retrieved 20 (top score 1.206)
+  recall_hit=True answer: 'You were pre-approved for $350,000.'
+  elapsed: 43.4s
+[24/30] b6025781 (single-session-preference) — 18:30:50
+  ingested 460 turns | think: conflicts=16 consolidated=1
+  retrieved 20 (top score 1.273)
+  recall_hit=True answer: 'Based on previous conversations, here are some meal prep suggestions:\n\n*   **Lentil Bolognese with Quinoa:** Use lentil bolognese and quinoa'
+  elapsed: 53.1s
+[25/30] gpt4_76048e76 (temporal-reasoning) — 18:31:43
+  ingested 482 turns | think: conflicts=13 consolidated=1
+  retrieved 20 (top score 1.076)
+  recall_hit=True answer: 'Based on the retrieved memories, you took care of the **bike** first.\n\n*   **Memory 3** and **Memory 8** state that you had bike repairs in '
+  elapsed: 53.5s
+[26/30] afdc33df (single-session-preference) — 18:32:36
+  ingested 502 turns | think: conflicts=10 consolidated=1
+  retrieved 20 (top score 1.035)
+  recall_hit=True answer: 'The provided memories do not contain specific tips for keeping a kitchen clean. They only cover organizing utensils, repairing granite scrat'
+  elapsed: 51.3s
+[27/30] 6b7dfb22 (single-session-preference) — 18:33:28
+  ingested 471 turns | think: conflicts=12 consolidated=1
+  retrieved 20 (top score 1.209)
+  recall_hit=True answer: 'Based on the retrieved memories, you can find new inspiration by:\n\n1.  **Looking at flower paintings on Instagram** (Memory 4).\n2.  **Starti'
+  elapsed: 50.3s
+[28/30] bb7c3b45 (multi-session) — 18:34:18
+  ingested 495 turns | think: conflicts=19 consolidated=0
+  retrieved 20 (top score 1.102)
+  recall_hit=True answer: 'You saved $300 on the Jimmy Choo heels (originally $500, purchased for $200).'
+  elapsed: 56.7s
+[29/30] bc8a6e93 (single-session-user) — 18:35:15
+  ingested 537 turns | think: conflicts=24 consolidated=0
+  retrieved 20 (top score 0.984)
+  recall_hit=True answer: "You baked a lemon blueberry cake for your niece's birthday party."
+  elapsed: 59.0s
+[30/30] bc8a6e93_abs (single-session-user) — 18:36:14
+  ingested 493 turns | think: conflicts=18 consolidated=0
+  retrieved 20 (top score 0.899)
+  recall_hit=True answer: "The provided memories do not contain information about what you baked for your uncle's birthday party. They mention a lemon blueberry cake m"
+  elapsed: 54.2s
+
+done: 2026-04-19 18:37:08

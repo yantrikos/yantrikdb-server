@@ -81,6 +81,16 @@ def _embed(text: str) -> list[float]:
     return [float(x) for x in vec.tolist()]
 
 
+def embed_batch(texts: list[str]) -> list[list[float]]:
+    """Encode a batch of texts. Much faster than per-call encode() because
+    sentence-transformers amortizes tokenization/model init across the batch.
+    On CPU this is 10-50x faster for batches of 100+ than sequential encode()."""
+    if not texts:
+        return []
+    vecs = embedder().encode(texts, convert_to_numpy=True, normalize_embeddings=False, batch_size=64)
+    return [[float(x) for x in v.tolist()] for v in vecs]
+
+
 class YantrikStore:
     """Thin wrapper mimicking MemoryStore.remember/recall/summary/think."""
 
@@ -98,13 +108,18 @@ class YantrikStore:
         session: int,
         importance: float = 0.5,
         valence: float = 0.0,
+        embedding: list[float] | None = None,
     ) -> dict:
         """Store a memory. Key is passed via metadata so it's retrievable.
-        Text for embedding = "{key}: {value}"."""
+        Text for embedding = "{key}: {value}".
+
+        If `embedding` is passed, skip the per-call embed() (use when you've
+        batch-encoded already).
+        """
         text = f"{key}: {value}" if key else value
         if not text.strip():
             return {"__error__": "empty text"}
-        emb = _embed(text)
+        emb = embedding if embedding is not None else _embed(text)
         body = {
             "text": text,
             "memory_type": "semantic",
@@ -122,6 +137,45 @@ class YantrikStore:
         r = _http("POST", "/v1/remember", body=body)
         self.write_log.append({"session": session, "key": key, "value": value[:100], "result_keys": list(r.keys())[:5]})
         return r
+
+    def remember_batch(
+        self,
+        items: list[dict],  # each: {key, value, session, importance?, valence?}
+        chunk_size: int = 50,  # HTTP 413 body-size hits around 300+; safe at 50
+    ) -> dict:
+        """Batch-encode all texts, then POST to /v1/remember/batch in chunks.
+        Each chunk = one HTTP round-trip. MASSIVELY faster than looped
+        remember() at scale (550-turn haystack: ~10s vs ~20min on CPU)."""
+        if not items:
+            return {"count": 0, "rids": []}
+        texts = [(item["key"] + ": " + item["value"]) if item.get("key") else item["value"] for item in items]
+        vecs = embed_batch(texts)
+
+        all_rids = []
+        for i in range(0, len(items), chunk_size):
+            batch_items = items[i:i + chunk_size]
+            batch_vecs = vecs[i:i + chunk_size]
+            memories = []
+            for item, vec in zip(batch_items, batch_vecs):
+                memories.append({
+                    "text": (item["key"] + ": " + item["value"]) if item.get("key") else item["value"],
+                    "memory_type": "semantic",
+                    "importance": item.get("importance", 0.5),
+                    "valence": item.get("valence", 0.0),
+                    "namespace": self.namespace,
+                    "domain": self.domain,
+                    "source": f"session_{item['session']}",
+                    "embedding": vec,
+                    "metadata": {"session_n": item["session"], "key": item.get("key", "")},
+                })
+            r = _http("POST", "/v1/remember/batch", body={"memories": memories}, timeout=300)
+            if "__error__" in r:
+                # Fail LOUDLY so silent ingestion-skips can't fake success in logs
+                self.write_log.append({"batch_error": r["__error__"], "chunk_start": i, "chunk_size": len(batch_items)})
+                raise RuntimeError(f"remember_batch HTTP failure at chunk offset {i} (size {len(batch_items)}): {r['__error__']}")
+            all_rids.extend(r.get("rids", []))
+            self.write_log.append({"batch_count": len(batch_items), "rids_returned": len(r.get("rids", []))})
+        return {"count": len(all_rids), "rids": all_rids}
 
     def recall(self, query: str, top_k: int = 10) -> list[dict]:
         """Run yantrikdb's multi-signal recall. Returns list of dicts with

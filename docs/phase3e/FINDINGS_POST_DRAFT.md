@@ -160,17 +160,35 @@ instead of asserted.
 - n=2 per cell on Phase 3C; n=5 per type (30 total) on LongMemEval L1.
   Small samples.
 - Same-scenario rerun; not novel cross-benchmark validation.
-- LongMemEval L1 (30 oracle instances) shows a more nuanced picture:
+- LongMemEval L1 (30 oracle instances, ~36 turns/haystack):
   real yantrikdb 73% vs simulator 77% aggregate, but with
-  multi-session +20 and temporal-reasoning +20 (where yantrikdb is
-  expected to help), at the cost of single-session regressions
-  (-20 to -40 — expected, since word-overlap on small haystacks
-  lands directly on near-exact lexical matches and embeddings
-  normalize that advantage away).
+  multi-session +20 and temporal-reasoning +20 (where yantrikdb
+  helps), at the cost of single-session regressions (-20 to -40
+  — expected, since word-overlap on small haystacks lands
+  directly on near-exact lexical matches and embeddings normalize
+  that advantage away).
+- LongMemEval L3 (longmemeval_s, 550-turn haystacks):
+  real yantrikdb 70% vs simulator 70% aggregate — clean tie.
+  But the per-type distribution is the story:
+
+  | type | simulator L3 | real ydb L3 | Δ |
+  |---|---|---|---|
+  | multi-session | 40% | 80% | **+40** |
+  | temporal-reasoning | 40% | 60% | +20 |
+  | single-session-preference | 40% | 60% | +20 |
+  | knowledge-update | 100% | 80% | -20 |
+  | single-session-user | 100% | 80% | -20 |
+  | single-session-assistant | 100% | 60% | -40 |
+
+  The +40 pts on multi-session at 550-turn scale is the strongest
+  per-type signal in the entire Phase 3E data. Real yantrikdb
+  helps where multi-signal retrieval matters (queries requiring
+  cross-session aggregation), hurts where simple word-overlap on
+  small haystacks lands directly on the right turn. At even larger
+  scale (longmemeval_m, 500 sessions) the scale-framing predicts
+  real ydb should pull ahead on aggregate too — untested.
 - Qwen 3.6 judging Qwen 3.6 answers has ~5% upward bias vs GPT-4o
-  per spot checks. A GPT-4o judge pass would tighten the numbers.
-- LongMemEval L3 (longmemeval_s, 550-turn haystacks) with real
-  yantrikdb hasn't run yet.
+  per spot checks. A GPT-4o judge pass would tighten numbers.
 
 ## What's next
 

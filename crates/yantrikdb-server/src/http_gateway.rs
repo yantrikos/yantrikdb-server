@@ -1346,6 +1346,230 @@ async fn admin_snapshot(
     Ok(Json(result))
 }
 
+// ──────────────────────────────────────────────────────────────────
+// RFC 008 substrate surface — exposes the Warrant Flow primitives as
+// HTTP endpoints so an agent (MCP client, local LLM, etc.) can ingest
+// claims with source_lineage, read mobility/contest state, record
+// cognitive moves, and audit flagged propositions. See the tool-
+// discovery doc for the full surface.
+// ──────────────────────────────────────────────────────────────────
+
+async fn ingest_claim_with_lineage(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("ingest_claim_with_lineage");
+    check_writable(&state)?;
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let source_lineage: Vec<String> = body
+        .get("source_lineage")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cmd = Command::IngestClaimWithLineage {
+        src: body["src"]
+            .as_str()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'src'"))?
+            .into(),
+        rel_type: body["rel_type"]
+            .as_str()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'rel_type'"))?
+            .into(),
+        dst: body["dst"]
+            .as_str()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'dst'"))?
+            .into(),
+        namespace: body
+            .get("namespace")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default")
+            .into(),
+        polarity: body.get("polarity").and_then(|v| v.as_i64()).unwrap_or(1) as i32,
+        modality: body
+            .get("modality")
+            .and_then(|v| v.as_str())
+            .unwrap_or("asserted")
+            .into(),
+        valid_from: body.get("valid_from").and_then(|v| v.as_f64()),
+        valid_to: body.get("valid_to").and_then(|v| v.as_f64()),
+        extractor: body
+            .get("extractor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("manual")
+            .into(),
+        extractor_version: body
+            .get("extractor_version")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        confidence_band: body
+            .get("confidence_band")
+            .and_then(|v| v.as_str())
+            .unwrap_or("medium")
+            .into(),
+        source_memory_rid: body
+            .get("source_memory_rid")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        weight: body.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0),
+        source_lineage,
+    };
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+}
+
+async fn get_mobility(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("get_mobility");
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let cmd = Command::GetMobility {
+        src: params
+            .get("src")
+            .cloned()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'src'"))?,
+        rel_type: params
+            .get("rel_type")
+            .cloned()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'rel_type'"))?,
+        dst: params
+            .get("dst")
+            .cloned()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'dst'"))?,
+        namespace: params
+            .get("namespace")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string()),
+        regime: params
+            .get("regime")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string()),
+    };
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+}
+
+async fn get_contest(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("get_contest");
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let cmd = Command::GetContest {
+        src: params
+            .get("src")
+            .cloned()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'src'"))?,
+        rel_type: params
+            .get("rel_type")
+            .cloned()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'rel_type'"))?,
+        dst: params
+            .get("dst")
+            .cloned()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'dst'"))?,
+        namespace: params
+            .get("namespace")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string()),
+        regime: params
+            .get("regime")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string()),
+    };
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+}
+
+async fn record_move_event(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("record_move_event");
+    check_writable(&state)?;
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let string_array = |key: &str| -> Vec<String> {
+        body.get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let cmd = Command::RecordMoveEvent {
+        move_type: body["move_type"]
+            .as_str()
+            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'move_type'"))?
+            .into(),
+        operator_version: body
+            .get("operator_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("v1")
+            .into(),
+        context_regime: body
+            .get("context_regime")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        observability: body
+            .get("observability")
+            .and_then(|v| v.as_str())
+            .unwrap_or("observed")
+            .into(),
+        inference_confidence: body.get("inference_confidence").and_then(|v| v.as_f64()),
+        inference_basis: body.get("inference_basis").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        }),
+        input_claim_ids: string_array("input_claim_ids"),
+        output_claim_ids: string_array("output_claim_ids"),
+        side_effect_claim_ids: string_array("side_effect_claim_ids"),
+        dependencies: string_array("dependencies"),
+    };
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+}
+
+async fn list_flagged(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("list_flagged");
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let flag_mask = params
+        .get("flag_mask")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(50);
+    let cmd = Command::ListFlaggedPropositions { flag_mask, limit };
+    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+}
+
 /// Simple timestamp for backup filenames.
 fn chrono_ts() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1382,6 +1606,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster/promote", post(cluster_promote))
         .route("/v1/admin/control-snapshot", get(control_snapshot))
         .route("/v1/admin/snapshot", post(admin_snapshot))
+        // RFC 008 Warrant Flow substrate
+        .route("/v1/claim_with_lineage", post(ingest_claim_with_lineage))
+        .route("/v1/mobility", get(get_mobility))
+        .route("/v1/contest", get(get_contest))
+        .route("/v1/move_events", post(record_move_event))
+        .route("/v1/flagged_propositions", get(list_flagged))
         .route("/metrics", get(metrics))
         .with_state(state)
 }

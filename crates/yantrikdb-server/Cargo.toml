@@ -17,7 +17,7 @@ name = "yantrikdb"
 path = "src/main.rs"
 
 [dependencies]
-yantrikdb = { version = "0.6.1", git = "https://github.com/yantrikos/yantrikdb.git", tag = "v0.6.1" }
+yantrikdb = { git = "https://github.com/yantrikos/yantrikdb.git", branch = "main" }
 yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime

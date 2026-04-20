@@ -1,0 +1,61 @@
+{
+  "scenario": "Dr. Elena Marques — 5-visit patient care arc (Jan–Jun 2026) for T2 diabetes with evolving differential",
+  "sessions": [
+    {
+      "n": 1,
+      "title": "Visit 1 — Jan 12: intake consult",
+      "narrative": "Dr. Marques presents to Northgate Family Medicine on Jan 12, 2026, for a follow-up after an elevated HbA1c flagged by her employer's annual screening. Dr. Marques is 52, works as a professor of comparative literature at Westbrook University, and has no prior history of diabetes in her own medical record. Primary care physician on this visit is Dr. Samuel Okafor, who has been her PCP for 9 years. Initial working diagnosis: Type 2 diabetes mellitus, early stage. Starting medication: metformin 500mg twice daily (brand: Glucophage). Target HbA1c set at 7.0% per current ADA guidelines. Referral placed to Dr. Linda Haruni (endocrinology, Northgate) for confirmatory workup. Dr. Marques mentions she has two daughters — Isabel Marques (her biological daughter, 24, software engineer) and Maria Marques (her sister-in-law's daughter she formally adopted at age 16, now 19, studying architecture at a different university). Both share the Marques surname. She also mentions enjoying her weekend tennis league, which is not medically relevant. Dr. Okafor documents a baseline hypertension reading of 138/85 — not elevated enough for immediate intervention. Insurance: BlueCross PPO, in-network. Next visit scheduled for Feb 15 after endocrinology consult."
+    },
+    {
+      "n": 2,
+      "title": "Visit 2 — Feb 15: post-endocrinology, differential revised",
+      "narrative": "Follow-up Feb 15 with Dr. Okafor. Dr. Haruni's endocrinology report is in. The workup revealed autoimmune markers (GAD-65 antibodies positive, C-peptide low-normal) that change the picture. REVISED DIAGNOSIS: Latent autoimmune diabetes in adults (LADA), not T2DM as initially suspected. This changes the treatment trajectory. Metformin is being DISCONTINUED; new medication is insulin glargine 10 units at bedtime (brand: Lantus). Target HbA1c for LADA is typically tighter: REVISED TARGET 6.5%. Dr. Okafor notes that if Dr. Marques later reports recurring hypoglycemic episodes (≥3 per week), insulin dose should be escalated to a basal-bolus regimen — that's the explicit escalation rule. Referral added: certified diabetes educator at Northgate, Monica Fairweather. Dr. Marques shares that her daughter Maria (the adopted 19-year-old, not Isabel) is considering pre-med at her architecture school as a second major; again, not medically relevant. She confirms her tennis league is on pause for the summer heat. Blood pressure today: 142/88 — borderline, continue monitoring. Next follow-up in 6 weeks."
+    },
+    {
+      "n": 3,
+      "title": "Visit 3 — Mar 28: medication tolerance review",
+      "narrative": "Visit 3 on Mar 28 with Dr. Okafor. Dr. Marques has been on Lantus for 6 weeks and reports no hypoglycemic episodes — tolerance is good. HbA1c has dropped to 7.2% (from starting 8.4%). She mentions that her weekend dog-walking routine has replaced the paused tennis league. Dr. Okafor notes: if HbA1c drops below 6.0%, Lantus dose should be reduced to prevent overcorrection and potential hypoglycemia — another explicit clinical rule. Dr. Marques tells a long story about a family road trip planned for summer, which is not medically relevant. She also confirms she has seen Monica Fairweather (the diabetes educator) twice and found the nutrition sessions useful. Notable addition: Dr. Okafor adds a note that Dr. Marques's daughter Isabel (the software engineer, 24, biological) has asked to accompany her to the next visit to understand the care plan — Isabel, not Maria. This is a family-support request, not a clinical one. Blood pressure today: 136/84, improving. Next visit: May 10 for the 3-month HbA1c recheck."
+    },
+    {
+      "n": 4,
+      "title": "Visit 4 — May 10: HbA1c recheck + clinic transition",
+      "narrative": "Visit 4 on May 10. Dr. Marques reports generally stable glucose control. HbA1c is now 6.4% — below the revised 6.5% target. Per the clinical rule established in Visit 3, Lantus dose is REDUCED from 10 units to 7 units at bedtime. Dr. Okafor also notes a logistical change: Northgate Family Medicine's satellite clinic on the west side is closing at the end of Q2, and Dr. Marques's care will transition to Northgate's main campus (different location, same PCP, same care team). The diabetes educator is ALSO changing: Monica Fairweather is taking maternity leave, and Dr. Marques will transition to Gregory Tan as her diabetes educator from June onward. Dr. Okafor takes time to clarify for any care coordinator reading the chart: the patient's daughter Isabel (biological, 24, software engineer) is on the proxy access list for medical records; Maria (adopted, 19, architecture student) is not, per Dr. Marques's explicit preference. Blood pressure today: 128/80, good. Dr. Marques mentions that she is considering switching insurance next year but has not decided — not actionable this visit. Next visit: June 22 for a 6-month comprehensive review."
+    },
+    {
+      "n": 5,
+      "title": "Visit 5 — Jun 22: 6-month comprehensive review",
+      "narrative": "Visit 5, Jun 22, at the main Northgate campus. Comprehensive 6-month review. HbA1c is 6.5% — at target. Dr. Marques is stable on Lantus 7 units at bedtime. Dr. Okafor notes a REVISED PCP assignment: he is transitioning to a teaching role at the university hospital starting July, and Dr. Marques's new PCP will be Dr. Aiko Tanaka, also at Northgate main campus, effective July 1. Continuity of care has been arranged: Dr. Tanaka has reviewed the full chart. The diabetes educator transition to Gregory Tan is now complete; he met Dr. Marques last week. Dr. Okafor also clarifies the autoimmune panel: if any future antibody screen returns positive for IA-2 autoantibodies (which were negative at baseline), that would escalate to a more aggressive monitoring protocol — Dr. Tanaka should watch for this in future labs. Dr. Marques confirms her summer family trip happened, was enjoyable, and she managed her insulin regimen throughout. The Marques household: Dr. Marques's husband Rafael is named on the emergency contact list; again, Isabel is the only daughter with proxy medical record access. Tennis league resumed in fall (non-medical detail, for care continuity note). Next visit: September with Dr. Tanaka. Dr. Okafor's closing note: Dr. Marques is doing well on the revised diagnosis and treatment plan; transition plan is complete."
+    }
+  ],
+  "probes": [
+    {"id": 1, "type": "direct", "q": "What is Dr. Marques's occupation?", "expected_answer_patterns": ["professor", "comparative literature", "academic"], "expected_provenance_session": 1},
+    {"id": 2, "type": "direct", "q": "Which insurance plan does Dr. Marques have?", "expected_answer_patterns": ["bluecross", "blue cross", "ppo"], "expected_provenance_session": 1},
+    {"id": 3, "type": "direct", "q": "Who is Dr. Marques's husband?", "expected_answer_patterns": ["rafael"], "expected_provenance_session": 5},
+    {"id": 4, "type": "direct", "q": "What is the name of the diabetes educator who replaced Monica Fairweather?", "expected_answer_patterns": ["gregory tan", "gregory"], "expected_provenance_session": 4},
+    {"id": 5, "type": "direct", "q": "What autoimmune antibodies were positive in the endocrinology workup?", "expected_answer_patterns": ["gad-65", "gad65", "gad 65", "gad"], "expected_provenance_session": 2},
+
+    {"id": 6, "type": "supersession", "q": "What is Dr. Marques's CURRENT primary diagnosis?", "expected_answer_patterns": ["lada", "latent autoimmune diabetes"], "stale_answer_patterns": ["type 2 diabetes", "t2dm", "t2 diabetes"], "expected_provenance_session": 2, "originally_session": 1},
+    {"id": 7, "type": "supersession", "q": "What is Dr. Marques's CURRENT primary medication?", "expected_answer_patterns": ["lantus", "insulin glargine", "glargine"], "stale_answer_patterns": ["metformin", "glucophage"], "expected_provenance_session": 2, "originally_session": 1},
+    {"id": 8, "type": "supersession", "q": "What is Dr. Marques's CURRENT HbA1c target?", "expected_answer_patterns": ["6.5", "6.5%"], "stale_answer_patterns": ["7.0", "7%"], "expected_provenance_session": 2, "originally_session": 1},
+    {"id": 9, "type": "supersession", "q": "What is Dr. Marques's CURRENT Lantus dose?", "expected_answer_patterns": ["7 units", "7u", "seven units"], "stale_answer_patterns": ["10 units", "10u", "ten units"], "expected_provenance_session": 4, "originally_session": 2},
+    {"id": 10, "type": "supersession", "q": "Who will be Dr. Marques's CURRENT primary care physician going forward?", "expected_answer_patterns": ["aiko tanaka", "dr. tanaka", "tanaka"], "stale_answer_patterns": ["samuel okafor", "dr. okafor", "okafor"], "expected_provenance_session": 5, "originally_session": 1},
+
+    {"id": 11, "type": "branch_indirect", "q": "Dr. Marques reports she has been having 4 hypoglycemic episodes per week since last weekend. What is the escalation protocol per the care plan?", "expected_answer_patterns": ["basal-bolus", "basal bolus", "escalate", "insulin dose should be escalated"], "expected_provenance_session": 2},
+    {"id": 12, "type": "branch_indirect", "q": "Next HbA1c check shows 5.8%. What should happen to her Lantus dose?", "expected_answer_patterns": ["reduce", "reduced", "lower", "decrease"], "expected_provenance_session": 3},
+    {"id": 13, "type": "branch_indirect", "q": "Dr. Tanaka's first labs show IA-2 autoantibody positive. What does this trigger per Dr. Okafor's closing guidance?", "expected_answer_patterns": ["aggressive monitoring", "more aggressive", "escalate", "escalated monitoring", "aggressive monitoring protocol"], "expected_provenance_session": 5},
+
+    {"id": 14, "type": "alias", "q": "Which of Dr. Marques's daughters has proxy access to her medical records — Isabel or Maria?", "expected_answer_patterns": ["isabel"], "confusion_answer_patterns": ["maria"], "expected_provenance_session": 4},
+    {"id": 15, "type": "alias", "q": "Which brand-name medication did Dr. Marques take INITIALLY (not currently) — Glucophage or Lantus?", "expected_answer_patterns": ["glucophage"], "confusion_answer_patterns": ["lantus"], "expected_provenance_session": 1}
+  ],
+  "alias_pairs_for_pipeline": [
+    ["Isabel Marques", "distinct_from", "Maria Marques"],
+    ["Maria Marques", "distinct_from", "Isabel Marques"],
+    ["Glucophage", "distinct_from", "Lantus"],
+    ["Lantus", "distinct_from", "Glucophage"],
+    ["Northgate Family Medicine satellite", "distinct_from", "Northgate main campus"],
+    ["Northgate main campus", "distinct_from", "Northgate Family Medicine satellite"],
+    ["Monica Fairweather", "distinct_from", "Gregory Tan"],
+    ["Gregory Tan", "distinct_from", "Monica Fairweather"]
+  ],
+  "note_on_aliases": "These 8 alias pairs are derived ENTIRELY from the scenario's explicit text (both Isabel and Maria are named in Session 1; Glucophage and Lantus are both named as distinct brand names; the clinic locations and diabetes educator names are explicit in the narrative). No alias pair was chosen based on observing Scenario 2 runs. Committed before any run per the pre-registered v3 pipeline recipe."
+}

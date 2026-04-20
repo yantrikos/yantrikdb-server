@@ -1,5 +1,13 @@
 # YantrikDB
 
+> ⚠ **Correction notice (2026-04-19):** Phase 3 benchmark writeups committed
+> earlier today (`docs/phase3a/`, `docs/phase3b/`, `docs/phase3c/`,
+> `docs/phase3d/`) used a Python simulator for the "structured memory"
+> condition — NOT the actual yantrikdb engine. Rerun with real yantrikdb
+> is in [`docs/phase3e/`](docs/phase3e/). Full audit trail in
+> [`CORRECTIONS.md`](CORRECTIONS.md). Full corrected findings post
+> coming 2026-04-20.
+
 **A memory database that forgets, consolidates, and detects contradictions.**
 
 Vector databases store memories. They don't manage them. After 10,000 memories, recall quality degrades because there's no consolidation, no forgetting, no conflict resolution. Your AI agent just gets noisier.

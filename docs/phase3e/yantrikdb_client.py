@@ -224,6 +224,53 @@ class YantrikStore:
     def stats(self) -> dict:
         return _http("GET", "/v1/stats")
 
+    # ── Knowledge graph ──────────────────────────────────────────
+
+    def relate(self, entity: str, target: str, relationship: str, weight: float = 1.0) -> dict:
+        """Add an explicit entity-to-entity relationship. The `/v1/relate`
+        endpoint is marked deprecated in favor of `/v1/claim` but still works."""
+        body = {"entity": entity, "target": target, "relationship": relationship, "weight": weight}
+        return _http("POST", "/v1/relate", body=body)
+
+    # ── Conflict scan + resolve ──────────────────────────────────
+
+    def list_conflicts(self, status: str = "open", limit: int = 100) -> list[dict]:
+        r = _http("GET", "/v1/conflicts", params={"status": status, "limit": str(limit)})
+        if "__error__" in r:
+            return []
+        return r.get("conflicts", [])
+
+    def resolve_conflict(self, conflict_id: str, strategy: str = "keep_b",
+                          winner_rid: str | None = None,
+                          new_text: str | None = None,
+                          resolution_note: str | None = None) -> dict:
+        body = {"strategy": strategy}
+        if winner_rid: body["winner_rid"] = winner_rid
+        if new_text: body["new_text"] = new_text
+        if resolution_note: body["resolution_note"] = resolution_note
+        return _http("POST", f"/v1/conflicts/{conflict_id}/resolve", body=body)
+
+    def resolve_all_latest_wins(self) -> dict:
+        """For every open conflict, resolve with 'latest wins' semantics.
+        yantrikdb RIDs are UUIDv7 (time-prefixed) so lexical max = newest."""
+        conflicts = self.list_conflicts(status="open", limit=500)
+        resolved = 0
+        errors = 0
+        for c in conflicts:
+            a = c.get("memory_a", "")
+            b = c.get("memory_b", "")
+            if not a or not b:
+                continue
+            # Later UUIDv7 lexically sorts higher
+            strategy = "keep_b" if b > a else "keep_a"
+            r = self.resolve_conflict(c["conflict_id"], strategy=strategy,
+                                       resolution_note="auto: latest-wins post-ingest")
+            if "__error__" in r:
+                errors += 1
+            else:
+                resolved += 1
+        return {"resolved": resolved, "errors": errors, "scanned": len(conflicts)}
+
     def summary(self) -> dict:
         s = self.stats()
         return {

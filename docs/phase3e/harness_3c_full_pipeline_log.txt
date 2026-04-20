@@ -1,0 +1,27 @@
+Phase 3E v3: FULL yantrikdb pipeline on 3C scenario
+features: remember + think + relate (alias) + resolve_conflict (latest-wins)
+DB: fresh_p3e_v3, runs=2
+start: 2026-04-19 20:57:05
+
+
+>>> full_pipeline run=0 (20:57:05)
+    session 1: remember=15 conflicts=0 consolidated=0
+    session 2: remember=15 conflicts=2 consolidated=2
+    session 3: remember=15 conflicts=2 consolidated=0
+    session 4: remember=15 conflicts=4 consolidated=2
+    session 5: remember=15 conflicts=16 consolidated=1
+    relate: 8/8 alias relations added
+    resolve: 24/24 conflicts resolved (0 errors)
+    done — 434.4s, probes=15
+
+>>> full_pipeline run=1 (21:04:19)
+    session 1: remember=15 conflicts=13 consolidated=0
+    session 2: remember=15 conflicts=7 consolidated=0
+    session 3: remember=15 conflicts=11 consolidated=0
+    session 4: remember=11 conflicts=3 consolidated=0
+    session 5: remember=15 conflicts=4 consolidated=0
+    relate: 8/8 alias relations added
+    resolve: 38/38 conflicts resolved (0 errors)
+    done — 532.7s, probes=15
+
+done: 2026-04-19 21:13:12

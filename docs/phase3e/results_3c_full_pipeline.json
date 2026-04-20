@@ -1,0 +1,1294 @@
+{
+  "results": [
+    {
+      "condition": "C_yantrikdb_full_pipeline",
+      "run": 0,
+      "elapsed_s": 434.4,
+      "session_traces": [
+        {
+          "session": 1,
+          "calls_made": 15,
+          "think_conflicts": 0,
+          "think_consolidated": 0
+        },
+        {
+          "session": 2,
+          "calls_made": 15,
+          "think_conflicts": 2,
+          "think_consolidated": 2
+        },
+        {
+          "session": 3,
+          "calls_made": 15,
+          "think_conflicts": 2,
+          "think_consolidated": 0
+        },
+        {
+          "session": 4,
+          "calls_made": 15,
+          "think_conflicts": 4,
+          "think_consolidated": 2
+        },
+        {
+          "session": 5,
+          "calls_made": 15,
+          "think_conflicts": 16,
+          "think_consolidated": 1
+        }
+      ],
+      "relate_results": [
+        {
+          "entity": "Project Aurora",
+          "target": "Aurora-lite",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Aurora-lite",
+          "target": "Project Aurora",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "hard_budget_cap",
+          "target": "target_budget",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "target_budget",
+          "target": "hard_budget_cap",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Nexus-North",
+          "target": "Nexus-South",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Nexus-South",
+          "target": "Nexus-North",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "phase2_ship_date",
+          "target": "phase2_announce_date",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "phase2_announce_date",
+          "target": "phase2_ship_date",
+          "rel": "distinct_from",
+          "ok": true
+        }
+      ],
+      "resolve_result": {
+        "resolved": 24,
+        "errors": 0,
+        "scanned": 24
+      },
+      "final_stats": {
+        "active_memories": 59,
+        "consolidated_memories": 5,
+        "edges": 11,
+        "entities": 112,
+        "open_conflicts": 0,
+        "operations": 330,
+        "pending_triggers": 7,
+        "tombstoned_memories": 16
+      },
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: SOC 2 Type II\nSource: Session 1",
+          "retrieved": [
+            {
+              "key": "titan_compliance_baseline",
+              "value": "SOC 2 Type II",
+              "session": 1,
+              "score": 1.1248584039874088
+            },
+            {
+              "key": "",
+              "value": "titan_budget_hard_cap: $4.8M | titan_budget_target: $4.2M | titan_project_aurora",
+              "session": 0,
+              "score": 1.0401805610134789
+            },
+            {
+              "key": "workload_rule_aurora",
+              "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+              "session": 5,
+              "score": 0.9483488203424785
+            },
+            {
+              "key": "",
+              "value": "titan_session1_action_item: Architecture deep-dive | week2_session_topic: Archit",
+              "session": 0,
+              "score": 0.8580745421876649
+            },
+            {
+              "key": "titan_hr_new_joiner",
+              "value": "Sarah Chen joined IT March 2026",
+              "session": 1,
+              "score": 0.8469584021229656
+            }
+          ]
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: AWS\nSource: Session 0",
+          "retrieved": [
+            {
+              "key": "",
+              "value": "titan_budget_hard_cap: $4.8M | titan_budget_target: $4.2M | titan_project_aurora",
+              "session": 0,
+              "score": 1.1467950462224843
+            },
+            {
+              "key": "",
+              "value": "network_architecture: Hub-and-spoke via AWS Transit Gateway in us-west-2. | netw",
+              "session": 0,
+              "score": 0.9687038468526955
+            },
+            {
+              "key": "titan_hr_new_joiner",
+              "value": "Sarah Chen joined IT March 2026",
+              "session": 1,
+              "score": 1.0305654496761743
+            },
+            {
+              "key": "titan_compliance_baseline",
+              "value": "SOC 2 Type II",
+              "session": 1,
+              "score": 1.0651970122832857
+            },
+            {
+              "key": "titan_mig_session1_location",
+              "value": "Titan HQ Seattle",
+              "session": 1,
+              "score": 1.0476065234472465
+            }
+          ]
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: Maria Delgado\nSource: Session 1",
+          "retrieved": [
+            {
+              "key": "",
+              "value": "titan_budget_hard_cap: $4.8M | titan_budget_target: $4.2M | titan_project_aurora",
+              "session": 0,
+              "score": 1.1175818107090518
+            },
+            {
+              "key": "downtime_escalation",
+              "value": "Downtime over 4 hours triggers escalation to CIO and potentially parent company",
+              "session": 3,
+              "score": 0.9225993394370338
+            },
+            {
+              "key": "titan_hr_new_joiner",
+              "value": "Sarah Chen joined IT March 2026",
+              "session": 1,
+              "score": 1.0317344521255107
+            },
+            {
+              "key": "titan_compliance_baseline",
+              "value": "SOC 2 Type II",
+              "session": 1,
+              "score": 1.0590378610700832
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 1.0142868347490581
+            }
+          ]
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: Priya Nair\nSource: Session 1",
+          "retrieved": [
+            {
+              "key": "consulting_firm_location",
+              "value": "Consulting firm headquartered in Austin, Texas",
+              "session": 3,
+              "score": 1.1877558479318207
+            },
+            {
+              "key": "titan_consulting_lead",
+              "value": "Priya Nair",
+              "session": 1,
+              "score": 1.0677137405819495
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 0.8622934522049646
+            },
+            {
+              "key": "procurement_threshold",
+              "value": "Over $500K requires dual-vendor approval and documentation.",
+              "session": 2,
+              "score": 0.5623085047215612
+            },
+            {
+              "key": "titan_hr_new_joiner",
+              "value": "Sarah Chen joined IT March 2026",
+              "session": 1,
+              "score": 0.6763826681145719
+            }
+          ]
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: Okta\nSource: Session 3",
+          "retrieved": [
+            {
+              "key": "titan_aurora_lite_scope",
+              "value": "Internal staff beta, ECS Fargate, no auth",
+              "session": 1,
+              "score": 1.0650433488475053
+            },
+            {
+              "key": "titan_compliance_baseline",
+              "value": "SOC 2 Type II",
+              "session": 1,
+              "score": 1.028441556150636
+            },
+            {
+              "key": "titan_consulting_lead",
+              "value": "Priya Nair",
+              "session": 1,
+              "score": 1.0107659860439069
+            },
+            {
+              "key": "",
+              "value": "titan_budget_hard_cap: $4.8M | titan_budget_target: $4.2M | titan_project_aurora",
+              "session": 0,
+              "score": 1.040650290927088
+            },
+            {
+              "key": "titan_mig_session1_location",
+              "value": "Titan HQ Seattle",
+              "session": 1,
+              "score": 1.0266612291418407
+            }
+          ]
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: Q4 2026\nSource: Session 3",
+          "retrieved": [
+            {
+              "key": "",
+              "value": "titan_budget_hard_cap: $4.8M | titan_budget_target: $4.2M | titan_project_aurora",
+              "session": 0,
+              "score": 1.071290619657011
+            },
+            {
+              "key": "go_live_date",
+              "value": "Steering committee pushed go-live from Q3 2026 to Q4 2026",
+              "session": 3,
+              "score": 0.9171009808902305
+            },
+            {
+              "key": "",
+              "value": "network_architecture: Hub-and-spoke via AWS Transit Gateway in us-west-2. | netw",
+              "session": 0,
+              "score": 0.9336686609962332
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 1.0144820636726046
+            },
+            {
+              "key": "titan_hr_new_joiner",
+              "value": "Sarah Chen joined IT March 2026",
+              "session": 1,
+              "score": 0.9981141525385948
+            }
+          ]
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Answer: PostgreSQL 16\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "primary_rdbms",
+              "value": "AWS RDS for PostgreSQL 14 Managed",
+              "session": 2,
+              "score": 0.967789289269039
+            },
+            {
+              "key": "db_plan_version",
+              "value": "PostgreSQL 16 from start; PG 14 plan retired due to GA support",
+              "session": 4,
+              "score": 0.9536795660392999
+            },
+            {
+              "key": "procurement_threshold",
+              "value": "Over $500K requires dual-vendor approval and documentation.",
+              "session": 2,
+              "score": 0.5994890873496319
+            },
+            {
+              "key": "titan_hr_new_joiner",
+              "value": "Sarah Chen joined IT March 2026",
+              "session": 1,
+              "score": 0.6202085655187033
+            },
+            {
+              "key": "building_status",
+              "value": "Renovated in 2024. Lobby differs from online photos.",
+              "session": 2,
+              "score": 0.5618861894020163
+            }
+          ]
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: Datadog\nSource: Session 0",
+          "retrieved": [
+            {
+              "key": "",
+              "value": "observability_tool: CloudWatch for observability, AWS-native, nothing else for n",
+              "session": 0,
+              "score": 1.0097685677666763
+            },
+            {
+              "key": "disaster_recovery_rpo",
+              "value": "RPO is 15 minutes for primary production workloads",
+              "session": 4,
+              "score": 0.7761022454413568
+            },
+            {
+              "key": "internal_comms_tool",
+              "value": "Slack used for program updates",
+              "session": 5,
+              "score": 0.7604240188470869
+            },
+            {
+              "key": "",
+              "value": "primary_region: us-west-2 (Oregon) | dr_region: us-east-1 (Virginia)",
+              "session": 0,
+              "score": 0.7051942619851872
+            },
+            {
+              "key": "ci_cd_platform",
+              "value": "Jenkins EOL; pivoting to GitHub Actions Enterprise due to lack of internal exper",
+              "session": 5,
+              "score": 0.7308661798490055
+            }
+          ]
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: AWS Cloud WAN replaces Transit Gateway for better cross-region throughput\nSource: Session 0",
+          "retrieved": [
+            {
+              "key": "",
+              "value": "network_architecture: Hub-and-spoke via AWS Transit Gateway in us-west-2. | netw",
+              "session": 0,
+              "score": 1.1411426580282544
+            },
+            {
+              "key": "ai_service_vpc_endpoint_rule",
+              "value": "VPC endpoint required for Bedrock/SageMaker to satisfy US-only data residency",
+              "session": 4,
+              "score": 1.013990448749136
+            },
+            {
+              "key": "",
+              "value": "titan_session1_action_item: Architecture deep-dive | week2_session_topic: Archit",
+              "session": 0,
+              "score": 0.9689328970342694
+            },
+            {
+              "key": "",
+              "value": "primary_region: us-west-2 (Oregon) | dr_region: us-east-1 (Virginia)",
+              "session": 0,
+              "score": 0.8342406858859162
+            },
+            {
+              "key": "internal_comms_tool",
+              "value": "Slack used for program updates",
+              "session": 5,
+              "score": 0.7508231903039212
+            }
+          ]
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: GitHub Actions Enterprise\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "ci_cd_platform",
+              "value": "Jenkins EOL; pivoting to GitHub Actions Enterprise due to lack of internal exper",
+              "session": 5,
+              "score": 1.0419620914344352
+            },
+            {
+              "key": "kinesis_migration_rule",
+              "value": "Kinesis infrastructure migrates with customer analytics workload due to coupling",
+              "session": 4,
+              "score": 0.844414691513172
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 0.9066973397640321
+            },
+            {
+              "key": "data_residency",
+              "value": "US-only. No EU/APAC. No cross-border movement.",
+              "session": 2,
+              "score": 0.6854802462247425
+            },
+            {
+              "key": "ny_office_signoff_req",
+              "value": "Hard requirement for East Coast analytics migration/cutover.",
+              "session": 2,
+              "score": 0.7441495575909816
+            }
+          ]
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: Kinesis infrastructure\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "kinesis_migration_rule",
+              "value": "Kinesis infrastructure migrates with customer analytics workload due to coupling",
+              "session": 4,
+              "score": 1.1857465837721728
+            },
+            {
+              "key": "",
+              "value": "network_architecture: Hub-and-spoke via AWS Transit Gateway in us-west-2. | netw",
+              "session": 0,
+              "score": 1.1060325157409645
+            },
+            {
+              "key": "dms_licensing_cost",
+              "value": "AWS DMS license cost covered by annual cloud budget, needs flagging in cost mode",
+              "session": 3,
+              "score": 1.0194962650631947
+            },
+            {
+              "key": "",
+              "value": "observability_tool: CloudWatch for observability, AWS-native, nothing else for n",
+              "session": 0,
+              "score": 1.0167580847117086
+            },
+            {
+              "key": "ny_office_signoff_req",
+              "value": "Hard requirement for East Coast analytics migration/cutover.",
+              "session": 2,
+              "score": 1.0479682008610696
+            }
+          ]
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: VPC endpoint required for Bedrock/SageMaker to satisfy US-only data residency\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "ai_service_vpc_endpoint_rule",
+              "value": "VPC endpoint required for Bedrock/SageMaker to satisfy US-only data residency",
+              "session": 4,
+              "score": 1.1274718737174496
+            },
+            {
+              "key": "",
+              "value": "observability_tool: CloudWatch for observability, AWS-native, nothing else for n",
+              "session": 0,
+              "score": 1.0804721413294025
+            },
+            {
+              "key": "",
+              "value": "network_architecture: Hub-and-spoke via AWS Transit Gateway in us-west-2. | netw",
+              "session": 0,
+              "score": 1.0441771680825351
+            },
+            {
+              "key": "data_residency",
+              "value": "US-only. No EU/APAC. No cross-border movement.",
+              "session": 2,
+              "score": 1.1192618694344876
+            },
+            {
+              "key": "primary_rdbms",
+              "value": "AWS RDS for PostgreSQL 14 Managed",
+              "session": 2,
+              "score": 1.0095770440515048
+            }
+          ]
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: A minimum of 0.5 ACU is required to ensure SOC 2 audit logging continuity.\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "workload_rule_aurora",
+              "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+              "session": 5,
+              "score": 1.3499648914194566
+            },
+            {
+              "key": "analytics_workload",
+              "value": "Separate Aurora Serverless clusters",
+              "session": 2,
+              "score": 1.0587576314306877
+            },
+            {
+              "key": "ny_office_signoff_req",
+              "value": "Hard requirement for East Coast analytics migration/cutover.",
+              "session": 2,
+              "score": 0.8854739939070606
+            },
+            {
+              "key": "procurement_threshold",
+              "value": "Over $500K requires dual-vendor approval and documentation.",
+              "session": 2,
+              "score": 0.8152853992442742
+            },
+            {
+              "key": "ai_service_vpc_endpoint_rule",
+              "value": "VPC endpoint required for Bedrock/SageMaker to satisfy US-only data residency",
+              "session": 4,
+              "score": 0.8030257424433167
+            }
+          ]
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: $2.4M\nSource: Session 0",
+          "retrieved": [
+            {
+              "key": "",
+              "value": "titan_budget_hard_cap: $4.8M | titan_budget_target: $4.2M | titan_project_aurora",
+              "session": 0,
+              "score": 1.1925596345928662
+            },
+            {
+              "key": "aurora_phase2_announcement",
+              "value": "Customer announcement date is July 2026",
+              "session": 4,
+              "score": 1.0739014519501975
+            },
+            {
+              "key": "analytics_workload",
+              "value": "Separate Aurora Serverless clusters",
+              "session": 2,
+              "score": 1.0106881471950955
+            },
+            {
+              "key": "dms_licensing_cost",
+              "value": "AWS DMS license cost covered by annual cloud budget, needs flagging in cost mode",
+              "session": 3,
+              "score": 0.9424980680427084
+            },
+            {
+              "key": "titan_aurora_lite_scope",
+              "value": "Internal staff beta, ECS Fargate, no auth",
+              "session": 1,
+              "score": 0.9321877999623263
+            }
+          ]
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: $4.8M\nSource: Session 0",
+          "retrieved": [
+            {
+              "key": "",
+              "value": "titan_budget_hard_cap: $4.8M | titan_budget_target: $4.2M | titan_project_aurora",
+              "session": 0,
+              "score": 1.2880804361734113
+            },
+            {
+              "key": "dms_licensing_cost",
+              "value": "AWS DMS license cost covered by annual cloud budget, needs flagging in cost mode",
+              "session": 3,
+              "score": 1.0211618115150967
+            },
+            {
+              "key": "",
+              "value": "network_architecture: Hub-and-spoke via AWS Transit Gateway in us-west-2. | netw",
+              "session": 0,
+              "score": 0.8684568628038725
+            },
+            {
+              "key": "titan_aurora_lite_scope",
+              "value": "Internal staff beta, ECS Fargate, no auth",
+              "session": 1,
+              "score": 0.9546442603940991
+            },
+            {
+              "key": "ny_office_signoff_req",
+              "value": "Hard requirement for East Coast analytics migration/cutover.",
+              "session": 2,
+              "score": 0.8801195934009092
+            }
+          ]
+        }
+      ],
+      "final_context_chars": 5900
+    },
+    {
+      "condition": "C_yantrikdb_full_pipeline",
+      "run": 1,
+      "elapsed_s": 532.7,
+      "session_traces": [
+        {
+          "session": 1,
+          "calls_made": 15,
+          "think_conflicts": 13,
+          "think_consolidated": 0
+        },
+        {
+          "session": 2,
+          "calls_made": 15,
+          "think_conflicts": 7,
+          "think_consolidated": 0
+        },
+        {
+          "session": 3,
+          "calls_made": 15,
+          "think_conflicts": 11,
+          "think_consolidated": 0
+        },
+        {
+          "session": 4,
+          "calls_made": 11,
+          "think_conflicts": 3,
+          "think_consolidated": 0
+        },
+        {
+          "session": 5,
+          "calls_made": 15,
+          "think_conflicts": 4,
+          "think_consolidated": 0
+        }
+      ],
+      "relate_results": [
+        {
+          "entity": "Project Aurora",
+          "target": "Aurora-lite",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Aurora-lite",
+          "target": "Project Aurora",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "hard_budget_cap",
+          "target": "target_budget",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "target_budget",
+          "target": "hard_budget_cap",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Nexus-North",
+          "target": "Nexus-South",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Nexus-South",
+          "target": "Nexus-North",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "phase2_ship_date",
+          "target": "phase2_announce_date",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "phase2_announce_date",
+          "target": "phase2_ship_date",
+          "rel": "distinct_from",
+          "ok": true
+        }
+      ],
+      "resolve_result": {
+        "resolved": 38,
+        "errors": 0,
+        "scanned": 38
+      },
+      "final_stats": {
+        "active_memories": 102,
+        "consolidated_memories": 5,
+        "edges": 14,
+        "entities": 128,
+        "open_conflicts": 0,
+        "operations": 695,
+        "pending_triggers": 21,
+        "tombstoned_memories": 44
+      },
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: SOC 2 Type II\nSource: Session 1",
+          "retrieved": [
+            {
+              "key": "company_parent_acquisition",
+              "value": "Titan acquired by parent in 2019 for $1.2B; explains board-level visibility",
+              "session": 5,
+              "score": 1.0550169168278314
+            },
+            {
+              "key": "compliance_baseline",
+              "value": "SOC 2 Type II",
+              "session": 1,
+              "score": 1.0249324277078142
+            },
+            {
+              "key": "ai_service_vpc_endpoint_rule",
+              "value": "VPC endpoint required for Bedrock/SageMaker for US residency",
+              "session": 4,
+              "score": 0.8460116484969801
+            },
+            {
+              "key": "cafeteria_highlight",
+              "value": "Titan cafeteria serving free Tuesday breakfast all quarter",
+              "session": 5,
+              "score": 0.8392986293418173
+            },
+            {
+              "key": "rule_aurora_serverless_soc2",
+              "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+              "session": 5,
+              "score": 0.9500695769901472
+            }
+          ]
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: AWS\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "company_parent_acquisition",
+              "value": "Titan acquired by parent in 2019 for $1.2B; explains board-level visibility",
+              "session": 5,
+              "score": 1.1638635907996933
+            },
+            {
+              "key": "meeting_location",
+              "value": "Titan HQ Seattle",
+              "session": 1,
+              "score": 1.017705932672796
+            },
+            {
+              "key": "migration_scope",
+              "value": "Plan includes migrating on-premise SQL Server to cloud",
+              "session": 3,
+              "score": 0.9149818076013859
+            },
+            {
+              "key": "comms_tool",
+              "value": "Slack is Titan's internal comms tool for program updates",
+              "session": 5,
+              "score": 0.9051704834786176
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 0.9663600829416228
+            }
+          ]
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: Maria Delgado\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "company_parent_acquisition",
+              "value": "Titan acquired by parent in 2019 for $1.2B; explains board-level visibility",
+              "session": 5,
+              "score": 1.1770691937787965
+            },
+            {
+              "key": "meeting_location",
+              "value": "Titan HQ Seattle",
+              "session": 1,
+              "score": 1.0095129169511452
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 1.0142688391250765
+            },
+            {
+              "key": "client_cio",
+              "value": "Maria Delgado",
+              "session": 1,
+              "score": 0.85205674283434
+            },
+            {
+              "key": "cafeteria_highlight",
+              "value": "Titan cafeteria serving free Tuesday breakfast all quarter",
+              "session": 5,
+              "score": 0.9362851074050553
+            }
+          ]
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: Priya Nair\nSource: Session 1",
+          "retrieved": [
+            {
+              "key": "consulting_firm_location",
+              "value": "Consulting firm is headquartered in Austin, Texas",
+              "session": 3,
+              "score": 1.095035209289969
+            },
+            {
+              "key": "consultant_lead",
+              "value": "Priya Nair",
+              "session": 1,
+              "score": 1.0836275415709942
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 0.8623270852379851
+            },
+            {
+              "key": "client_cio",
+              "value": "Maria Delgado",
+              "session": 1,
+              "score": 0.6293736313640704
+            },
+            {
+              "key": "legal_counsel",
+              "value": "Morrison & Brooks LLP.",
+              "session": 2,
+              "score": 0.5974425808945548
+            }
+          ]
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: Okta\nSource: Session 3",
+          "retrieved": [
+            {
+              "key": "comms_tool",
+              "value": "Slack is Titan's internal comms tool for program updates",
+              "session": 5,
+              "score": 1.0292676196470472
+            },
+            {
+              "key": "auth_provider",
+              "value": "Okta for internal authentication, not moving to AWS IAM Identity Center",
+              "session": 3,
+              "score": 0.9928358129088728
+            },
+            {
+              "key": "meeting_location",
+              "value": "Titan HQ Seattle",
+              "session": 1,
+              "score": 1.0159172701164931
+            },
+            {
+              "key": "company_parent_acquisition",
+              "value": "Titan acquired by parent in 2019 for $1.2B; explains board-level visibility",
+              "session": 5,
+              "score": 0.9891174888977305
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 0.9663193789991313
+            }
+          ]
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: Q4 2026\nSource: Session 3",
+          "retrieved": [
+            {
+              "key": "comms_tool",
+              "value": "Slack is Titan's internal comms tool for program updates",
+              "session": 5,
+              "score": 1.0276796367709067
+            },
+            {
+              "key": "migration_scope",
+              "value": "Plan includes migrating on-premise SQL Server to cloud",
+              "session": 3,
+              "score": 0.9847417264437948
+            },
+            {
+              "key": "cafeteria_highlight",
+              "value": "Titan cafeteria serving free Tuesday breakfast all quarter",
+              "session": 5,
+              "score": 1.00685280819325
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 1.0144703396544936
+            },
+            {
+              "key": "network_architecture",
+              "value": "AWS Cloud WAN (was Transit Gateway) for cross-region",
+              "session": 4,
+              "score": 0.9440074284292573
+            }
+          ]
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Answer: PostgreSQL 16\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "primary_rdbms",
+              "value": "AWS RDS for PostgreSQL 14 Managed.",
+              "session": 2,
+              "score": 0.9862189313839901
+            },
+            {
+              "key": "db_plan_version",
+              "value": "PostgreSQL 16 from start; v14 plan retired",
+              "session": 4,
+              "score": 0.9244098762055816
+            },
+            {
+              "key": "session4_summary",
+              "value": "PG16, Confidential analytics, Cloud WAN, Datadog, VPC endpoint rule, Kinesis cou",
+              "session": 4,
+              "score": 0.7270255751830815
+            },
+            {
+              "key": "hr_new_joiner",
+              "value": "Sarah Chen joined IT March 2026",
+              "session": 1,
+              "score": 0.66057482914291
+            },
+            {
+              "key": "next_week_topic",
+              "value": "Procurement and delivery timeline.",
+              "session": 2,
+              "score": 0.5586685956642734
+            }
+          ]
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: Datadog (APM/logs/metrics/traces)\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "primary_observability",
+              "value": "Datadog (APM/logs/metrics/traces); CloudWatch fallback only",
+              "session": 4,
+              "score": 0.9330608301336243
+            },
+            {
+              "key": "comms_tool",
+              "value": "Slack is Titan's internal comms tool for program updates",
+              "session": 5,
+              "score": 0.853016610044315
+            },
+            {
+              "key": "primary_rdbms",
+              "value": "AWS RDS for PostgreSQL 14 Managed.",
+              "session": 2,
+              "score": 0.8222365822015054
+            },
+            {
+              "key": "disaster_recovery_rpo",
+              "value": "15 minutes for primary production workloads",
+              "session": 4,
+              "score": 0.7730078238575031
+            },
+            {
+              "key": "primary_codename",
+              "value": "Nexus-North.",
+              "session": 2,
+              "score": 0.7308543782280834
+            }
+          ]
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: AWS Cloud WAN\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "network_architecture",
+              "value": "AWS Cloud WAN (was Transit Gateway) for cross-region",
+              "session": 4,
+              "score": 1.1008507396051572
+            },
+            {
+              "key": "session4_summary",
+              "value": "PG16, Confidential analytics, Cloud WAN, Datadog, VPC endpoint rule, Kinesis cou",
+              "session": 4,
+              "score": 1.0336491374661119
+            },
+            {
+              "key": "ai_service_vpc_endpoint_rule",
+              "value": "VPC endpoint required for Bedrock/SageMaker for US residency",
+              "session": 4,
+              "score": 0.930389155167652
+            },
+            {
+              "key": "ci_cd_platform",
+              "value": "Jenkins EOL; pivoting to GitHub Actions Enterprise due to lack of internal exper",
+              "session": 5,
+              "score": 0.7162370391349504
+            },
+            {
+              "key": "comms_tool",
+              "value": "Slack is Titan's internal comms tool for program updates",
+              "session": 5,
+              "score": 0.788471808513717
+            }
+          ]
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: GitHub Actions Enterprise\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "ci_cd_platform",
+              "value": "Jenkins EOL; pivoting to GitHub Actions Enterprise due to lack of internal exper",
+              "session": 5,
+              "score": 1.0421406264694943
+            },
+            {
+              "key": "migration_scope",
+              "value": "Plan includes migrating on-premise SQL Server to cloud",
+              "session": 3,
+              "score": 0.9277508438644712
+            },
+            {
+              "key": "jenkins_history",
+              "value": "Titan's Jenkins platform running production for 6+ years, team familiar with it",
+              "session": 3,
+              "score": 0.9066999104241861
+            },
+            {
+              "key": "ny_office_signoff",
+              "value": "Required for East Coast analytics migration/cutover. Hard requirement.",
+              "session": 2,
+              "score": 0.7813064896269852
+            },
+            {
+              "key": "kinesis_migration_rule",
+              "value": "Kinesis migrates with customer analytics workload",
+              "session": 4,
+              "score": 0.795026519863175
+            }
+          ]
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: Kinesis\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "migration_scope",
+              "value": "Plan includes migrating on-premise SQL Server to cloud",
+              "session": 3,
+              "score": 1.1888032795366432
+            },
+            {
+              "key": "kinesis_migration_rule",
+              "value": "Kinesis migrates with customer analytics workload",
+              "session": 4,
+              "score": 1.136638668739193
+            },
+            {
+              "key": "network_architecture",
+              "value": "AWS Cloud WAN (was Transit Gateway) for cross-region",
+              "session": 4,
+              "score": 1.052059527167955
+            },
+            {
+              "key": "session4_summary",
+              "value": "PG16, Confidential analytics, Cloud WAN, Datadog, VPC endpoint rule, Kinesis cou",
+              "session": 4,
+              "score": 1.02918764293882
+            },
+            {
+              "key": "auth_provider",
+              "value": "Okta for internal authentication, not moving to AWS IAM Identity Center",
+              "session": 3,
+              "score": 0.9829804426511874
+            }
+          ]
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: VPC endpoint required for Bedrock/SageMaker for US residency\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "data_residency",
+              "value": "US-only. No EU/APAC regions or cross-border data movement.",
+              "session": 2,
+              "score": 1.1165242816146077
+            },
+            {
+              "key": "ai_service_vpc_endpoint_rule",
+              "value": "VPC endpoint required for Bedrock/SageMaker for US residency",
+              "session": 4,
+              "score": 1.101809522618817
+            },
+            {
+              "key": "primary_rdbms",
+              "value": "AWS RDS for PostgreSQL 14 Managed.",
+              "session": 2,
+              "score": 1.0376258522021253
+            },
+            {
+              "key": "procurement_appsync",
+              "value": "AWS AppSync needed for offline client apps; separate procurement cycle required",
+              "session": 5,
+              "score": 1.0064560811157244
+            },
+            {
+              "key": "auth_provider",
+              "value": "Okta for internal authentication, not moving to AWS IAM Identity Center",
+              "session": 3,
+              "score": 0.9931818812057877
+            }
+          ]
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: A minimum of 0.5 ACU is required because Aurora Serverless v2 needs this configuration to ensure SOC 2 audit logging continuity.\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "rule_aurora_serverless_soc2",
+              "value": "Aurora Serverless v2 min ACU 0.5+ required for SOC 2 audit logging continuity",
+              "session": 5,
+              "score": 1.2715433820300117
+            },
+            {
+              "key": "procurement_appsync",
+              "value": "AWS AppSync needed for offline client apps; separate procurement cycle required",
+              "session": 5,
+              "score": 0.9281637103575893
+            },
+            {
+              "key": "ny_office_signoff",
+              "value": "Required for East Coast analytics migration/cutover. Hard requirement.",
+              "session": 2,
+              "score": 0.9239336620363121
+            },
+            {
+              "key": "analytics_db",
+              "value": "Separate Aurora Serverless clusters.",
+              "session": 2,
+              "score": 0.9477694994519137
+            },
+            {
+              "key": "ai_service_vpc_endpoint_rule",
+              "value": "VPC endpoint required for Bedrock/SageMaker for US residency",
+              "session": 4,
+              "score": 0.8860585303626152
+            }
+          ]
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: $2.4M for mobile app\nSource: Session 1",
+          "retrieved": [
+            {
+              "key": "aurora_lite_budget",
+              "value": "$120K internal beta",
+              "session": 1,
+              "score": 1.1878122191869396
+            },
+            {
+              "key": "project_aurora_budget",
+              "value": "$2.4M for mobile app",
+              "session": 1,
+              "score": 1.1364716287363203
+            },
+            {
+              "key": "dms_licensing_cost",
+              "value": "AWS DMS license cost covered by annual cloud budget, needs flagging in cost mode",
+              "session": 3,
+              "score": 0.9413444119002402
+            },
+            {
+              "key": "analytics_db",
+              "value": "Separate Aurora Serverless clusters.",
+              "session": 2,
+              "score": 0.9815571873737586
+            },
+            {
+              "key": "aurora_phase2_ship_date",
+              "value": "Project Aurora Phase 2 engineering ship date is May 2026",
+              "session": 3,
+              "score": 0.8962317469564225
+            }
+          ]
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Answer: $4.8M annual\nSource: Session 1",
+          "retrieved": [
+            {
+              "key": "aurora_lite_budget",
+              "value": "$120K internal beta",
+              "session": 1,
+              "score": 1.1205285572876522
+            },
+            {
+              "key": "comms_tool",
+              "value": "Slack is Titan's internal comms tool for program updates",
+              "session": 5,
+              "score": 1.0064914162000311
+            },
+            {
+              "key": "dms_licensing_cost",
+              "value": "AWS DMS license cost covered by annual cloud budget, needs flagging in cost mode",
+              "session": 3,
+              "score": 1.0206355514467909
+            },
+            {
+              "key": "budget_hard_cap",
+              "value": "$4.8M annual",
+              "session": 1,
+              "score": 1.0427958442735015
+            },
+            {
+              "key": "company_parent_acquisition",
+              "value": "Titan acquired by parent in 2019 for $1.2B; explains board-level visibility",
+              "session": 5,
+              "score": 0.9794458284912646
+            }
+          ]
+        }
+      ],
+      "final_context_chars": 10200
+    }
+  ]
+}

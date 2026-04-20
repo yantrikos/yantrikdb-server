@@ -36,3 +36,8 @@ build/
 *.dll
 control.db
 brainstorm/
+
+# Per-user / per-machine
+.claude/
+.vscode/
+yantrikdb_local.toml

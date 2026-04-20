@@ -1,6 +1,6 @@
 [project]
 name = "yantrikdb-client"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python client SDK for YantrikDB — the cognitive memory database"
 license = "MIT"
 requires-python = ">=3.9"
@@ -11,3 +11,4 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
+embed = ["sentence-transformers>=2.7"]

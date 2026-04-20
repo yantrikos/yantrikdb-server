@@ -1,0 +1,125 @@
+name: Publish Python SDK to PyPI
+
+# Triggers on push of tags matching `sdk-v*` (e.g. sdk-v0.2.0).
+# Uses PyPI Trusted Publishing (OIDC) — no long-lived tokens in secrets.
+# See docs/PYPI_TRUSTED_PUBLISHER_SETUP.md for the PyPI-side configuration.
+
+on:
+  push:
+    tags:
+      - 'sdk-v*'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target index (pypi or testpypi)"
+        required: true
+        default: "pypi"
+        type: choice
+        options:
+          - pypi
+          - testpypi
+
+jobs:
+  build:
+    name: Build wheel + sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Build
+        working-directory: sdk/python
+        run: python -m build
+
+      - name: Check artifacts
+        working-directory: sdk/python
+        run: twine check dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yantrikdb-client-dist
+          path: sdk/python/dist/*
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Requires the `pypi` environment to exist in repo settings.
+    # Protect with required reviewers if you want manual approval gates.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/yantrikdb-client/
+    # OIDC requires id-token: write.
+    permissions:
+      id-token: write
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: yantrikdb-client-dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No password / api-token: PyPI Trusted Publisher handles auth via OIDC.
+
+  publish-testpypi:
+    name: Publish to TestPyPI (manual dispatch only)
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/yantrikdb-client/
+    permissions:
+      id-token: write
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: yantrikdb-client-dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  github-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: yantrikdb-client-dist
+          path: dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            Python SDK release — `pip install yantrikdb-client==${{ github.ref_name }}`
+
+            See `sdk/python/README.md` for usage.

@@ -1,0 +1,1272 @@
+{
+  "results": [
+    {
+      "condition": "scenario2_v3_prereg",
+      "run": 0,
+      "elapsed_s": 660.0,
+      "session_traces": [
+        {
+          "session": 1,
+          "calls_made": 15,
+          "think_conflicts": 2,
+          "think_consolidated": 0
+        },
+        {
+          "session": 2,
+          "calls_made": 15,
+          "think_conflicts": 2,
+          "think_consolidated": 0
+        },
+        {
+          "session": 3,
+          "calls_made": 15,
+          "think_conflicts": 17,
+          "think_consolidated": 0
+        },
+        {
+          "session": 4,
+          "calls_made": 15,
+          "think_conflicts": 25,
+          "think_consolidated": 0
+        },
+        {
+          "session": 5,
+          "calls_made": 15,
+          "think_conflicts": 19,
+          "think_consolidated": 0
+        }
+      ],
+      "relate_results": [
+        {
+          "entity": "Isabel Marques",
+          "target": "Maria Marques",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Maria Marques",
+          "target": "Isabel Marques",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Glucophage",
+          "target": "Lantus",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Lantus",
+          "target": "Glucophage",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Northgate Family Medicine satellite",
+          "target": "Northgate main campus",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Northgate main campus",
+          "target": "Northgate Family Medicine satellite",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Monica Fairweather",
+          "target": "Gregory Tan",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Gregory Tan",
+          "target": "Monica Fairweather",
+          "rel": "distinct_from",
+          "ok": true
+        }
+      ],
+      "resolve_result": {
+        "resolved": 68,
+        "errors": 0,
+        "scanned": 68
+      },
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: educator\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 1.0333045266661458
+            },
+            {
+              "key": "patient_occupation",
+              "value": "professor of comparative literature at Westbrook University",
+              "session": 1,
+              "score": 0.8833357868460684
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.8271132129733388
+            },
+            {
+              "key": "visit3_daughter_occupation",
+              "value": "software engineer",
+              "session": 3,
+              "score": 0.8002998004039298
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.7392706191684559
+            }
+          ]
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: The retrieved memories do not contain information about Dr. Marques's insurance plan. Memory 1 mentions that the patient met Dr. Marques, and Memory 3 states the patient's insurance is BlueCross PPO, but there is no record linking Dr. Marques to a specific insurance plan.\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 1.0083433885775892
+            },
+            {
+              "key": "visit4_insurance_consideration",
+              "value": "Patient considering switching insurance next year, not actionable",
+              "session": 4,
+              "score": 0.9673970506857406
+            },
+            {
+              "key": "insurance",
+              "value": "BlueCross PPO, in-network",
+              "session": 1,
+              "score": 0.8825399836708531
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.7463995807534767
+            },
+            {
+              "key": "emergency_contact",
+              "value": "Husband Rafael",
+              "session": 5,
+              "score": 0.7494947900439083
+            }
+          ]
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: Rafael\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 1.0850850198641324
+            },
+            {
+              "key": "emergency_contact",
+              "value": "Husband Rafael",
+              "session": 5,
+              "score": 1.0043042443636232
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.9203072295372678
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.8477952212548034
+            },
+            {
+              "key": "transition_continuity",
+              "value": "Dr. Tanaka reviewed full chart",
+              "session": 5,
+              "score": 0.7429274655413276
+            }
+          ]
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: Gregory Tan\nSource: Session 4",
+          "retrieved": [
+            {
+              "key": "visit4_educator_change",
+              "value": "Diabetes educator changing from Monica Fairweather to Gregory Tan in June",
+              "session": 4,
+              "score": 1.2843979843284938
+            },
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 0.9909535516657144
+            },
+            {
+              "key": "new_pcp_name",
+              "value": "Dr. Aiko Tanaka",
+              "session": 5,
+              "score": 0.8527690819248899
+            },
+            {
+              "key": "diagnosis",
+              "value": "Type 2 diabetes mellitus, early stage",
+              "session": 1,
+              "score": 0.7988166850821654
+            },
+            {
+              "key": "referral_added",
+              "value": "CDE Monica Fairweather at Northgate",
+              "session": 2,
+              "score": 0.79992983029448
+            }
+          ]
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: GAD-65 and IA-2 autoantibodies\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 1.0222483041548953
+            },
+            {
+              "key": "autoimmune_monitoring",
+              "value": "Watch for positive IA-2 autoantibodies",
+              "session": 5,
+              "score": 1.0167117052385761
+            },
+            {
+              "key": "lab_findings",
+              "value": "GAD-65 positive, C-peptide low-normal",
+              "session": 2,
+              "score": 0.8752463181249526
+            },
+            {
+              "key": "summer_trip_status",
+              "value": "Happened, enjoyable, insulin managed",
+              "session": 5,
+              "score": 0.6600545912715514
+            },
+            {
+              "key": "transition_continuity",
+              "value": "Dr. Tanaka reviewed full chart",
+              "session": 5,
+              "score": 0.45591580463753706
+            }
+          ]
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Answer: LADA, not T2DM\nSource: Session 2",
+          "retrieved": [
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 1.0701254203124422
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9878811909812628
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.9404423834166049
+            },
+            {
+              "key": "diagnosis",
+              "value": "Type 2 diabetes mellitus, early stage",
+              "session": 1,
+              "score": 0.8850298819235785
+            },
+            {
+              "key": "diagnosis_revised",
+              "value": "LADA, not T2DM",
+              "session": 2,
+              "score": 0.7811042098286352
+            }
+          ]
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Based on the retrieved memories, there is no information linking Dr. Marques to a specific medication regimen. The memories indicate that the patient (who is 52 years old) is currently taking **Lantus 7 units at bedtime** and **metformin 500mg twice daily**. Dr. Marques is mentioned only in the context of an educator transition (\"met Dr. Marques last week\"), not as a prescribing physician for the patient's current medications. The patient's PCP is listed as Dr. Aiko Tanaka (new) or Dr. Samuel Okafor (previous), and the specialist referral is to Dr. Linda Haruni.\n\nTherefore, the information regarding Dr. Marques's personal medication is not available in the provided text. However, if the question implies the patient's current medication while under the care context involving Dr. Marques, the patient's medication is Lantus and Metformin. But strictly answering \"Dr. Marques's\" medication, the data is missing.\n\nAssuming the question contains a typo and refers to the **patient's** current primary medication (as Dr. Marques is an educator, not a prescriber in these notes):\n\nAnswer: Lantus 7 units at bedtime and metformin 500mg twice daily",
+          "retrieved": [
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 1.0492373856443278
+            },
+            {
+              "key": "patient_medication",
+              "value": "Lantus 7 units at bedtime",
+              "session": 5,
+              "score": 1.0021876374374616
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9806627648906835
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.9157682387240496
+            },
+            {
+              "key": "medication",
+              "value": "metformin 500mg twice daily (Glucophage)",
+              "session": 1,
+              "score": 0.8794223063823382
+            }
+          ]
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: 6.5%\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "patient_hba1c",
+              "value": "6.5% at target",
+              "session": 5,
+              "score": 1.1271388218614098
+            },
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 0.998423667455059
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9178555952595109
+            },
+            {
+              "key": "new_pcp_name",
+              "value": "Dr. Aiko Tanaka",
+              "session": 5,
+              "score": 0.8436014462307816
+            },
+            {
+              "key": "visit3_provider",
+              "value": "Dr. Okafor",
+              "session": 3,
+              "score": 0.8040544438319803
+            }
+          ]
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: 7 units at bedtime\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "patient_medication",
+              "value": "Lantus 7 units at bedtime",
+              "session": 5,
+              "score": 1.1231377940670546
+            },
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 1.0005076125870662
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9670592863656654
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.8980703280653533
+            },
+            {
+              "key": "medication",
+              "value": "metformin 500mg twice daily (Glucophage)",
+              "session": 1,
+              "score": 0.807494831699344
+            }
+          ]
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Based on the retrieved memories, Dr. Marques is identified as the educator who completed the transition (Memory 1). The current primary care physician is listed as Dr. Aiko Tanaka (Memory 6, Session 5, score 0.890), who also reviewed the full chart (Memory 5, Session 5). Although Dr. Samuel Okafor is listed as a PCP in earlier sessions (Memory 3, Session 1), the most recent and highest-scored information in Session 5 indicates Dr. Tanaka is the current provider.\n\nAnswer: Dr. Aiko Tanaka",
+          "retrieved": [
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 1.1008121367496146
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9605100937139803
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.9337763261903109
+            },
+            {
+              "key": "visit3_provider",
+              "value": "Dr. Okafor",
+              "session": 3,
+              "score": 0.8991611067944129
+            },
+            {
+              "key": "transition_continuity",
+              "value": "Dr. Tanaka reviewed full chart",
+              "session": 5,
+              "score": 0.7715741053556668
+            }
+          ]
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: Switch to basal-bolus\nSource: Session 2",
+          "retrieved": [
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 1.0454433452891587
+            },
+            {
+              "key": "escalation_rule",
+              "value": "If hypoglycemia >=3/week, switch to basal-bolus",
+              "session": 2,
+              "score": 1.0140976264903783
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9010179898384587
+            },
+            {
+              "key": "visit4_maria_no_proxy",
+              "value": "Daughter Maria does not have proxy access per patient preference",
+              "session": 4,
+              "score": 0.8399569736152095
+            },
+            {
+              "key": "patient_medication",
+              "value": "Lantus 7 units at bedtime",
+              "session": 5,
+              "score": 0.82056114834374
+            }
+          ]
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: The retrieved memories do not contain specific instructions or rules for adjusting the Lantus dose based on an HbA1c of 5.8%. Memory 6 specifies an escalation rule for hypoglycemia (switching to basal-bolus if >=3/week), and Memory 2 states the current Lantus dose is 7 units at bedtime, but no memory provides guidance on dose reduction or adjustment for this specific HbA1c value.\n\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "patient_hba1c",
+              "value": "6.5% at target",
+              "session": 5,
+              "score": 1.1621974803111395
+            },
+            {
+              "key": "patient_medication",
+              "value": "Lantus 7 units at bedtime",
+              "session": 5,
+              "score": 1.1055248252111627
+            },
+            {
+              "key": "visit4_insurance_consideration",
+              "value": "Patient considering switching insurance next year, not actionable",
+              "session": 4,
+              "score": 0.864431027566453
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.7950569437928737
+            },
+            {
+              "key": "next_followup",
+              "value": "6 weeks",
+              "session": 2,
+              "score": 0.7204889239274317
+            }
+          ]
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: Watch for positive IA-2 autoantibodies\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "autoimmune_monitoring",
+              "value": "Watch for positive IA-2 autoantibodies",
+              "session": 5,
+              "score": 1.191638715662433
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.8804491497979917
+            },
+            {
+              "key": "transition_continuity",
+              "value": "Dr. Tanaka reviewed full chart",
+              "session": 5,
+              "score": 0.8498489771249489
+            },
+            {
+              "key": "lab_findings",
+              "value": "GAD-65 positive, C-peptide low-normal",
+              "session": 2,
+              "score": 0.9111279759136203
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.8352290431649682
+            }
+          ]
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: Isabel\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "visit4_maria_no_proxy",
+              "value": "Daughter Maria does not have proxy access per patient preference",
+              "session": 4,
+              "score": 1.1563567607429368
+            },
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 0.9923655193297001
+            },
+            {
+              "key": "daughter_status",
+              "value": "Maria considering pre-med second major",
+              "session": 2,
+              "score": 0.9969703365056666
+            },
+            {
+              "key": "proxy_access",
+              "value": "Daughter Isabel only",
+              "session": 5,
+              "score": 1.0586325445087934
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9048128184917765
+            }
+          ]
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Based on the retrieved memories, **Glucophage** is the brand-name medication associated with the initial context.\n\n*   **Memory 1** (Session 1, score 1.170) lists \"medication: metformin 500mg twice daily (Glucophage)\". This is the earliest session and has the highest score, indicating it represents the initial or primary state.\n*   **Memory 2** (Session 5, score 1.119) lists \"patient_medication: Lantus 7 units at bedtime\". This is a later session.\n*   **Memory 3** (Session 5) mentions \"educator_transition: Complete; met Dr. Marques last week\". This implies Dr. Marques was involved in the transition or care recently (Session 5), but the question asks which medication Dr. Marques took *initially*. However, looking closely at the phrasing, the question asks \"Which brand-name medication did Dr. Marques take INITIALLY\". The memories do not state that Dr. Marques *took* the medication; they state the *patient* takes them. It is highly likely the question implies \"Which medication was the patient taking initially?\" or there is a misunderstanding of the subject. Assuming the question refers to the patient's initial medication regimen as recorded in the earliest high-confidence memory:\n\nThe initial medication listed in Session 1 (the earliest session with the highest score) is Gl",
+          "retrieved": [
+            {
+              "key": "medication",
+              "value": "metformin 500mg twice daily (Glucophage)",
+              "session": 1,
+              "score": 1.1704213249284539
+            },
+            {
+              "key": "patient_medication",
+              "value": "Lantus 7 units at bedtime",
+              "session": 5,
+              "score": 1.119105371766171
+            },
+            {
+              "key": "educator_transition",
+              "value": "Complete; met Dr. Marques last week",
+              "session": 5,
+              "score": 0.8821955898817071
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.8628803570179686
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.7718539453459041
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "condition": "scenario2_v3_prereg",
+      "run": 1,
+      "elapsed_s": 764.8,
+      "session_traces": [
+        {
+          "session": 1,
+          "calls_made": 15,
+          "think_conflicts": 6,
+          "think_consolidated": 0
+        },
+        {
+          "session": 2,
+          "calls_made": 15,
+          "think_conflicts": 13,
+          "think_consolidated": 0
+        },
+        {
+          "session": 3,
+          "calls_made": 15,
+          "think_conflicts": 33,
+          "think_consolidated": 0
+        },
+        {
+          "session": 4,
+          "calls_made": 15,
+          "think_conflicts": 28,
+          "think_consolidated": 0
+        },
+        {
+          "session": 5,
+          "calls_made": 15,
+          "think_conflicts": 31,
+          "think_consolidated": 0
+        }
+      ],
+      "relate_results": [
+        {
+          "entity": "Isabel Marques",
+          "target": "Maria Marques",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Maria Marques",
+          "target": "Isabel Marques",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Glucophage",
+          "target": "Lantus",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Lantus",
+          "target": "Glucophage",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Northgate Family Medicine satellite",
+          "target": "Northgate main campus",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Northgate main campus",
+          "target": "Northgate Family Medicine satellite",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Monica Fairweather",
+          "target": "Gregory Tan",
+          "rel": "distinct_from",
+          "ok": true
+        },
+        {
+          "entity": "Gregory Tan",
+          "target": "Monica Fairweather",
+          "rel": "distinct_from",
+          "ok": true
+        }
+      ],
+      "resolve_result": {
+        "resolved": 111,
+        "errors": 0,
+        "scanned": 111
+      },
+      "probes": [
+        {
+          "probe_id": 1,
+          "raw_answer": "Answer: teaching role at university hospital\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 1.0167987359807582
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 0.8624884062480758
+            },
+            {
+              "key": "visit3_family_member_occupation",
+              "value": "software engineer",
+              "session": 3,
+              "score": 0.8247715208503995
+            },
+            {
+              "key": "patient_occupation",
+              "value": "professor of comparative literature at Westbrook University",
+              "session": 1,
+              "score": 0.8779918400205039
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.8218620255967355
+            }
+          ]
+        },
+        {
+          "probe_id": 2,
+          "raw_answer": "Answer: BlueCross PPO, in-network\nSource: Session 1",
+          "retrieved": [
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 0.9968613693780288
+            },
+            {
+              "key": "insurance",
+              "value": "BlueCross PPO, in-network",
+              "session": 1,
+              "score": 0.8766965092129198
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 0.9041464432902915
+            },
+            {
+              "key": "visit4_insurance_consideration",
+              "value": "Considering switching insurance next year, not actionable",
+              "session": 4,
+              "score": 0.9177820313546488
+            },
+            {
+              "key": "emergency_contact",
+              "value": "Husband Rafael",
+              "session": 5,
+              "score": 0.749297365184921
+            }
+          ]
+        },
+        {
+          "probe_id": 3,
+          "raw_answer": "Answer: Rafael\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 1.0857567313281458
+            },
+            {
+              "key": "emergency_contact",
+              "value": "Husband Rafael",
+              "session": 5,
+              "score": 1.0049974245193791
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 0.9893171855906645
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.9209491736044302
+            },
+            {
+              "key": "endoc_report",
+              "value": "Dr. Haruni's report received",
+              "session": 2,
+              "score": 0.8294246703611823
+            }
+          ]
+        },
+        {
+          "probe_id": 4,
+          "raw_answer": "Answer: Gregory Tan\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "visit4_educator_leave",
+              "value": "Monica Fairweather taking maternity leave",
+              "session": 4,
+              "score": 1.070539326515042
+            },
+            {
+              "key": "diagnosis",
+              "value": "Type 2 diabetes mellitus, early stage",
+              "session": 1,
+              "score": 0.8892392318346942
+            },
+            {
+              "key": "visit4_dr_okafor",
+              "value": "Dr. Okafor notes clinic and educator changes",
+              "session": 4,
+              "score": 0.9480984291950129
+            },
+            {
+              "key": "educator_transition",
+              "value": "Transitioned to Gregory Tan; met patient last week",
+              "session": 5,
+              "score": 0.9096346566037201
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.7768210408793189
+            }
+          ]
+        },
+        {
+          "probe_id": 5,
+          "raw_answer": "Answer: GAD-65\nSource: Session 2",
+          "retrieved": [
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 1.0217951821028148
+            },
+            {
+              "key": "autoimmune_monitoring",
+              "value": "Watch for positive IA-2 autoantibodies in future labs",
+              "session": 5,
+              "score": 0.997489225063702
+            },
+            {
+              "key": "autoimmune_markers",
+              "value": "GAD-65 positive, C-peptide low-normal",
+              "session": 2,
+              "score": 0.969326378595059
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 0.6623248099563407
+            },
+            {
+              "key": "patient_summer_trip",
+              "value": "Happened, enjoyable, insulin managed successfully",
+              "session": 5,
+              "score": 0.6527228142544856
+            }
+          ]
+        },
+        {
+          "probe_id": 6,
+          "raw_answer": "Based on the retrieved memories, we must determine the current status of Dr. Marques's diagnosis.\n\n1.  **Identify the patient:** Memory 1 states \"Dr. Marques moving to teaching role,\" implying Dr. Marques is the patient whose care is being discussed. Memory 4 identifies \"Dr. Samuel Okafor\" as the PCP name, but Memory 8 clarifies that Dr. Okafor is noting changes, and Memory 5 indicates a transition to Dr. Tanaka. Memory 1 confirms Dr. Marques is the one departing/moving, fitting the patient role in this context of care continuity.\n2.  **Trace the diagnosis history:**\n    *   Memory 7 (Session 1) initially lists the diagnosis as \"Type 2 diabetes mellitus, early stage.\"\n    *   Memory 9 (Session 2) provides a revised diagnosis: \"LADA, not T2DM.\"\n    *   Memory 2 (Session 4) notes that Dr. Marques reports stable glucose control, which is consistent with the management of LADA (Latent Autoimmune Diabetes in Adults).\n    *   Memory 5 (Session 5) indicates the transition to Dr. Tanaka is complete, but does not mention a further change in diagnosis.\n3.  **Determine the current diagnosis:** The most recent and specific diagnostic update is in Session 2 (Memory 9), which explicitly revises the diagnosis from T",
+          "retrieved": [
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 1.0782315647387262
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 1.0054037726378837
+            },
+            {
+              "key": "endoc_report",
+              "value": "Dr. Haruni's report received",
+              "session": 2,
+              "score": 0.9338841700662253
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.9404345235670304
+            },
+            {
+              "key": "care_continuity_status",
+              "value": "Dr. Tanaka reviewed full chart; transition complete",
+              "session": 5,
+              "score": 0.915631375506808
+            }
+          ]
+        },
+        {
+          "probe_id": 7,
+          "raw_answer": "Based on the retrieved memories, there is a conflict regarding the patient's medication status. Memory 5 (Session 1) lists \"metformin 500mg twice daily\" as the medication. However, Memory 10 (Session 2) explicitly states a \"medication_change: Discontinue Metformin\". Since Session 2 is later than Session 1, the discontinuation is the more recent event. Furthermore, Memory 1 (Session 4) reports \"stable glucose control\" under Dr. Marques, implying the patient is still being treated, but the specific current medication is not listed in the later sessions (Session 4 or 5). The most definitive update on the medication *status* is that Metformin was discontinued. Without a new medication being explicitly named in the later sessions (Session 4 or 5) as the replacement, we cannot state a *current* medication name other than noting the discontinuation. However, typically in these logic puzzles, if a medication is discontinued and no replacement is listed, the answer might be \"None\" or \"Not specified\". But let's look closer. Is there another medication? No other medication is mentioned in the text.\n\nWait, let's re-evaluate the question: \"What is Dr. Marques's CURRENT primary medication?\"\n\nMemory 10 says \"Discontinue Metformin\".\nMemory 5 says \"medication: metformin 500mg twice daily\".",
+          "retrieved": [
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 1.0581855691866295
+            },
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 1.0480713265027146
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9767545195830502
+            },
+            {
+              "key": "visit4_dr_okafor",
+              "value": "Dr. Okafor notes clinic and educator changes",
+              "session": 4,
+              "score": 0.9144061680496107
+            },
+            {
+              "key": "medication",
+              "value": "metformin 500mg twice daily (Glucophage)",
+              "session": 1,
+              "score": 0.87385936708904
+            }
+          ]
+        },
+        {
+          "probe_id": 8,
+          "raw_answer": "Answer: 6.5%\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "patient_hba1c",
+              "value": "6.5% at target",
+              "session": 5,
+              "score": 1.1141444434380123
+            },
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 1.021432060752348
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 1.030673447771276
+            },
+            {
+              "key": "endoc_report",
+              "value": "Dr. Haruni's report received",
+              "session": 2,
+              "score": 0.8953439563711476
+            },
+            {
+              "key": "care_continuity_status",
+              "value": "Dr. Tanaka reviewed full chart; transition complete",
+              "session": 5,
+              "score": 0.8520226201862376
+            }
+          ]
+        },
+        {
+          "probe_id": 9,
+          "raw_answer": "Answer: 7 units at bedtime\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "patient_lantus_dose",
+              "value": "7 units at bedtime",
+              "session": 5,
+              "score": 1.0503559879755495
+            },
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 1.0427009264699163
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 1.0136048395573518
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9667988038431601
+            },
+            {
+              "key": "care_continuity_status",
+              "value": "Dr. Tanaka reviewed full chart; transition complete",
+              "session": 5,
+              "score": 0.918412188950595
+            }
+          ]
+        },
+        {
+          "probe_id": 10,
+          "raw_answer": "Answer: Dr. Aiko Tanaka\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 1.1199597822847784
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.9602856463709976
+            },
+            {
+              "key": "pcp_name",
+              "value": "Dr. Samuel Okafor",
+              "session": 1,
+              "score": 0.9337078914824061
+            },
+            {
+              "key": "care_continuity_status",
+              "value": "Dr. Tanaka reviewed full chart; transition complete",
+              "session": 5,
+              "score": 0.9126269799124249
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 0.9401476466084538
+            }
+          ]
+        },
+        {
+          "probe_id": 11,
+          "raw_answer": "Answer: If hypoglycemia >=3/week, switch to basal-bolus\nSource: Session 2",
+          "retrieved": [
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 1.1388213716571052
+            },
+            {
+              "key": "care_continuity_status",
+              "value": "Dr. Tanaka reviewed full chart; transition complete",
+              "session": 5,
+              "score": 1.046299171836252
+            },
+            {
+              "key": "visit3_exercise",
+              "value": "Weekend dog-walking replaced paused tennis league",
+              "session": 3,
+              "score": 0.9553214842696041
+            },
+            {
+              "key": "escalation_rule",
+              "value": "If hypoglycemia >=3/week, switch to basal-bolus",
+              "session": 2,
+              "score": 0.9992937024513522
+            },
+            {
+              "key": "endoc_report",
+              "value": "Dr. Haruni's report received",
+              "session": 2,
+              "score": 0.9295113001070501
+            }
+          ]
+        },
+        {
+          "probe_id": 12,
+          "raw_answer": "Answer: The retrieved memories do not contain specific instructions or rules for adjusting the Lantus dose based on a new HbA1c of 5.8%. Memory 7 specifies an escalation rule for hypoglycemia, not a de-escalation rule for improved HbA1c. Therefore, based strictly on the provided memories, no specific action for the Lantus dose can be determined.\n\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "patient_hba1c",
+              "value": "6.5% at target",
+              "session": 5,
+              "score": 1.1497922319830793
+            },
+            {
+              "key": "patient_lantus_dose",
+              "value": "7 units at bedtime",
+              "session": 5,
+              "score": 1.1311236438050036
+            },
+            {
+              "key": "visit4_insurance_consideration",
+              "value": "Considering switching insurance next year, not actionable",
+              "session": 4,
+              "score": 0.7890902111008892
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.794837039515353
+            },
+            {
+              "key": "next_followup",
+              "value": "6 weeks",
+              "session": 2,
+              "score": 0.7100695856584941
+            }
+          ]
+        },
+        {
+          "probe_id": 13,
+          "raw_answer": "Answer: Watch for positive IA-2 autoantibodies in future labs\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "autoimmune_monitoring",
+              "value": "Watch for positive IA-2 autoantibodies in future labs",
+              "session": 5,
+              "score": 1.1405346017461286
+            },
+            {
+              "key": "pcp_transition_status",
+              "value": "Transitioning to Dr. Aiko Tanaka effective July 1",
+              "session": 5,
+              "score": 0.9454565115901484
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 0.873859926975372
+            },
+            {
+              "key": "visit4_dr_okafor",
+              "value": "Dr. Okafor notes clinic and educator changes",
+              "session": 4,
+              "score": 0.897481282685783
+            },
+            {
+              "key": "care_continuity_status",
+              "value": "Dr. Tanaka reviewed full chart; transition complete",
+              "session": 5,
+              "score": 0.9186696763819114
+            }
+          ]
+        },
+        {
+          "probe_id": 14,
+          "raw_answer": "Answer: Isabel\nSource: Session 5",
+          "retrieved": [
+            {
+              "key": "proxy_access",
+              "value": "Daughter Isabel has proxy medical record access",
+              "session": 5,
+              "score": 1.1866103887567956
+            },
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 1.0047681883183435
+            },
+            {
+              "key": "daughter_status",
+              "value": "Maria considering pre-med second major",
+              "session": 2,
+              "score": 0.9856027684401919
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 0.885461768729644
+            },
+            {
+              "key": "referral_specialist",
+              "value": "Dr. Linda Haruni (endocrinology, Northgate)",
+              "session": 1,
+              "score": 0.904652842983144
+            }
+          ]
+        },
+        {
+          "probe_id": 15,
+          "raw_answer": "Based on the retrieved memories, Dr. Marques is identified as the PCP in Session 4 (memory 3) and is noted to be moving to a teaching role in Session 5 (memory 4). Memory 1 (Session 1) lists \"Glucophage\" as a medication with a high score (1.146), while Memory 2 (Session 5) lists \"Lantus\" with a lower score (1.060). Glucophage is the brand name for metformin, whereas Lantus is the brand name for insulin glargine. The question asks which brand-name medication Dr. Marques took *initially*. Since Glucophage is listed in Session 1 (earlier than Session 5 where Lantus is listed) and has the highest score among the medication memories, it represents the initial medication.\n\nAnswer: Glucophage",
+          "retrieved": [
+            {
+              "key": "medication",
+              "value": "metformin 500mg twice daily (Glucophage)",
+              "session": 1,
+              "score": 1.1461868087705274
+            },
+            {
+              "key": "patient_lantus_dose",
+              "value": "7 units at bedtime",
+              "session": 5,
+              "score": 1.0596240979989942
+            },
+            {
+              "key": "visit4_dr_marques",
+              "value": "Dr. Marques reports stable glucose control",
+              "session": 4,
+              "score": 0.9715215398378952
+            },
+            {
+              "key": "old_pcp_departure",
+              "value": "Dr. Marques moving to teaching role at university hospital",
+              "session": 5,
+              "score": 0.9052281905861256
+            },
+            {
+              "key": "medication_change",
+              "value": "Discontinue Metformin",
+              "session": 2,
+              "score": 0.9930432567467334
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

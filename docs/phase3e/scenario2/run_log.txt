@@ -1,0 +1,26 @@
+Phase 3E Scenario 2 — v3 pipeline (PRE-REGISTERED, see prereg.md)
+scenario: sessions.json, runs=2
+start: 2026-04-19 21:35:20
+
+
+>>> scenario2 v3 run=0 (21:35:20)
+    session 1: remember=15 conflicts=2 consolidated=0
+    session 2: remember=15 conflicts=2 consolidated=0
+    session 3: remember=15 conflicts=17 consolidated=0
+    session 4: remember=15 conflicts=25 consolidated=0
+    session 5: remember=15 conflicts=19 consolidated=0
+    relate: 8/8 alias relations added
+    resolve: 68/68 conflicts resolved (0 errors)
+    done — 660.0s, probes=15
+
+>>> scenario2 v3 run=1 (21:46:20)
+    session 1: remember=15 conflicts=6 consolidated=0
+    session 2: remember=15 conflicts=13 consolidated=0
+    session 3: remember=15 conflicts=33 consolidated=0
+    session 4: remember=15 conflicts=28 consolidated=0
+    session 5: remember=15 conflicts=31 consolidated=0
+    relate: 8/8 alias relations added
+    resolve: 111/111 conflicts resolved (0 errors)
+    done — 764.8s, probes=15
+
+done: 2026-04-19 21:59:05

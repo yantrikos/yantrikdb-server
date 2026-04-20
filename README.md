@@ -394,6 +394,7 @@ db.upcoming(days=7)  # memories with approaching deadlines
 | Package | What | Install | Source |
 |---------|------|---------|--------|
 | **[yantrikdb-mcp](https://github.com/yantrikos/yantrikdb-mcp)** | **MCP server for Claude Code / Cursor / Windsurf — start here** | `pip install yantrikdb-mcp` | [GitHub](https://github.com/yantrikos/yantrikdb-mcp) · [PyPI](https://pypi.org/project/yantrikdb-mcp/) |
+| [yantrikdb-client](https://github.com/yantrikos/yantrikdb-client) | Python client SDK for the HTTP server (typed memory, reflect, character primitives) | `pip install yantrikdb-client` | [GitHub](https://github.com/yantrikos/yantrikdb-client) · [PyPI](https://pypi.org/project/yantrikdb-client/) |
 | [yantrikdb-server](https://github.com/yantrikos/yantrikdb-server) | HTTP + wire-protocol server, HA cluster | `docker run ghcr.io/yantrikos/yantrikdb` | [GitHub](https://github.com/yantrikos/yantrikdb-server) |
 | [yantrikdb (Rust)](https://crates.io/crates/yantrikdb) | Embedded Rust engine | `cargo add yantrikdb` | [GitHub](https://github.com/yantrikos/yantrikdb) |
 | [yantrikdb (Python)](https://pypi.org/project/yantrikdb/) | Python bindings via PyO3 | `pip install yantrikdb` | [GitHub](https://github.com/yantrikos/yantrikdb) |

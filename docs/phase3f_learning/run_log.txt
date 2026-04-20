@@ -1,0 +1,60 @@
+Phase 3F — self-learning via yantrikdb memory, CRT trick problems
+start: 2026-04-19 22:53:21
+
+5 seed problems, 5 test problems
+
+--- CONDITION A (no memory) ---
+    T1 [correct] 'Working: Let $S$ be the cost of the shirt and $P$ be the cost of the pants.\nFrom the problem, we have two equations:\n1. '
+    T2 [correct] 'Working: First, we determine the production rate of a single robot. If 10 robots produce 10 cars in 10 days, then 1 robo'
+    T3 [correct] 'Working: The problem states that the bacteria double every hour. This means that the amount of bacteria at any given tim'
+    T4 [correct] "Working: \n1. Identify the known values:\n   - Distance of the race ($d$) = 100 meters.\n   - Bob's time ($t_{Bob}$) = 20 s"
+    T5 [other_wrong] "Working: To solve this problem, we need to track the frog's progress day by day. The frog climbs 4 meters during the day"
+
+Condition A: 4/5 correct (0 fell for intuitive trap)
+
+--- CONDITION B (memory loop) ---
+
+B1 — SEED PHASE (solve cold, get feedback, store lessons)
+
+  [seed S1]
+    S1 [correct] 'Working: Let the cost of the ball be $x$ dollars.\nAccording to the problem, the bat costs $1.00 more than the ball, so t'
+    → extracted lesson: 'When given a total sum and a difference between two items, always set up the system of equations to solve for the smaller value as (total - difference'
+
+  [seed S2]
+    S2 [correct] 'Working: First, determine the rate at which a single machine works. If 5 machines make 5 widgets in 5 minutes, then each'
+    → extracted lesson: 'When scaling both the number of agents and the amount of work proportionally, the time required remains constant because the work-per-agent ratio is u'
+
+  [seed S3]
+    S3 [correct] 'Working: The problem states that the patch of lily pads doubles in size every day. This means that the size on any given'
+    → extracted lesson: 'When dealing with exponential growth or decay, always check if the target state is reached by reversing a single step from the final state rather than'
+
+  [seed S4]
+    S4 [correct] 'Working: First, determine the rate at which a single cat catches mice. If 3 cats catch 3 mice in 3 minutes, this implies'
+    → extracted lesson: 'When scaling both the number of agents and the amount of work proportionally, the time required remains constant because the work-per-agent ratio does'
+
+  [seed S5]
+    S5 [other_wrong] "Working: To solve this problem, we need to track the snail's position day by day, keeping in mind that the snail only re"
+    → extracted lesson: 'When calculating progress with a daily gain and nightly loss where the goal is reached during the gain phase, subtract the nightly loss from the total'
+
+think() after seeds: conflicts=4 consolidated=0
+
+B2 — TEST PHASE (solve test problems WITH recall of stored strategies)
+    T1 [correct] retrieved=5 'Working: Let $S$ be the cost of the shirt and $P$ be the cost of the pants.\nFrom the problem, we have two equations:\n1. '
+    T2 [correct] retrieved=5 'Working: The problem involves scaling both the number of agents (robots) and the amount of work (cars) proportionally. A'
+    T3 [correct] retrieved=5 'Working: The problem describes exponential growth where the quantity doubles every hour. We are given that the jar is fu'
+    T4 [correct] retrieved=5 "Working: The problem states that Alice runs at exactly twice Bob's speed. Let $v_B$ be Bob's speed and $v_A$ be Alice's "
+    T5 [correct] retrieved=5 'Working: The frog climbs 4 meters during the day and slides back 1 meter at night, resulting in a net gain of 3 meters p'
+
+Condition B seed: 4/5 correct (baseline)
+Condition B test: 5/5 correct (0 fell for trap)
+
+=== SUMMARY ===
+Condition A test accuracy:  4/5 = 80%
+Condition B test accuracy:  5/5 = 100%
+Learning delta (B - A):     +20 pts
+
+Test-set pattern-trap rate (both conditions):
+  A intuitive-wrong:  0/5 = 0%
+  B intuitive-wrong:  0/5 = 0%
+
+done: 2026-04-19 22:56:55

@@ -1,0 +1,172 @@
+{
+  "condition_A": {
+    "correct": 4,
+    "total": 5,
+    "accuracy": 0.8,
+    "intuitive_trap": 0,
+    "results": [
+      {
+        "problem_id": "T1",
+        "response": "Working: Let $S$ be the cost of the shirt and $P$ be the cost of the pants.\nFrom the problem, we have two equations:\n1. $S + P = 80$ (The total cost is $80)\n2. $P = S + 40$ (The pants cost $40 more than the shirt)\n\nSubstitute equation (2) into equation (1):\n$S + (S + 40) = 80$\n$2S + 40 = 80$\n$2S = 80 - 40$\n$2S = 40$\n$S = 20$\n\nSo, the shirt costs $20.\nTo check: If the shirt is $20, the pants are $20 + $40 = $60.\nTotal cost = $20 + $60 = $80. This matches the problem statement.\n\nAnswer: $20",
+        "score": "correct",
+        "elapsed_s": 16.9
+      },
+      {
+        "problem_id": "T2",
+        "response": "Working: First, we determine the production rate of a single robot. If 10 robots produce 10 cars in 10 days, then 1 robot produces 1 car in 10 days. This establishes that the time required for one robot to make one car is 10 days.\n\nNext, we apply this rate to the new scenario. We have 50 robots and need to produce 50 cars. Since each robot works independently and simultaneously, we can assign one car to each robot. Therefore, each of the 50 robots needs to produce exactly 1 car.\n\nSince it takes one robot 10 days to produce one car, it will take 50 robots working in parallel 10 days to produce 50 cars.\n\nAnswer: 10 days",
+        "score": "correct",
+        "elapsed_s": 31.3
+      },
+      {
+        "problem_id": "T3",
+        "response": "Working: The problem states that the bacteria double every hour. This means that the amount of bacteria at any given time is twice the amount from one hour prior. Conversely, the amount of bacteria one hour prior was half the amount at the current time. Since the jar is completely full at 12:00 noon, it must have been half-full exactly one hour before that time. Subtracting one hour from 12:00 noon gives 11:00 AM.\n\nAnswer: 11:00 AM",
+        "score": "correct",
+        "elapsed_s": 39.6
+      },
+      {
+        "problem_id": "T4",
+        "response": "Working: \n1. Identify the known values:\n   - Distance of the race ($d$) = 100 meters.\n   - Bob's time ($t_{Bob}$) = 20 seconds.\n   - Alice's speed ($v_{Alice}$) is twice Bob's speed ($v_{Bob}$).\n\n2. Calculate Bob's speed:\n   $$v_{Bob} = \\frac{d}{t_{Bob}} = \\frac{100 \\text{ m}}{20 \\text{ s}} = 5 \\text{ m/s}$$\n\n3. Calculate Alice's speed:\n   $$v_{Alice} = 2 \\times v_{Bob} = 2 \\times 5 \\text{ m/s} = 10 \\text{ m/s}$$\n\n4. Calculate Alice's time to finish the race:\n   Since distance is constant, time is inversely proportional to speed.\n   $$t_{Alice} = \\frac{d}{v_{Alice}} = \\frac{100 \\text{ m}}{10 \\text{ m/s}} = 10 \\text{ s}$$\n\n   Alternatively, using the ratio:\n   Since $v_{Alice} = 2 \\times v_{Bob}$, and $t = d/v$, then:\n   $$t_{Alice} = \\frac{d}{2 \\times v_{Bob}} = \\frac{1}{2} \\times \\frac{d}{v_{Bob}} = \\frac{1}{2} \\times t_{Bob}$$\n   $$t_{Alice} = \\frac{1}{2} \\times 20 \\text{ s} = 10 \\text{ s}$$\n\nAnswer: 10 seconds",
+        "score": "correct",
+        "elapsed_s": 5.9
+      },
+      {
+        "problem_id": "T5",
+        "response": "Working: To solve this problem, we need to track the frog's progress day by day. The frog climbs 4 meters during the day and slides back 1 meter during the night. This means the net progress per full 24-hour cycle (day + night) is $4 - 1 = 3$ meters.\n\nHowever, we must be careful: once the frog reaches or exceeds the top of the well (20 meters) during its daytime climb, it escapes and does not slide back that night.\n\nLet's calculate the frog's position at the end of each day (after climbing) and each night (after sliding):\n\n1.  **Day 1:**\n    *   Start: 0 meters\n    *   Climb: $0 + 4 = 4$ meters. (Not at top yet)\n    *   Slide: $4 - 1 = 3$ meters.\n    *   End of Day 1 position: 3 meters.\n\n2.  **Day 2:**\n    *   Start: 3 meters\n    *   Climb: $3 + 4 = 7$ meters. (Not at top yet)\n    *   Slide: $7 - 1 = 6$ meters.\n    *   End of Day 2 position: 6 meters.\n\n3.  **Day 3:**\n    *   Start: 6 meters\n    *   Climb: $6 + 4 = 10$ meters. (Not at top yet)\n    *   Slide: $10 - 1 = 9$ meters.\n    *   End of Day 3 position: 9 meters.\n\n4.  **Day 4:**\n    *   Start: 9 meters\n    *   Climb: $9 + 4 = 13$ meters. (Not at top yet)",
+        "score": "other_wrong",
+        "elapsed_s": 7.6
+      }
+    ]
+  },
+  "condition_B": {
+    "seed_correct": 4,
+    "seed_total": 5,
+    "seed_accuracy": 0.8,
+    "test_correct": 5,
+    "test_total": 5,
+    "test_accuracy": 1.0,
+    "test_intuitive_trap": 0,
+    "b_full": {
+      "seed_results": [
+        {
+          "problem_id": "S1",
+          "response": "Working: Let the cost of the ball be $x$ dollars.\nAccording to the problem, the bat costs $1.00 more than the ball, so the cost of the bat is $x + 1.00$ dollars.\nThe total cost of the bat and the ball is $1.10. Therefore, we can set up the following equation:\n$$x + (x + 1.00) = 1.10$$\n\nCombine like terms:\n$$2x + 1.00 = 1.10$$\n\nSubtract $1.00 from both sides:\n$$2x = 0.10$$\n\nDivide by 2:\n$$x = 0.05$$\n\nSo, the ball costs $0.05.\nLet's verify: If the ball costs $0.05, the bat costs $0.05 + $1.00 = $1.05. The total is $0.05 + $1.05 = $1.10. This matches the problem statement.\n\nAnswer: $0.05",
+          "score": "correct",
+          "elapsed_s": 4.7,
+          "lesson_stored": "When given a total sum and a difference between two items, always set up the system of equations to solve for the smaller value as (total - difference) / 2 rather than subtracting the difference from the total."
+        },
+        {
+          "problem_id": "S2",
+          "response": "Working: First, determine the rate at which a single machine works. If 5 machines make 5 widgets in 5 minutes, then each machine is responsible for making 1 widget in that same 5-minute period. This means the production rate is 1 widget per machine every 5 minutes.\n\nNext, apply this rate to the new scenario. We have 100 machines, and we want them to make 100 widgets. Since each machine makes 1 widget in 5 minutes, if we have 100 machines working simultaneously, they will each produce 1 widget. Therefore, the total production will be 100 widgets. Because the machines work in parallel, the time required is the same as the time it takes one machine to make one widget.\n\nAnswer: 5 minutes",
+          "score": "correct",
+          "elapsed_s": 2.9,
+          "lesson_stored": "When scaling both the number of agents and the amount of work proportionally, the time required remains constant because the work-per-agent ratio is unchanged."
+        },
+        {
+          "problem_id": "S3",
+          "response": "Working: The problem states that the patch of lily pads doubles in size every day. This means that the size on any given day is exactly twice the size of the previous day. Conversely, the size on any given day is exactly half the size of the following day.\n\nIf the lake is fully covered on day 48, then on the day before (day 47), the patch must have been half the size of the full lake. Since the patch doubles from day 47 to day 48, it goes from covering half the lake to covering the entire lake.\n\nTherefore, it takes 47 days to cover half the lake.\n\nAnswer: 47 days",
+          "score": "correct",
+          "elapsed_s": 2.4,
+          "lesson_stored": "When dealing with exponential growth or decay, always check if the target state is reached by reversing a single step from the final state rather than calculating a proportional fraction of the total time."
+        },
+        {
+          "problem_id": "S4",
+          "response": "Working: First, determine the rate at which a single cat catches mice. If 3 cats catch 3 mice in 3 minutes, this implies that the group of 3 cats is working together to complete the task. We can analyze the work rate per cat.\n\nLet's look at the ratio:\n3 cats $\\rightarrow$ 3 mice in 3 minutes.\n\nThis means that, on average, each cat is responsible for catching 1 mouse in that 3-minute period. Therefore, the rate of one cat is:\n1 cat catches 1 mouse in 3 minutes.\n\nNow, consider the new scenario: 9 cats catching 9 mice.\nSince each cat catches 1 mouse in 3 minutes, if we have 9 cats, each cat can independently catch 1 mouse.\nTherefore, 9 cats will catch 9 mice simultaneously in the same amount of time it takes one cat to catch one mouse.\n\nTime required = 3 minutes.\n\nAnswer: 3 minutes",
+          "score": "correct",
+          "elapsed_s": 3.5,
+          "lesson_stored": "When scaling both the number of agents and the amount of work proportionally, the time required remains constant because the work-per-agent ratio does not change."
+        },
+        {
+          "problem_id": "S5",
+          "response": "Working: To solve this problem, we need to track the snail's position day by day, keeping in mind that the snail only reaches the top if it climbs past or exactly to the 10-meter mark during the day. Once it reaches the top, it does not slide back down at night.\n\n1.  **Day 1:**\n    *   Starts at 0 meters.\n    *   Climbs up 3 meters during the day: $0 + 3 = 3$ meters.\n    *   Since $3 < 10$, it hasn't reached the top.\n    *   Slides down 2 meters at night: $3 - 2 = 1$ meter.\n    *   End of Day 1 position: 1 meter.\n\n2.  **Day 2:**\n    *   Starts at 1 meter.\n    *   Climbs up 3 meters during the day: $1 + 3 = 4$ meters.\n    *   Since $4 < 10$, it hasn't reached the top.\n    *   Slides down 2 meters at night: $4 - 2 = 2$ meters.\n    *   End of Day 2 position: 2 meters.\n\n3.  **Day 3:**\n    *   Starts at 2 meters.\n    *   Climbs up 3 meters during the day: $2 + 3 = 5$ meters.\n    *   Since $5 < 10$, it hasn't reached the top.\n    *   Slides down 2 meters at night: $5 - 2 = 3$ meters.\n    *   End of Day 3 position: 3 meters.\n\n    *Observation:* The snail makes a net progress of 1 meter per day ($3 - 2 = 1$). So,",
+          "score": "other_wrong",
+          "elapsed_s": 8.4,
+          "lesson_stored": "When calculating progress with a daily gain and nightly loss where the goal is reached during the gain phase, subtract the nightly loss from the total distance first to determine the effective distance to cover before the final day, then add the final day's progress."
+        }
+      ],
+      "lessons_stored": [
+        {
+          "problem_id": "S1",
+          "lesson": "When given a total sum and a difference between two items, always set up the system of equations to solve for the smaller value as (total - difference) / 2 rather than subtracting the difference from the total.",
+          "rid": "019da907-2b9d-7804-85da-72a9009f860e"
+        },
+        {
+          "problem_id": "S2",
+          "lesson": "When scaling both the number of agents and the amount of work proportionally, the time required remains constant because the work-per-agent ratio is unchanged.",
+          "rid": "019da907-4240-7eb7-bdc8-b3f8159be8b3"
+        },
+        {
+          "problem_id": "S3",
+          "lesson": "When dealing with exponential growth or decay, always check if the target state is reached by reversing a single step from the final state rather than calculating a proportional fraction of the total time.",
+          "rid": "019da907-5767-70d6-b354-5d377a4a8dfa"
+        },
+        {
+          "problem_id": "S4",
+          "lesson": "When scaling both the number of agents and the amount of work proportionally, the time required remains constant because the work-per-agent ratio does not change.",
+          "rid": "019da907-70e1-7768-960a-88a4d0025dae"
+        },
+        {
+          "problem_id": "S5",
+          "lesson": "When calculating progress with a daily gain and nightly loss where the goal is reached during the gain phase, subtract the nightly loss from the total distance first to determine the effective distance to cover before the final day, then add the final day's progress.",
+          "rid": "019da908-2838-7157-a2a3-a681e8273427"
+        }
+      ],
+      "think_after_seeds": {
+        "conflicts_found": 4,
+        "consolidation_count": 0,
+        "duration_ms": 14,
+        "patterns_new": 0,
+        "patterns_updated": 0,
+        "personality_updated": true,
+        "triggers": []
+      },
+      "test_results": [
+        {
+          "problem_id": "T1",
+          "response": "Working: Let $S$ be the cost of the shirt and $P$ be the cost of the pants.\nFrom the problem, we have two equations:\n1. $S + P = 80$ (Total cost)\n2. $P = S + 40$ (Pants cost $40 more than the shirt)\n\nSubstitute equation (2) into equation (1):\n$S + (S + 40) = 80$\n$2S + 40 = 80$\n$2S = 80 - 40$\n$2S = 40$\n$S = 20$\n\nSo, the shirt costs $20.\nCheck: If the shirt is $20, the pants are $20 + $40 = $60. Total = $20 + $60 = $80. This matches the problem statement.\n\nAnswer: $20",
+          "score": "correct",
+          "n_retrieved": 5,
+          "elapsed_s": 3.9
+        },
+        {
+          "problem_id": "T2",
+          "response": "Working: The problem involves scaling both the number of agents (robots) and the amount of work (cars) proportionally. According to the stored strategies, when both the number of agents and the amount of work are scaled by the same factor, the time required remains constant.\n\nLet's verify this step-by-step:\n1.  **Determine the rate of one robot:**\n    If 10 robots produce 10 cars in 10 days, then 1 robot produces 1 car in 10 days.\n    Rate = 1 car / (1 robot * 10 days) = 0.1 cars per robot-day.\n\n2.  **Calculate the time for the new scenario:**\n    We have 50 robots producing 50 cars.\n    Total work required = 50 cars.\n    Total capacity per day = 50 robots * 0.1 cars/robot-day = 5 cars/day.\n    Time = Total Work / Total Capacity per day = 50 cars / 5 cars/day = 10 days.\n\nAlternatively, using the proportionality logic directly:\n-   The number of robots increased from 10 to 50 (a factor of 5).\n-   The number of cars increased from 10 to 50 (a factor of 5).\n-   Since the workload per robot remains the same (each robot still has to produce 1 car), the time required does not change.\n\nAnswer: 10 days",
+          "score": "correct",
+          "n_retrieved": 5,
+          "elapsed_s": 5.0
+        },
+        {
+          "problem_id": "T3",
+          "response": "Working: The problem describes exponential growth where the quantity doubles every hour. We are given that the jar is full at 12:00 noon. Since the bacteria double every hour, the amount of bacteria at any given time is half of the amount one hour later. Therefore, to find when the jar was half-full, we need to go back one hour from the time it was full.\n12:00 noon minus 1 hour is 11:00 AM.\n\nAnswer: 11:00 AM",
+          "score": "correct",
+          "n_retrieved": 5,
+          "elapsed_s": 2.8
+        },
+        {
+          "problem_id": "T4",
+          "response": "Working: The problem states that Alice runs at exactly twice Bob's speed. Let $v_B$ be Bob's speed and $v_A$ be Alice's speed. We are given $v_A = 2v_B$.\nThe distance of the race is $d = 100$ meters.\nBob's time to finish the race is $t_B = 20$ seconds.\nWe know that speed is distance divided by time ($v = d/t$).\nSo, $v_B = d / t_B = 100 / 20 = 5$ m/s.\nSince Alice's speed is twice Bob's speed, $v_A = 2 \\times 5 = 10$ m/s.\nNow we calculate Alice's time $t_A$ using the same distance $d$:\n$t_A = d / v_A = 100 / 10 = 10$ seconds.\nAlternatively, using proportionality: Since speed and time are inversely proportional for a fixed distance ($t = d/v$), if the speed doubles, the time is halved.\n$t_A = t_B / 2 = 20 / 2 = 10$ seconds.\n\nAnswer: 10 seconds",
+          "score": "correct",
+          "n_retrieved": 5,
+          "elapsed_s": 4.8
+        },
+        {
+          "problem_id": "T5",
+          "response": "Working: The frog climbs 4 meters during the day and slides back 1 meter at night, resulting in a net gain of 3 meters per full day (24 hours). However, we must account for the fact that the frog reaches the top during the daytime climb, before sliding back at night.\n\nLet $d$ be the number of days. On the last day, the frog climbs 4 meters to reach or exceed the 20-meter mark. Therefore, at the start of the last day, the frog must be at a height of at least $20 - 4 = 16$ meters.\n\nWe need to find how many days it takes to reach 16 meters with a net gain of 3 meters per day.\nHeight after $n$ days = $3n$.\nWe need $3n \\ge 16$.\n$n \\ge 16/3 \\approx 5.33$.\nSince $n$ must be an integer, it takes 6 days to reach a height of $3 \\times 6 = 18$ meters? No, let's trace it carefully.\n\nDay 1: Climbs to 4, slides to 3. End of Day 1 height: 3m.\nDay 2: Climbs to $3+4=7$, slides to $7-1=6$. End of Day 2 height: 6m.\nDay 3: Climbs to $6+4=10$, slides to $10-1=9$. End of Day 3 height: 9m.\nDay 4: Climbs to $9+4=13$, slides to $13-1=12$. End of Day 4 height: 12m.\nDay 5: Climbs to $12+4=16$, slides to $16-1=15$. End of Day 5 height: 15m.\nDay 6: Climbs to $15+4=19$, slides to $19-1=18$. End of Day 6 height: 18m.\nDay 7: Climbs to $18+4=22$. Since 22 meters is greater than 20 meters, the frog reaches the top during the day on Day 7 and does not",
+          "score": "correct",
+          "n_retrieved": 5,
+          "elapsed_s": 7.3
+        }
+      ],
+      "stats_final": {
+        "active_memories": 229,
+        "consolidated_memories": 9,
+        "edges": 124,
+        "entities": 363,
+        "open_conflicts": 14,
+        "operations": 2377,
+        "pending_triggers": 42,
+        "tombstoned_memories": 170
+      }
+    }
+  },
+  "learning_delta": 0.19999999999999996
+}

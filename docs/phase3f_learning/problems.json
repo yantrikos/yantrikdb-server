@@ -1,0 +1,97 @@
+{
+  "description": "CRT-style trick math problems where the intuitive answer is wrong and careful arithmetic is required. Two halves: 5 seed (Condition B gets feedback + stores lessons) and 5 test (both conditions solve cold). All 10 share the same abstract pattern family: 'intuition primes wrong answer via apparent proportionality or linearity that doesn't hold'.",
+  "seed": [
+    {
+      "id": "S1",
+      "problem": "A bat and a ball cost $1.10 in total. The bat costs $1.00 more than the ball. How much does the ball cost?",
+      "intuitive_wrong": "0.10",
+      "correct_answer": "0.05",
+      "answer_patterns": ["0.05", "5 cents", "five cents", "$0.05"],
+      "wrong_patterns": ["0.10", "0.1", "10 cents", "ten cents", "$0.10"],
+      "lesson_hint": "In 'A costs X more than B' problems, the answer is NOT simply (total - X). You must solve the system: A+B=total, A-B=X, so B = (total-X)/2."
+    },
+    {
+      "id": "S2",
+      "problem": "If it takes 5 machines 5 minutes to make 5 widgets, how long would it take 100 machines to make 100 widgets?",
+      "intuitive_wrong": "100",
+      "correct_answer": "5",
+      "answer_patterns": ["5 min", "5 minutes", "five min", "five minutes"],
+      "wrong_patterns": ["100 min", "100 minutes", "one hundred"],
+      "lesson_hint": "Per-machine production rate is constant. If N machines make N widgets in N minutes, then each machine takes N minutes per widget. Scaling both workers AND output proportionally keeps the time constant."
+    },
+    {
+      "id": "S3",
+      "problem": "A patch of lily pads in a lake doubles in size every day. If it takes 48 days for the patch to cover the entire lake, how many days would it take to cover half the lake?",
+      "intuitive_wrong": "24",
+      "correct_answer": "47",
+      "answer_patterns": ["47 days", "forty-seven", "day 47"],
+      "wrong_patterns": ["24 days", "twenty-four"],
+      "lesson_hint": "Exponential (doubling) growth: the half-cover point is ONE DAY before full-cover, not halfway through the timeline. Work backwards from full."
+    },
+    {
+      "id": "S4",
+      "problem": "If 3 cats can catch 3 mice in 3 minutes, how long will it take 9 cats to catch 9 mice?",
+      "intuitive_wrong": "9",
+      "correct_answer": "3",
+      "answer_patterns": ["3 min", "3 minutes", "three min", "three minutes"],
+      "wrong_patterns": ["9 min", "9 minutes", "nine min"],
+      "lesson_hint": "Same as the machines problem. Per-cat rate is 1 mouse per 3 minutes. Scaling cats AND mice proportionally keeps time constant."
+    },
+    {
+      "id": "S5",
+      "problem": "A snail is at the bottom of a 10-meter well. Each day it climbs up 3 meters. Each night it slides back down 2 meters. How many days does it take the snail to reach the top?",
+      "intuitive_wrong": "10",
+      "correct_answer": "8",
+      "answer_patterns": ["8 days", "eight days"],
+      "wrong_patterns": ["10 days", "ten days"],
+      "lesson_hint": "Net 1m/day for most days, but on the FINAL day the snail reaches the top during climb and doesn't slide back. Solve: needs to reach 10m from 0; after N full days (climb+slide) it is at N meters. On day N+1 it starts at N meters and climbs 3m, reaching N+3. We want N+3 >= 10 on a climb day, so N >= 7, i.e., day 8."
+    }
+  ],
+  "test": [
+    {
+      "id": "T1",
+      "problem": "A shirt and pants together cost $80. The pants cost $40 more than the shirt. How much does the shirt cost?",
+      "intuitive_wrong": "40",
+      "correct_answer": "20",
+      "answer_patterns": ["$20", "20 dollars", "20$", "twenty"],
+      "wrong_patterns": ["$40", "40 dollars", "forty"],
+      "pattern_family": "A costs X more than B, given A+B=total (like S1)"
+    },
+    {
+      "id": "T2",
+      "problem": "A factory has 10 robots that produce 10 cars in 10 days. How many days would 50 robots take to produce 50 cars?",
+      "intuitive_wrong": "50",
+      "correct_answer": "10",
+      "answer_patterns": ["10 days", "ten days"],
+      "wrong_patterns": ["50 days", "fifty"],
+      "pattern_family": "N workers make N units in N time (like S2, S4)"
+    },
+    {
+      "id": "T3",
+      "problem": "Bacteria in a jar double every hour. The jar is completely full at 12:00 noon. At what time was the jar half-full?",
+      "intuitive_wrong": "06:00",
+      "correct_answer": "11:00",
+      "answer_patterns": ["11:00", "11 am", "11am", "eleven", "11:00 am"],
+      "wrong_patterns": ["6:00", "6 am", "06:00", "noon minus 6"],
+      "pattern_family": "doubling growth, half-cover one step before full (like S3)"
+    },
+    {
+      "id": "T4",
+      "problem": "In a race, Alice is running at exactly twice Bob's speed. Bob finishes the 100m race in 20 seconds. What time does Alice finish the same race?",
+      "intuitive_wrong": "40",
+      "correct_answer": "10",
+      "answer_patterns": ["10 sec", "10 seconds", "ten seconds"],
+      "wrong_patterns": ["40 sec", "forty", "2x20", "20 sec"],
+      "pattern_family": "speed scaling — if runner is TWICE as fast, they take HALF the time, not double. Inverse relationship."
+    },
+    {
+      "id": "T5",
+      "problem": "A frog is at the bottom of a 20-meter well. Each day it climbs up 4 meters. Each night it slides back 1 meter. How many days does it take the frog to reach the top?",
+      "intuitive_wrong": "7",
+      "correct_answer": "6",
+      "answer_patterns": ["6 days", "six days"],
+      "wrong_patterns": ["7 days", "seven days", "20 days"],
+      "pattern_family": "well-climbing with final-day escape (like S5); net 3m/day, final day reaches top during climb"
+    }
+  ]
+}

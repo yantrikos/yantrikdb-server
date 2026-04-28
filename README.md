@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/yantrikos-yantrikdb-server-badge.png)](https://mseep.ai/app/yantrikos-yantrikdb-server)
+
 # YantrikDB
 
 > ⚠ **Correction notice (2026-04-19):** Phase 3 benchmark writeups committed

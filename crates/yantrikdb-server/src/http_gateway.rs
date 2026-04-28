@@ -289,10 +289,22 @@ async fn health_deep(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Va
         StatusCode::SERVICE_UNAVAILABLE
     };
 
+    // Surface at-rest encryption status. Issue #3 (yantrikos/yantrikdb)
+    // reported there was no way to verify encryption was active without
+    // running `strings` on the SQLite file. The TenantPool already knows
+    // whether a master key was configured at startup.
+    let encryption_enabled = state.pool.is_encrypted();
+    let encryption_status = if encryption_enabled {
+        json!({"enabled": true, "algorithm": "AES-256-GCM"})
+    } else {
+        json!({"enabled": false, "algorithm": null})
+    };
+
     (
         status,
         Json(json!({
             "status": if all_pass { "healthy" } else { "degraded" },
+            "encryption": encryption_status,
             "checks": checks,
         })),
     )

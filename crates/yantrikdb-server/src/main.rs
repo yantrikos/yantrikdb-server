@@ -727,6 +727,20 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
 
     // Resolve master encryption key (auto-generates if needed)
     let master_key = cfg.encryption.resolve_key(&cfg.server.data_dir)?;
+
+    // Issue #3 (yantrikos/yantrikdb): users on Docker setups reported they
+    // saw NO encryption-related output, leaving them unable to confirm
+    // whether at-rest encryption was active. The previous tracing::info/warn
+    // depended on RUST_LOG and tracing-subscriber config, which didn't
+    // surface in their `docker logs` output. We now also write a
+    // boundary-marker banner to stderr (which Docker always captures) so
+    // the encryption state is impossible to miss at startup.
+    let enc_state = if master_key.is_some() {
+        "enabled (AES-256-GCM)"
+    } else {
+        "disabled — set [encryption] section in config to enable at-rest encryption"
+    };
+    eprintln!("[yantrikdb] encryption: {enc_state}");
     if master_key.is_some() {
         tracing::info!("encryption: enabled (AES-256-GCM)");
     } else {

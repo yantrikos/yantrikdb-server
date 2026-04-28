@@ -27,15 +27,21 @@ jobs:
             target
           key: publish-${{ hashFiles('**/Cargo.toml') }}
 
-      # Publish in dependency order. Each step uses --no-verify to skip
-      # the local rebuild (we trust CI). continue-on-error allows re-running
-      # the workflow safely if a crate is already published at this version.
+      # Each step uses `.github/scripts/publish-crate.sh`, which:
+      #   - exits 0 on success
+      #   - exits 0 if the crate is already published at this version
+      #     (idempotent re-run safety — replaces the previous blanket
+      #     `continue-on-error: true` that swallowed real failures like
+      #     the v0.7.3 manifest-verification error)
+      #   - exits non-zero on any genuine publish failure
+      #
+      # Order matches the dependency graph: protocol → engine → witness →
+      # server → yql.
 
       - name: Publish yantrikdb-protocol
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p yantrikdb-protocol --no-verify
-        continue-on-error: true
+        run: .github/scripts/publish-crate.sh yantrikdb-protocol
 
       - name: Wait for protocol to be indexed
         run: sleep 30
@@ -43,8 +49,7 @@ jobs:
       - name: Publish yantrikdb (core)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p yantrikdb --no-verify
-        continue-on-error: true
+        run: .github/scripts/publish-crate.sh yantrikdb
 
       - name: Wait for core to be indexed
         run: sleep 30
@@ -52,17 +57,14 @@ jobs:
       - name: Publish yantrikdb-witness
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p yantrikdb-witness --no-verify
-        continue-on-error: true
+        run: .github/scripts/publish-crate.sh yantrikdb-witness
 
       - name: Publish yantrikdb-server
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p yantrikdb-server --no-verify
-        continue-on-error: true
+        run: .github/scripts/publish-crate.sh yantrikdb-server
 
       - name: Publish yql
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p yql --no-verify
-        continue-on-error: true
+        run: .github/scripts/publish-crate.sh yql

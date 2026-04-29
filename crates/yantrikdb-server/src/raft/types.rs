@@ -293,11 +293,7 @@ mod tests {
 
     #[test]
     fn log_entry_serde_round_trip_is_lossless() {
-        let entry = YantrikLogEntry::new(
-            TenantId::new(1),
-            OpId::new_random(),
-            upsert("mem_a"),
-        );
+        let entry = YantrikLogEntry::new(TenantId::new(1), OpId::new_random(), upsert("mem_a"));
         let json = serde_json::to_string(&entry).unwrap();
         let back: YantrikLogEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, back);
@@ -324,8 +320,7 @@ mod tests {
 
     #[test]
     fn raft_response_micros_round_trip() {
-        let when = std::time::UNIX_EPOCH
-            + std::time::Duration::from_micros(1_700_000_000_000_000);
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_micros(1_700_000_000_000_000);
         let r = YantrikRaftResponse::new(7, 42, when);
         assert_eq!(r.term, 7);
         assert_eq!(r.tenant_log_index, 42);
@@ -354,11 +349,8 @@ mod tests {
         _assert_assoc::<YantrikRaftTypeConfig>();
 
         // Concrete type-id checks at runtime to pin the wire shape.
-        let _: <YantrikRaftTypeConfig as openraft::RaftTypeConfig>::D = YantrikLogEntry::new(
-            TenantId::new(1),
-            OpId::new_random(),
-            upsert("mem_a"),
-        );
+        let _: <YantrikRaftTypeConfig as openraft::RaftTypeConfig>::D =
+            YantrikLogEntry::new(TenantId::new(1), OpId::new_random(), upsert("mem_a"));
         let _: <YantrikRaftTypeConfig as openraft::RaftTypeConfig>::R = YantrikRaftResponse {
             term: 0,
             tenant_log_index: 0,

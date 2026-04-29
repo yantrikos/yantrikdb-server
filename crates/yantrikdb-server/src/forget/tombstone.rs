@@ -245,7 +245,11 @@ mod tests {
     async fn any_tombstoned_walks_the_list() {
         let idx = TombstoneIndex::new();
         idx.record(TenantId::new(1), "mem_b".into());
-        let rids = vec!["mem_a".to_string(), "mem_b".to_string(), "mem_c".to_string()];
+        let rids = vec![
+            "mem_a".to_string(),
+            "mem_b".to_string(),
+            "mem_c".to_string(),
+        ];
         assert!(idx.any_tombstoned(TenantId::new(1), &rids).await);
         // None tombstoned → false.
         let clean = vec!["mem_a".to_string(), "mem_c".to_string()];
@@ -346,11 +350,19 @@ mod tests {
         let db_path = tmp.path().join("commit.db");
         let committer = LocalSqliteCommitter::open(&db_path).unwrap();
         committer
-            .commit(TenantId::new(1), tombstone("mem_a"), CommitOptions::default())
+            .commit(
+                TenantId::new(1),
+                tombstone("mem_a"),
+                CommitOptions::default(),
+            )
             .await
             .unwrap();
         committer
-            .commit(TenantId::new(2), tombstone("mem_b"), CommitOptions::default())
+            .commit(
+                TenantId::new(2),
+                tombstone("mem_b"),
+                CommitOptions::default(),
+            )
             .await
             .unwrap();
         drop(committer);

@@ -42,7 +42,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commit::{CommitError, MemoryMutation, MutationCommitter, TenantId};
-use crate::jobs::{JobError, JobQueue, JobId, NewJob};
+use crate::jobs::{JobError, JobId, JobQueue, NewJob};
 
 /// Stable kind string for HNSW-delete jobs. Pinned because
 /// `JobQueue::acquire_lease` filters on this exact value;
@@ -288,7 +288,11 @@ mod tests {
             .unwrap();
         // log_index 2: tombstone (kept)
         committer
-            .commit(tenant, tombstone("a", Some("expired")), CommitOptions::default())
+            .commit(
+                tenant,
+                tombstone("a", Some("expired")),
+                CommitOptions::default(),
+            )
             .await
             .unwrap();
         // log_index 3: upsert (skipped)
@@ -384,11 +388,19 @@ mod tests {
     async fn scanner_per_tenant_isolation() {
         let committer = open_committer();
         committer
-            .commit(TenantId::new(1), tombstone("a", None), CommitOptions::default())
+            .commit(
+                TenantId::new(1),
+                tombstone("a", None),
+                CommitOptions::default(),
+            )
             .await
             .unwrap();
         committer
-            .commit(TenantId::new(2), tombstone("b", None), CommitOptions::default())
+            .commit(
+                TenantId::new(2),
+                tombstone("b", None),
+                CommitOptions::default(),
+            )
             .await
             .unwrap();
         let t1 = scan_tombstones_in_range(&*committer, TenantId::new(1), 1, 100)
@@ -438,7 +450,10 @@ mod tests {
         assert_eq!(result.jobs_enqueued, 3);
         assert_eq!(result.next_log_index_to_scan, 6); // last seen was 5
 
-        let listed = jobs.list(Some(tenant), Some(JobState::Pending), 100).await.unwrap();
+        let listed = jobs
+            .list(Some(tenant), Some(JobState::Pending), 100)
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 3);
         for j in &listed {
             assert_eq!(j.kind, HNSW_DELETE_JOB_KIND);
@@ -473,7 +488,9 @@ mod tests {
             .await
             .unwrap();
 
-        let r1 = enqueue_range(&*committer, &*jobs, tenant, 1, 100).await.unwrap();
+        let r1 = enqueue_range(&*committer, &*jobs, tenant, 1, 100)
+            .await
+            .unwrap();
         assert_eq!(r1.jobs_enqueued, 1);
         assert_eq!(r1.next_log_index_to_scan, 2);
 
@@ -493,7 +510,10 @@ mod tests {
         assert_eq!(r2.next_log_index_to_scan, 4);
 
         // Total enqueued = 3 (a, b, c). No duplicates.
-        let listed = jobs.list(Some(tenant), Some(JobState::Pending), 100).await.unwrap();
+        let listed = jobs
+            .list(Some(tenant), Some(JobState::Pending), 100)
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 3);
     }
 

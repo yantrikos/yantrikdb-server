@@ -687,7 +687,9 @@ mod tests {
         b.observe(obs_term_churn(Instant::now()));
         assert!(matches!(
             b.verdict(),
-            BreakerVerdict::WouldReject { reason: OpenReason::TermChurn }
+            BreakerVerdict::WouldReject {
+                reason: OpenReason::TermChurn
+            }
         ));
     }
 

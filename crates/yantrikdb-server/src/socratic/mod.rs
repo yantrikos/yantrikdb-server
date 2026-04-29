@@ -117,10 +117,8 @@ mod tests {
         evidence.context_variance = 0.9; // triggers BINARY_TO_CONDITIONAL
         evidence.temporal_spread_days = 365.0; // triggers GLOBAL_TO_TEMPORAL
 
-        let ops: Vec<Arc<dyn SocraticOperator>> = vec![
-            Arc::new(GlobalToTemporal),
-            Arc::new(BinaryToConditional),
-        ];
+        let ops: Vec<Arc<dyn SocraticOperator>> =
+            vec![Arc::new(GlobalToTemporal), Arc::new(BinaryToConditional)];
         let suggestions = rewrite(&ops, "did Acme grow last year?", &evidence);
         assert_eq!(suggestions.len(), 2);
         // Order matches the operators slice, NOT a "rank" of the suggestions.

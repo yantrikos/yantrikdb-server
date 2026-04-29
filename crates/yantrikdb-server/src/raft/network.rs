@@ -28,7 +28,7 @@ use openraft::error::{
     InstallSnapshotError, NetworkError, RPCError, RaftError, ReplicationClosed, StreamingError,
     Unreachable,
 };
-use openraft::network::{Backoff, RaftNetwork, RaftNetworkFactory, RPCOption};
+use openraft::network::{Backoff, RPCOption, RaftNetwork, RaftNetworkFactory};
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse,
     SnapshotResponse, VoteRequest, VoteResponse,
@@ -106,12 +106,12 @@ impl RaftNetwork<YantrikRaftTypeConfig> for StubRaftNetwork {
     > {
         // StreamingError doesn't wrap RPCError directly; surface as
         // a network error.
-        Err(StreamingError::Network(NetworkError::new(&AnyError::error(
-            format!(
+        Err(StreamingError::Network(NetworkError::new(
+            &AnyError::error(format!(
                 "stub network: full_snapshot to {} ({}) — PR-4-d-b will ship real HTTP transport",
                 self.target, self.target_addr
-            ),
-        ))))
+            )),
+        )))
     }
 
     fn backoff(&self) -> Backoff {

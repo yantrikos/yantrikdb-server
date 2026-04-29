@@ -53,8 +53,8 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use openraft::storage::{RaftSnapshotBuilder, RaftStateMachine};
 use openraft::entry::{RaftEntry, RaftPayload};
+use openraft::storage::{RaftSnapshotBuilder, RaftStateMachine};
 use openraft::{
     AnyError, Entry, EntryPayload, LogId, Snapshot, SnapshotMeta, StorageError, StorageIOError,
     StoredMembership,
@@ -246,7 +246,8 @@ impl RaftStateMachine<YantrikRaftTypeConfig> for YantrikStateMachine {
             let response = match entry.payload {
                 EntryPayload::Normal(app) => {
                     let (tenant_id, op_id, mutation) = app.into_parts();
-                    self.apply_normal(tenant_id, op_id, mutation, &log_id).await?
+                    self.apply_normal(tenant_id, op_id, mutation, &log_id)
+                        .await?
                 }
                 EntryPayload::Blank => {
                     // Term-promotion sentinel — no application effect.
@@ -572,7 +573,9 @@ mod tests {
 
         let dest_committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
         let mut dest = YantrikStateMachine::new(dest_committer);
-        dest.install_snapshot(&snap.meta, snap.snapshot).await.unwrap();
+        dest.install_snapshot(&snap.meta, snap.snapshot)
+            .await
+            .unwrap();
 
         let (_last, mship) = dest.applied_state().await.unwrap();
         let voters: Vec<_> = mship.voter_ids().collect();
@@ -619,7 +622,9 @@ mod tests {
 
         let dest_committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
         let mut dest = YantrikStateMachine::new(dest_committer.clone());
-        dest.install_snapshot(&snap.meta, snap.snapshot).await.unwrap();
+        dest.install_snapshot(&snap.meta, snap.snapshot)
+            .await
+            .unwrap();
 
         let (last, _) = dest.applied_state().await.unwrap();
         assert_eq!(last, None);

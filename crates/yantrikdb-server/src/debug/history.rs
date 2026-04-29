@@ -129,11 +129,7 @@ mod tests {
         let t = TenantId::new(1);
         for i in 1..=5 {
             committer
-                .commit(
-                    t,
-                    upsert(&format!("e{i}")),
-                    CommitOptions::new(),
-                )
+                .commit(t, upsert(&format!("e{i}")), CommitOptions::new())
                 .await
                 .unwrap();
         }
@@ -206,13 +202,9 @@ mod tests {
     async fn read_history_for_unknown_tenant_returns_empty() {
         let committer: Arc<dyn MutationCommitter> =
             Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
-        let resp = read_history(
-            &committer,
-            TenantId::new(999),
-            &HistoryParams::default(),
-        )
-        .await
-        .unwrap();
+        let resp = read_history(&committer, TenantId::new(999), &HistoryParams::default())
+            .await
+            .unwrap();
         assert!(resp.entries.is_empty());
         assert_eq!(resp.high_watermark, 0);
     }

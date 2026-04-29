@@ -185,9 +185,9 @@ pub const PROVISIONAL_DEFAULTS: ProvisionalDefaults = ProvisionalDefaults {
 };
 
 pub const FALLBACK_DEFAULTS: ProvisionalDefaults = ProvisionalDefaults {
-    rps: 50,                     // half of provisional
-    cost_budget: 500,            // half of provisional
-    max_concurrent_expanded: 2,  // half of provisional
+    rps: 50,                    // half of provisional
+    cost_budget: 500,           // half of provisional
+    max_concurrent_expanded: 2, // half of provisional
     cache_ttl: Duration::from_secs(60),
 };
 
@@ -230,7 +230,11 @@ mod tests {
 
     #[test]
     fn scope_kind_round_trip() {
-        for k in [ScopeKind::Principal, ScopeKind::Namespace, ScopeKind::Global] {
+        for k in [
+            ScopeKind::Principal,
+            ScopeKind::Namespace,
+            ScopeKind::Global,
+        ] {
             assert_eq!(ScopeKind::parse(k.as_str()), Some(k));
         }
         assert!(ScopeKind::parse("nonsense").is_none());
@@ -248,7 +252,10 @@ mod tests {
     fn provisional_for_is_full_policy() {
         let p = QuotaPolicy::provisional_for(QuotaScope::principal("alice"));
         assert_eq!(p.rps_limit, Some(PROVISIONAL_DEFAULTS.rps));
-        assert_eq!(p.cost_budget_per_sec, Some(PROVISIONAL_DEFAULTS.cost_budget));
+        assert_eq!(
+            p.cost_budget_per_sec,
+            Some(PROVISIONAL_DEFAULTS.cost_budget)
+        );
         assert_eq!(
             p.max_concurrent_expanded,
             Some(PROVISIONAL_DEFAULTS.max_concurrent_expanded)

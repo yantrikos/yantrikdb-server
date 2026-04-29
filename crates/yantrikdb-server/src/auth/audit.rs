@@ -221,11 +221,15 @@ mod tests {
     use super::*;
 
     fn ev_data_success() -> AuditEvent {
-        AuditEvent::now(AuditEventKind::DataMutation, AuditOutcome::Success, "remember")
-            .with_principal("alice")
-            .with_tenant("acme")
-            .with_required_scopes([Scope::Write])
-            .with_detail("rid=abc")
+        AuditEvent::now(
+            AuditEventKind::DataMutation,
+            AuditOutcome::Success,
+            "remember",
+        )
+        .with_principal("alice")
+        .with_tenant("acme")
+        .with_required_scopes([Scope::Write])
+        .with_detail("rid=abc")
     }
 
     #[test]
@@ -316,9 +320,13 @@ mod tests {
         // Forbidden outcomes need to record what was *required* (not
         // just what the principal had) so operators can answer "why
         // was alice forbidden?" without re-running the request.
-        let ev = AuditEvent::now(AuditEventKind::DataMutation, AuditOutcome::Forbidden, "forget")
-            .with_principal("alice")
-            .with_required_scopes([Scope::Forget]);
+        let ev = AuditEvent::now(
+            AuditEventKind::DataMutation,
+            AuditOutcome::Forbidden,
+            "forget",
+        )
+        .with_principal("alice")
+        .with_required_scopes([Scope::Forget]);
         assert_eq!(ev.required_scopes, vec![Scope::Forget]);
         assert_eq!(ev.outcome, AuditOutcome::Forbidden);
     }

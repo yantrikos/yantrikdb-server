@@ -245,8 +245,12 @@ mod tests {
     async fn shred_destroys_data_encryption_key() {
         let (s, kp) = shredder(CryptoShredConfig::default());
         // Issue both keys for the tenant.
-        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap();
-        kp.rotate_key("acme", KeyPurpose::BackupBlobEncryption).await.unwrap();
+        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        kp.rotate_key("acme", KeyPurpose::BackupBlobEncryption)
+            .await
+            .unwrap();
 
         let outcome = s.shred("acme").await.unwrap();
         assert_eq!(outcome.tenant_id, "acme");
@@ -256,20 +260,30 @@ mod tests {
         }
 
         // Post-shred, neither key is recoverable.
-        let err1 = kp.get_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap_err();
+        let err1 = kp
+            .get_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap_err();
         assert!(matches!(err1, KeyError::NotFound { .. }));
-        let err2 = kp.get_key("acme", KeyPurpose::BackupBlobEncryption).await.unwrap_err();
+        let err2 = kp
+            .get_key("acme", KeyPurpose::BackupBlobEncryption)
+            .await
+            .unwrap_err();
         assert!(matches!(err2, KeyError::NotFound { .. }));
     }
 
     #[tokio::test]
     async fn shred_idempotent_on_second_call() {
         let (s, kp) = shredder(CryptoShredConfig::default());
-        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap();
+        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         let first = s.shred("acme").await.unwrap();
         let second = s.shred("acme").await.unwrap();
         // First run actively destroyed at least the data key.
-        assert!(first.destroyed_purposes().contains(&KeyPurpose::TenantDataEncryption));
+        assert!(first
+            .destroyed_purposes()
+            .contains(&KeyPurpose::TenantDataEncryption));
         // Second run: no purposes were actively destroyed (already gone).
         assert!(second.destroyed_purposes().is_empty());
         // Both runs leave the data unreachable.
@@ -284,9 +298,13 @@ mod tests {
         // invariant that prevents tenant delete from knocking the
         // cluster offline.
         let (s, kp) = shredder(CryptoShredConfig::default());
-        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap();
+        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         kp.rotate_key("acme", KeyPurpose::ClusterTls).await.unwrap();
-        kp.rotate_key("acme", KeyPurpose::AuditSigning).await.unwrap();
+        kp.rotate_key("acme", KeyPurpose::AuditSigning)
+            .await
+            .unwrap();
         s.shred("acme").await.unwrap();
         // ClusterTls + AuditSigning untouched.
         assert!(kp.get_key("acme", KeyPurpose::ClusterTls).await.is_ok());
@@ -296,15 +314,25 @@ mod tests {
     #[tokio::test]
     async fn shred_does_not_touch_other_tenants() {
         let (s, kp) = shredder(CryptoShredConfig::default());
-        kp.rotate_key("alice", KeyPurpose::TenantDataEncryption).await.unwrap();
-        kp.rotate_key("bob", KeyPurpose::TenantDataEncryption).await.unwrap();
+        kp.rotate_key("alice", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        kp.rotate_key("bob", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
 
         s.shred("alice").await.unwrap();
 
         // Alice's key gone.
-        assert!(kp.get_key("alice", KeyPurpose::TenantDataEncryption).await.is_err());
+        assert!(kp
+            .get_key("alice", KeyPurpose::TenantDataEncryption)
+            .await
+            .is_err());
         // Bob's preserved.
-        assert!(kp.get_key("bob", KeyPurpose::TenantDataEncryption).await.is_ok());
+        assert!(kp
+            .get_key("bob", KeyPurpose::TenantDataEncryption)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -313,9 +341,15 @@ mod tests {
         // would let an attacker who has historical ciphertext recover
         // the data. This test guards the contract.
         let (s, kp) = shredder(CryptoShredConfig::default());
-        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap();
-        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap();
-        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap();
+        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
 
         s.shred("acme").await.unwrap();
 
@@ -351,7 +385,9 @@ mod tests {
         // Operator audit log needs the per-purpose breakdown even on
         // failure paths.
         let (s, kp) = shredder(CryptoShredConfig::default());
-        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap();
+        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         let outcome = s.shred("acme").await.unwrap();
         let purposes: Vec<KeyPurpose> = outcome.results.iter().map(|r| r.purpose).collect();
         assert!(purposes.contains(&KeyPurpose::TenantDataEncryption));
@@ -372,14 +408,24 @@ mod tests {
             backup_encryption: false,
         };
         let (s, kp) = shredder(cfg);
-        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption).await.unwrap();
-        kp.rotate_key("acme", KeyPurpose::BackupBlobEncryption).await.unwrap();
+        kp.rotate_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        kp.rotate_key("acme", KeyPurpose::BackupBlobEncryption)
+            .await
+            .unwrap();
 
         s.shred("acme").await.unwrap();
 
         // Data key gone, backup key preserved (per cfg).
-        assert!(kp.get_key("acme", KeyPurpose::TenantDataEncryption).await.is_err());
-        assert!(kp.get_key("acme", KeyPurpose::BackupBlobEncryption).await.is_ok());
+        assert!(kp
+            .get_key("acme", KeyPurpose::TenantDataEncryption)
+            .await
+            .is_err());
+        assert!(kp
+            .get_key("acme", KeyPurpose::BackupBlobEncryption)
+            .await
+            .is_ok());
     }
 
     #[test]

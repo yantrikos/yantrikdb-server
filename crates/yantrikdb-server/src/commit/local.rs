@@ -84,10 +84,9 @@ impl LocalSqliteCommitter {
 
     /// Open an in-memory SQLite for tests. Migrations run as usual.
     pub fn open_in_memory() -> Result<Self, CommitError> {
-        let mut conn =
-            Connection::open_in_memory().map_err(|e| CommitError::StorageFailure {
-                message: format!("failed to open in-memory SQLite: {e}"),
-            })?;
+        let mut conn = Connection::open_in_memory().map_err(|e| CommitError::StorageFailure {
+            message: format!("failed to open in-memory SQLite: {e}"),
+        })?;
         Self::configure_pragmas(&conn)?;
         Self::run_migrations(&mut conn)?;
         Ok(Self {
@@ -307,9 +306,11 @@ impl MutationCommitter for LocalSqliteCommitter {
             // INSERT inside an explicit transaction so a concurrent reader
             // never sees a half-written row + so we can roll back cleanly
             // if the UNIQUE op_id index trips.
-            let tx = conn.transaction().map_err(|e| CommitError::StorageFailure {
-                message: format!("begin transaction failed: {e}"),
-            })?;
+            let tx = conn
+                .transaction()
+                .map_err(|e| CommitError::StorageFailure {
+                    message: format!("begin transaction failed: {e}"),
+                })?;
             let inserted = tx.execute(
                 "INSERT INTO memory_commit_log (
                     tenant_id, log_index, term,
@@ -421,7 +422,14 @@ impl MutationCommitter for LocalSqliteCommitter {
                         let payload: Vec<u8> = row.get(4)?;
                         let committed_micros: i64 = row.get(5)?;
                         let applied_micros: Option<i64> = row.get(6)?;
-                        Ok((log_index, term, op_id_str, payload, committed_micros, applied_micros))
+                        Ok((
+                            log_index,
+                            term,
+                            op_id_str,
+                            payload,
+                            committed_micros,
+                            applied_micros,
+                        ))
                     },
                 )
                 .map_err(|e| CommitError::StorageFailure {
@@ -439,13 +447,12 @@ impl MutationCommitter for LocalSqliteCommitter {
                         .map_err(|e| CommitError::StorageFailure {
                             message: format!("op_id parse failed: {e}"),
                         })?;
-                let mutation: MemoryMutation = serde_json::from_slice(&payload).map_err(|e| {
-                    CommitError::StorageFailure {
+                let mutation: MemoryMutation =
+                    serde_json::from_slice(&payload).map_err(|e| CommitError::StorageFailure {
                         message: format!(
                             "payload deserialize failed at log_index {log_index}: {e}"
                         ),
-                    }
-                })?;
+                    })?;
                 out.push(CommittedEntry {
                     op_id: OpId::from_uuid(op_id_uuid),
                     tenant_id,
@@ -492,9 +499,7 @@ impl MutationCommitter for LocalSqliteCommitter {
         tokio::task::spawn_blocking(move || -> Result<Vec<TenantId>, CommitError> {
             let conn = conn.lock();
             let mut stmt = conn
-                .prepare(
-                    "SELECT DISTINCT tenant_id FROM memory_commit_log ORDER BY tenant_id ASC",
-                )
+                .prepare("SELECT DISTINCT tenant_id FROM memory_commit_log ORDER BY tenant_id ASC")
                 .map_err(|e| CommitError::StorageFailure {
                     message: format!("list_active_tenants prepare failed: {e}"),
                 })?;
@@ -606,9 +611,13 @@ mod tests {
         let c = LocalSqliteCommitter::open_in_memory().unwrap();
         let t = TenantId::new(1);
         assert_eq!(c.high_watermark(t).await.unwrap(), 0);
-        c.commit(t, upsert("a"), CommitOptions::new()).await.unwrap();
+        c.commit(t, upsert("a"), CommitOptions::new())
+            .await
+            .unwrap();
         assert_eq!(c.high_watermark(t).await.unwrap(), 1);
-        c.commit(t, upsert("b"), CommitOptions::new()).await.unwrap();
+        c.commit(t, upsert("b"), CommitOptions::new())
+            .await
+            .unwrap();
         assert_eq!(c.high_watermark(t).await.unwrap(), 2);
     }
 
@@ -651,7 +660,9 @@ mod tests {
     async fn read_range_from_beyond_end_returns_empty() {
         let c = LocalSqliteCommitter::open_in_memory().unwrap();
         let t = TenantId::new(1);
-        c.commit(t, upsert("a"), CommitOptions::new()).await.unwrap();
+        c.commit(t, upsert("a"), CommitOptions::new())
+            .await
+            .unwrap();
         let entries = c.read_range(t, 100, 10).await.unwrap();
         assert!(entries.is_empty());
     }
@@ -702,7 +713,9 @@ mod tests {
     async fn expected_log_index_mismatch_fails() {
         let c = LocalSqliteCommitter::open_in_memory().unwrap();
         let t = TenantId::new(1);
-        c.commit(t, upsert("a"), CommitOptions::new()).await.unwrap();
+        c.commit(t, upsert("a"), CommitOptions::new())
+            .await
+            .unwrap();
         let err = c
             .commit(t, upsert("b"), CommitOptions::new().expecting_index(1))
             .await
@@ -715,7 +728,11 @@ mod tests {
     async fn no_wait_opts_leaves_applied_at_none() {
         let c = LocalSqliteCommitter::open_in_memory().unwrap();
         let r = c
-            .commit(TenantId::new(1), upsert("a"), CommitOptions::new().no_wait())
+            .commit(
+                TenantId::new(1),
+                upsert("a"),
+                CommitOptions::new().no_wait(),
+            )
             .await
             .unwrap();
         assert!(r.applied_at.is_none());
@@ -741,7 +758,8 @@ mod tests {
 
     #[tokio::test]
     async fn dyn_dispatch_works() {
-        let c: Arc<dyn MutationCommitter> = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
+        let c: Arc<dyn MutationCommitter> =
+            Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
         let r = c
             .commit(TenantId::new(1), upsert("a"), CommitOptions::new())
             .await

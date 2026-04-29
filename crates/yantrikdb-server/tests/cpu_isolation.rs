@@ -125,9 +125,7 @@ fn raft_task_scheduling_latency_p99_stays_bounded_under_app_saturation() {
 
     // Stop and join.
     stop.store(true, Ordering::Relaxed);
-    let samples = ctrl
-        .block_on(probe)
-        .expect("probe task did not panic");
+    let samples = ctrl.block_on(probe).expect("probe task did not panic");
     for h in load_handles {
         let _ = ctrl.block_on(h);
     }

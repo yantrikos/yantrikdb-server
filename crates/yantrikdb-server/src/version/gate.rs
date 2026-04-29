@@ -52,7 +52,6 @@ use super::wire::{WireVersion, CURRENT_WIRE_VERSION};
 pub const FEATURE_FLOORS: &[(&str, WireVersion)] = &[
     // Baseline — sentinel feature confirming the gate is operating.
     ("baseline_v1_0", WireVersion::new(1, 0)),
-
     // RFC 010 PR-3: every MemoryMutation variant registered here at
     // wire 1.0. Future variants in 1.1+ register with their introduction
     // version. Writers consult `gate.can_use_feature(mutation.feature_flag())`

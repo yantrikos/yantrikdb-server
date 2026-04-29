@@ -39,10 +39,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use openraft::error::{
-    Fatal, InstallSnapshotError, NetworkError, RPCError, RaftError, RemoteError,
-    ReplicationClosed, StreamingError, Unreachable,
+    Fatal, InstallSnapshotError, NetworkError, RPCError, RaftError, RemoteError, ReplicationClosed,
+    StreamingError, Unreachable,
 };
-use openraft::network::{Backoff, RaftNetwork, RaftNetworkFactory, RPCOption};
+use openraft::network::{Backoff, RPCOption, RaftNetwork, RaftNetworkFactory};
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse,
     SnapshotResponse, VoteRequest, VoteResponse,
@@ -298,8 +298,10 @@ async fn handle_append_entries(
 ) -> Response {
     match raft.append_entries(rpc).await {
         Ok(resp) => Json::<Result<_, RaftError<YantrikNodeId>>>(Ok(resp)).into_response(),
-        Err(e) => Json::<Result<AppendEntriesResponse<YantrikNodeId>, RaftError<YantrikNodeId>>>(Err(e))
-            .into_response(),
+        Err(e) => {
+            Json::<Result<AppendEntriesResponse<YantrikNodeId>, RaftError<YantrikNodeId>>>(Err(e))
+                .into_response()
+        }
     }
 }
 

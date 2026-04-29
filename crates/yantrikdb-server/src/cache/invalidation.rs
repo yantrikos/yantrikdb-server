@@ -49,17 +49,11 @@ pub const DEFAULT_BUS_CAPACITY: usize = 4096;
 pub enum InvalidationEvent {
     /// A memory was tombstoned (RFC 011 forget). Caches with values
     /// covering this rid MUST invalidate them.
-    Tombstoned {
-        tenant_id: TenantId,
-        rid: String,
-    },
+    Tombstoned { tenant_id: TenantId, rid: String },
 
     /// A memory was updated in place. Caches with values for this rid
     /// MUST invalidate so the next read sees the new content.
-    Updated {
-        tenant_id: TenantId,
-        rid: String,
-    },
+    Updated { tenant_id: TenantId, rid: String },
 
     /// An entity edge changed. Caches whose values depend on entity
     /// adjacency (e.g. expanded recall results) invalidate.
@@ -70,10 +64,7 @@ pub enum InvalidationEvent {
     },
 
     /// Tenant config patched. Caches keyed on per-tenant config invalidate.
-    TenantConfigChanged {
-        tenant_id: TenantId,
-        key: String,
-    },
+    TenantConfigChanged { tenant_id: TenantId, key: String },
 }
 
 impl InvalidationEvent {

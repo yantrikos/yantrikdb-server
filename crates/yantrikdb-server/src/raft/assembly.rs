@@ -165,9 +165,7 @@ fn validate_cluster_tls_for_openraft(
         });
     }
     if cfg.ca_path.is_none() {
-        return Err(AssemblyError::MtlsRequired {
-            missing: "ca_path",
-        });
+        return Err(AssemblyError::MtlsRequired { missing: "ca_path" });
     }
     Ok(cfg)
 }
@@ -201,9 +199,8 @@ fn build_reqwest_client_for_cluster(
     bundle.push(b'\n');
     bundle.extend_from_slice(&key_pem);
 
-    let identity = reqwest::Identity::from_pem(&bundle).map_err(|e| {
-        AssemblyError::ReqwestBuild(format!("Identity::from_pem: {e}"))
-    })?;
+    let identity = reqwest::Identity::from_pem(&bundle)
+        .map_err(|e| AssemblyError::ReqwestBuild(format!("Identity::from_pem: {e}")))?;
     let ca_cert = reqwest::Certificate::from_pem(&ca_pem)
         .map_err(|e| AssemblyError::ReqwestBuild(format!("Certificate::from_pem: {e}")))?;
 
@@ -244,9 +241,11 @@ pub async fn build_raft_cluster(
     let client = build_reqwest_client_for_cluster(cluster_tls, cfg.request_timeout)?;
     let network_factory = HttpRaftNetworkFactory::new(client, cfg.request_timeout);
 
-    let validated_config = Arc::new(cfg.openraft_config.validate().map_err(|e| {
-        AssemblyError::RaftNew(format!("openraft Config::validate: {e}"))
-    })?);
+    let validated_config = Arc::new(
+        cfg.openraft_config
+            .validate()
+            .map_err(|e| AssemblyError::RaftNew(format!("openraft Config::validate: {e}")))?,
+    );
 
     let state_machine = YantrikStateMachine::new(local.clone());
     let raft = Raft::<YantrikRaftTypeConfig>::new(
@@ -274,7 +273,16 @@ pub async fn build_raft_cluster(
 /// cluster init`). For joining an existing cluster, callers use
 /// `Raft::add_learner` + `Raft::change_membership` against the existing
 /// leader instead.
-pub async fn initialize_single_node(assembly: &RaftAssembly, node_addr: String) -> Result<(), openraft::error::RaftError<YantrikNodeId, openraft::error::InitializeError<YantrikNodeId, YantrikNode>>> {
+pub async fn initialize_single_node(
+    assembly: &RaftAssembly,
+    node_addr: String,
+) -> Result<
+    (),
+    openraft::error::RaftError<
+        YantrikNodeId,
+        openraft::error::InitializeError<YantrikNodeId, YantrikNode>,
+    >,
+> {
     let me = {
         let metrics = assembly.raft.metrics().borrow().clone();
         metrics.id
@@ -292,11 +300,7 @@ mod tests {
         ClusterTlsConfig::default()
     }
 
-    fn tls_with(
-        cert: Option<&str>,
-        key: Option<&str>,
-        ca: Option<&str>,
-    ) -> ClusterTlsConfig {
+    fn tls_with(cert: Option<&str>, key: Option<&str>, ca: Option<&str>) -> ClusterTlsConfig {
         ClusterTlsConfig {
             cert_path: cert.map(std::path::PathBuf::from),
             key_path: key.map(std::path::PathBuf::from),

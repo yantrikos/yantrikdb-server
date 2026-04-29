@@ -140,13 +140,7 @@ impl BM25Index for InMemoryBM25Index {
                 .insert(rid.to_string(), *count);
         }
         g.total_tokens = g.total_tokens.saturating_add(length as u64);
-        g.docs.insert(
-            rid.to_string(),
-            DocStats {
-                tf,
-                length,
-            },
-        );
+        g.docs.insert(rid.to_string(), DocStats { tf, length });
     }
 
     fn delete(&self, rid: &str) -> bool {
@@ -272,10 +266,7 @@ mod tests {
         idx.index("twice", "rust rust");
         idx.index("ten", "rust rust rust rust rust rust rust rust rust rust");
         let hits = idx.search("rust", 10);
-        let by_rid: HashMap<&str, f32> = hits
-            .iter()
-            .map(|h| (h.rid.as_str(), h.score))
-            .collect();
+        let by_rid: HashMap<&str, f32> = hits.iter().map(|h| (h.rid.as_str(), h.score)).collect();
         // More TF → higher score, monotonically.
         assert!(by_rid["once"] < by_rid["twice"]);
         assert!(by_rid["twice"] < by_rid["ten"]);
@@ -299,10 +290,7 @@ mod tests {
         idx.index("short", "rust");
         idx.index("long", "rust the the the the the the the the the");
         let hits = idx.search("rust", 10);
-        let by_rid: HashMap<&str, f32> = hits
-            .iter()
-            .map(|h| (h.rid.as_str(), h.score))
-            .collect();
+        let by_rid: HashMap<&str, f32> = hits.iter().map(|h| (h.rid.as_str(), h.score)).collect();
         assert!(by_rid["short"] > by_rid["long"]);
     }
 

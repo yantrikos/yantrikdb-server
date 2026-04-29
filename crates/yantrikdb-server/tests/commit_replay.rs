@@ -49,9 +49,7 @@ mod migrations;
 #[path = "../src/version/mod.rs"]
 mod version;
 
-use commit::{
-    CommitOptions, LocalSqliteCommitter, MemoryMutation, MutationCommitter, TenantId,
-};
+use commit::{CommitOptions, LocalSqliteCommitter, MemoryMutation, MutationCommitter, TenantId};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -221,8 +219,7 @@ async fn dyn_dispatch_with_persistent_backing_works() {
     // SQLite-backed impl. Pin it as part of PR-2's acceptance gate.
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("commit.db");
-    let c: Arc<dyn MutationCommitter> =
-        Arc::new(LocalSqliteCommitter::open(&path).expect("open"));
+    let c: Arc<dyn MutationCommitter> = Arc::new(LocalSqliteCommitter::open(&path).expect("open"));
     let r = c
         .commit(TenantId::new(1), upsert("dyn"), CommitOptions::new())
         .await
@@ -252,5 +249,8 @@ async fn migration_runs_idempotently_on_reopen() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(count, 1, "m001 should appear exactly once after multiple opens");
+    assert_eq!(
+        count, 1,
+        "m001 should appear exactly once after multiple opens"
+    );
 }

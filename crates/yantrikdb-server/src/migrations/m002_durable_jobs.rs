@@ -128,6 +128,9 @@ mod tests {
              ) VALUES ('j', 'not_an_integer', 'k', X'00', 'Pending', 5, 0)",
             [],
         );
-        assert!(result.is_err(), "STRICT mode should reject string in INTEGER column");
+        assert!(
+            result.is_err(),
+            "STRICT mode should reject string in INTEGER column"
+        );
     }
 }

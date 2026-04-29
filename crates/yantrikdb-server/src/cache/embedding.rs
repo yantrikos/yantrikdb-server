@@ -67,7 +67,9 @@ pub struct EmbeddingCacheConfig {
 
 impl Default for EmbeddingCacheConfig {
     fn default() -> Self {
-        Self { max_entries: 10_000 }
+        Self {
+            max_entries: 10_000,
+        }
     }
 }
 
@@ -87,7 +89,8 @@ impl EmbeddingCache {
     /// Convenience: derive the key + look up in one call. Returns
     /// `Some(vector_clone)` on hit.
     pub fn get_for_text(&self, text: &str, model_version: &str) -> Option<Vec<f32>> {
-        self.inner.get(&EmbeddingCacheKey::for_text(text, model_version))
+        self.inner
+            .get(&EmbeddingCacheKey::for_text(text, model_version))
     }
 
     /// Convenience: derive the key + insert in one call.
@@ -129,7 +132,9 @@ mod tests {
     use super::*;
 
     fn vec384(seed: u32) -> Vec<f32> {
-        (0..384).map(|i| (seed.wrapping_add(i)) as f32 / 1000.0).collect()
+        (0..384)
+            .map(|i| (seed.wrapping_add(i)) as f32 / 1000.0)
+            .collect()
     }
 
     #[test]

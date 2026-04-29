@@ -173,10 +173,11 @@ pub enum ManifestValidationError {
         snap_forget_floor: u64,
     },
 
-    #[error(
-        "destination wire version ({dest:?}) is incompatible with snapshot ({snap:?})"
-    )]
-    WireVersionMismatch { dest: WireVersion, snap: WireVersion },
+    #[error("destination wire version ({dest:?}) is incompatible with snapshot ({snap:?})")]
+    WireVersionMismatch {
+        dest: WireVersion,
+        snap: WireVersion,
+    },
 
     #[error(
         "destination configured embedding model `{dest_model}` does not match \

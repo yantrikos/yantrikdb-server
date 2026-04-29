@@ -234,21 +234,19 @@ fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>, ClusterTlsErr
     if let Some(Ok(key)) = rustls_pemfile::pkcs8_private_keys(&mut reader).next() {
         return Ok(PrivateKeyDer::Pkcs8(key));
     }
-    let mut reader = std::io::Cursor::new(std::fs::read(path).map_err(|e| {
-        ClusterTlsError::CertFile {
+    let mut reader =
+        std::io::Cursor::new(std::fs::read(path).map_err(|e| ClusterTlsError::CertFile {
             path: path.to_path_buf(),
             source: e,
-        }
-    })?);
+        })?);
     if let Some(Ok(key)) = rustls_pemfile::rsa_private_keys(&mut reader).next() {
         return Ok(PrivateKeyDer::Pkcs1(key));
     }
-    let mut reader = std::io::Cursor::new(std::fs::read(path).map_err(|e| {
-        ClusterTlsError::CertFile {
+    let mut reader =
+        std::io::Cursor::new(std::fs::read(path).map_err(|e| ClusterTlsError::CertFile {
             path: path.to_path_buf(),
             source: e,
-        }
-    })?);
+        })?);
     if let Some(Ok(key)) = rustls_pemfile::ec_private_keys(&mut reader).next() {
         return Ok(PrivateKeyDer::Sec1(key));
     }
@@ -310,9 +308,7 @@ impl CertificateRotator {
     pub fn check_and_reload(&self) -> Result<bool, ClusterTlsError> {
         let current = Self::current_mtimes(&self.cfg);
         let last = self.last_mtimes.read().clone();
-        let changed = current.cert != last.cert
-            || current.key != last.key
-            || current.ca != last.ca;
+        let changed = current.cert != last.cert || current.key != last.key || current.ca != last.ca;
         if !changed {
             return Ok(false);
         }

@@ -256,9 +256,7 @@ impl MetricsStore {
                 .load(std::sync::atomic::Ordering::Relaxed)
         ));
 
-        out.push_str(
-            "# HELP yantrikdb_expansion_concurrent Current concurrent expanded recalls\n",
-        );
+        out.push_str("# HELP yantrikdb_expansion_concurrent Current concurrent expanded recalls\n");
         out.push_str("# TYPE yantrikdb_expansion_concurrent gauge\n");
         out.push_str(&format!(
             "yantrikdb_expansion_concurrent {}\n",
@@ -319,13 +317,13 @@ impl MetricsStore {
         // RFC 010 PR-4 — openraft cluster gauges. Always rendered (even
         // at default values) so dashboards using these metrics don't
         // disappear when the cluster is freshly bootstrapped.
-        let load_u64 = |a: &std::sync::atomic::AtomicU64| {
-            a.load(std::sync::atomic::Ordering::Relaxed)
-        };
-        let load_i64 = |a: &std::sync::atomic::AtomicI64| {
-            a.load(std::sync::atomic::Ordering::Relaxed)
-        };
-        out.push_str("# HELP yantrikdb_openraft_current_term Current Raft term observed by this node\n");
+        let load_u64 =
+            |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
+        let load_i64 =
+            |a: &std::sync::atomic::AtomicI64| a.load(std::sync::atomic::Ordering::Relaxed);
+        out.push_str(
+            "# HELP yantrikdb_openraft_current_term Current Raft term observed by this node\n",
+        );
         out.push_str("# TYPE yantrikdb_openraft_current_term gauge\n");
         out.push_str(&format!(
             "yantrikdb_openraft_current_term {}\n",
@@ -390,9 +388,7 @@ impl MetricsStore {
         {
             let map = self.recall_request_counts.lock();
             if !map.is_empty() {
-                out.push_str(
-                    "# HELP yantrikdb_recall_requests_total Recall requests received\n",
-                );
+                out.push_str("# HELP yantrikdb_recall_requests_total Recall requests received\n");
                 out.push_str("# TYPE yantrikdb_recall_requests_total counter\n");
                 for ((version, expand), count) in map.iter() {
                     out.push_str(&format!(
@@ -510,7 +506,8 @@ pub fn record_openraft_gauges(
     use std::sync::atomic::Ordering::Relaxed;
     let g = global();
     g.openraft_current_term.store(current_term, Relaxed);
-    g.openraft_is_leader.store(if is_leader { 1 } else { 0 }, Relaxed);
+    g.openraft_is_leader
+        .store(if is_leader { 1 } else { 0 }, Relaxed);
     g.openraft_last_log_index
         .store(last_log_index.map(|n| n as i64).unwrap_or(-1), Relaxed);
     g.openraft_last_applied_index

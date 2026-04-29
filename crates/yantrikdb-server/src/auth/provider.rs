@@ -99,11 +99,7 @@ impl InMemoryAuthProvider {
     /// Insert a token with an explicit expiry. Useful for tests of
     /// expiry semantics; production admin API calls this through a
     /// time picker.
-    pub fn issue_token_with_expiry(
-        &self,
-        principal: Principal,
-        expires_at: SystemTime,
-    ) -> String {
+    pub fn issue_token_with_expiry(&self, principal: Principal, expires_at: SystemTime) -> String {
         let raw = super::generate_token();
         let hash = hash_token(&raw);
         let rec = TokenRecord {

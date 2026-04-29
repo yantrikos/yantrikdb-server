@@ -208,8 +208,7 @@ mod tests {
         }
     }
 
-    fn open_committer_and_store(
-    ) -> (Arc<LocalSqliteCommitter>, Arc<SqliteHnswManifestStore>) {
+    fn open_committer_and_store() -> (Arc<LocalSqliteCommitter>, Arc<SqliteHnswManifestStore>) {
         // Use the same in-memory connection for both committer and store
         // so they share state (the migrations must already exist on the
         // store-side connection).
@@ -223,12 +222,7 @@ mod tests {
     }
 
     fn fresh_manifest(tenant: i64, model: &str, watermark: u64) -> HnswManifest {
-        let mut m = HnswManifest::new(
-            TenantId::new(tenant),
-            model,
-            384,
-            DistanceMetric::Cosine,
-        );
+        let mut m = HnswManifest::new(TenantId::new(tenant), model, 384, DistanceMetric::Cosine);
         m.source_log_watermark = watermark;
         m
     }
@@ -268,7 +262,10 @@ mod tests {
     async fn empty_tenant_with_no_log_or_manifest_returns_empty_report() {
         let (committer, store) = open_committer_and_store();
         let reconciler = Reconciler::new(store, committer);
-        let reports = reconciler.reconcile_tenant(TenantId::new(99)).await.unwrap();
+        let reports = reconciler
+            .reconcile_tenant(TenantId::new(99))
+            .await
+            .unwrap();
         assert!(reports.is_empty());
     }
 
@@ -290,7 +287,9 @@ mod tests {
         assert_eq!(reports.len(), 1);
         assert!(matches!(
             reports[0].status,
-            ReconciliationStatus::MissingManifest { commit_log_high_water: 2 }
+            ReconciliationStatus::MissingManifest {
+                commit_log_high_water: 2
+            }
         ));
         assert_eq!(reports[0].embedding_model, None);
         assert_eq!(reports[0].manifest_watermark, 0);

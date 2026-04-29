@@ -82,11 +82,7 @@ impl LocalKeyProvider {
 
 #[async_trait::async_trait]
 impl KeyProvider for LocalKeyProvider {
-    async fn get_key(
-        &self,
-        tenant_id: &str,
-        purpose: KeyPurpose,
-    ) -> Result<KeyMaterial, KeyError> {
+    async fn get_key(&self, tenant_id: &str, purpose: KeyPurpose) -> Result<KeyMaterial, KeyError> {
         let guard = self.state.read();
         let key = (tenant_id.to_string(), purpose);
         let Some(versions) = guard.keys.get(&key) else {
@@ -133,14 +129,15 @@ impl KeyProvider for LocalKeyProvider {
             });
         };
         let idx = (version - 1) as usize;
-        let bytes = versions
-            .get(idx)
-            .and_then(|v| v.as_ref())
-            .ok_or_else(|| KeyError::UnknownVersion {
-                tenant_id: tenant_id.into(),
-                purpose: purpose.as_str(),
-                version,
-            })?;
+        let bytes =
+            versions
+                .get(idx)
+                .and_then(|v| v.as_ref())
+                .ok_or_else(|| KeyError::UnknownVersion {
+                    tenant_id: tenant_id.into(),
+                    purpose: purpose.as_str(),
+                    version,
+                })?;
         let handle = KeyHandle {
             tenant_id: tenant_id.into(),
             purpose,
@@ -167,11 +164,7 @@ impl KeyProvider for LocalKeyProvider {
         })
     }
 
-    async fn destroy(
-        &self,
-        tenant_id: &str,
-        purpose: KeyPurpose,
-    ) -> Result<bool, KeyError> {
+    async fn destroy(&self, tenant_id: &str, purpose: KeyPurpose) -> Result<bool, KeyError> {
         let mut guard = self.state.write();
         let key = (tenant_id.to_string(), purpose);
         let Some(versions) = guard.keys.get_mut(&key) else {
@@ -319,9 +312,18 @@ mod tests {
     async fn destroy_invalidates_all_versions_not_just_current() {
         let p = LocalKeyProvider::new();
         // Rotate twice → v1 + v2.
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
-        let _ = p.destroy("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        let _ = p
+            .destroy("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         // v1 must also be unrecoverable — that's the whole point of
         // crypto-shred. If destroy left v1 readable, an attacker who
         // could decrypt old ciphertext would still recover the data.
@@ -340,9 +342,18 @@ mod tests {
     #[tokio::test]
     async fn destroy_idempotent_returns_false_on_second_call() {
         let p = LocalKeyProvider::new();
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
-        let first = p.destroy("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
-        let second = p.destroy("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        let first = p
+            .destroy("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        let second = p
+            .destroy("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         assert!(first);
         assert!(!second); // already destroyed → no-op
     }
@@ -360,21 +371,39 @@ mod tests {
     #[tokio::test]
     async fn different_purposes_have_distinct_keys() {
         let p = LocalKeyProvider::new();
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
-        let _ = p.rotate_key("t1", KeyPurpose::BackupBlobEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::BackupBlobEncryption)
+            .await
+            .unwrap();
 
-        let m_data = p.get_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
-        let m_backup = p.get_key("t1", KeyPurpose::BackupBlobEncryption).await.unwrap();
+        let m_data = p
+            .get_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        let m_backup = p
+            .get_key("t1", KeyPurpose::BackupBlobEncryption)
+            .await
+            .unwrap();
         assert_ne!(m_data.as_bytes(), m_backup.as_bytes());
     }
 
     #[tokio::test]
     async fn destroying_one_purpose_preserves_others() {
         let p = LocalKeyProvider::new();
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         let _ = p.rotate_key("t1", KeyPurpose::ClusterTls).await.unwrap();
 
-        let _ = p.destroy("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .destroy("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         // ClusterTls survives — load-bearing for the multi-purpose model.
         // If destroy(TenantDataEncryption) accidentally took out the TLS
         // key, a tenant delete would knock the cluster offline.
@@ -388,10 +417,19 @@ mod tests {
     #[tokio::test]
     async fn per_tenant_isolation() {
         let p = LocalKeyProvider::new();
-        let _ = p.rotate_key("alice", KeyPurpose::TenantDataEncryption).await.unwrap();
-        let _ = p.rotate_key("bob", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("alice", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        let _ = p
+            .rotate_key("bob", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
 
-        let _ = p.destroy("alice", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .destroy("alice", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         // Bob's key untouched.
         assert!(p
             .get_key("bob", KeyPurpose::TenantDataEncryption)
@@ -412,7 +450,10 @@ mod tests {
     #[tokio::test]
     async fn get_key_version_zero_rejected() {
         let p = LocalKeyProvider::new();
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         let err = p
             .get_key_version("t1", KeyPurpose::TenantDataEncryption, 0)
             .await
@@ -423,7 +464,10 @@ mod tests {
     #[tokio::test]
     async fn get_key_version_unknown_returns_unknown_version() {
         let p = LocalKeyProvider::new();
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         let err = p
             .get_key_version("t1", KeyPurpose::TenantDataEncryption, 99)
             .await
@@ -436,19 +480,34 @@ mod tests {
         // Trait must remain object-safe so RFC 011 PR-4 can hold
         // Arc<dyn KeyProvider>.
         let p: Arc<dyn KeyProvider> = Arc::new(LocalKeyProvider::new());
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
-        assert!(p.get_key("t1", KeyPurpose::TenantDataEncryption).await.is_ok());
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
+        assert!(p
+            .get_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
     async fn entry_count_reflects_unique_pairs() {
         let p = LocalKeyProvider::new();
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         let _ = p.rotate_key("t1", KeyPurpose::ClusterTls).await.unwrap();
-        let _ = p.rotate_key("t2", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t2", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         assert_eq!(p.entry_count(), 3);
         // Rotate again — same pair → same entry, counter unchanged.
-        let _ = p.rotate_key("t1", KeyPurpose::TenantDataEncryption).await.unwrap();
+        let _ = p
+            .rotate_key("t1", KeyPurpose::TenantDataEncryption)
+            .await
+            .unwrap();
         assert_eq!(p.entry_count(), 3);
     }
 }

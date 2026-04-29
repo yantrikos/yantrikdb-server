@@ -37,12 +37,12 @@ mod cache;
 mod commit;
 #[path = "../src/forget/mod.rs"]
 mod forget;
-#[path = "../src/key_provider/mod.rs"]
-mod key_provider;
 #[path = "../src/index/mod.rs"]
 mod index;
 #[path = "../src/jobs/mod.rs"]
 mod jobs;
+#[path = "../src/key_provider/mod.rs"]
+mod key_provider;
 #[path = "../src/metrics.rs"]
 mod metrics;
 #[path = "../src/migrations/mod.rs"]
@@ -54,12 +54,10 @@ mod security;
 #[path = "../src/version/mod.rs"]
 mod version;
 
-use commit::{
-    CommitOptions, LocalSqliteCommitter, MemoryMutation, MutationCommitter, TenantId,
-};
+use commit::{CommitOptions, LocalSqliteCommitter, MemoryMutation, MutationCommitter, TenantId};
 use raft::{
-    HttpRaftNetworkFactory, RaftCommitter, SqliteRaftLogStorage, YantrikNode, YantrikNodeId,
-    YantrikRaftTypeConfig, YantrikStateMachine, raft_receive_router,
+    raft_receive_router, HttpRaftNetworkFactory, RaftCommitter, SqliteRaftLogStorage, YantrikNode,
+    YantrikNodeId, YantrikRaftTypeConfig, YantrikStateMachine,
 };
 
 /// One Raft node + its bound axum server. Holds Arcs to all the
@@ -158,10 +156,7 @@ async fn spawn_node(id: u64) -> ClusterNode {
     }
 }
 
-async fn wait_for_leader(
-    node: &ClusterNode,
-    deadline: Instant,
-) -> Option<YantrikNodeId> {
+async fn wait_for_leader(node: &ClusterNode, deadline: Instant) -> Option<YantrikNodeId> {
     while Instant::now() < deadline {
         if let Some(l) = node.raft.current_leader().await {
             return Some(l);
@@ -441,8 +436,7 @@ async fn partition_then_heal_recovers_isolated_follower() {
     // Leader + non-partitioned follower must catch up; partitioned
     // follower must NOT.
     let deadline = Instant::now() + Duration::from_secs(5);
-    let leader_high =
-        wait_for_high_water(&leader_node.local, TenantId::new(1), 5, deadline).await;
+    let leader_high = wait_for_high_water(&leader_node.local, TenantId::new(1), 5, deadline).await;
     let other_high =
         wait_for_high_water(&unpartitioned_follower.local, TenantId::new(1), 5, deadline).await;
     assert_eq!(leader_high, 5);

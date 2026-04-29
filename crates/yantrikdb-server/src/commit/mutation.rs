@@ -136,10 +136,7 @@ pub enum MemoryMutation {
     /// past the safe-purge watermark. Not implemented in PR-1; rejected
     /// at apply time with `CommitError::NotYetImplemented` until RFC
     /// 011 PR-3 ships the delete-queue worker.
-    PurgeMemory {
-        rid: String,
-        purge_epoch: u64,
-    },
+    PurgeMemory { rid: String, purge_epoch: u64 },
 
     /// Add or update an entity edge. Used by `/v1/relate`.
     UpsertEntityEdge {
@@ -152,9 +149,7 @@ pub enum MemoryMutation {
     },
 
     /// Remove an entity edge.
-    DeleteEntityEdge {
-        edge_id: String,
-    },
+    DeleteEntityEdge { edge_id: String },
 
     /// Patch tenant-level config (e.g. RFC 021 per-tenant overrides).
     /// Variant exists from day one so RFC 021 doesn't need a wire bump.

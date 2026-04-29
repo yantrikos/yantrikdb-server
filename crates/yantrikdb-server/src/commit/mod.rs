@@ -62,8 +62,8 @@ pub use local::LocalSqliteCommitter;
 pub use mutation::{MemoryMutation, OpId, TenantId};
 pub use retention::{
     BackupWatermarkContributor, FollowerLagContributor, HnswWatermarkContributor,
-    RetentionContributor, RetentionError, RetentionPolicy, RetentionRegistry,
-    SafePurgeWatermark, TombstoneRetentionContributor,
+    RetentionContributor, RetentionError, RetentionPolicy, RetentionRegistry, SafePurgeWatermark,
+    TombstoneRetentionContributor,
 };
 pub use trait_def::{
     CommitError, CommitObserver, CommitOptions, CommitReceipt, CommittedEntry, MutationCommitter,

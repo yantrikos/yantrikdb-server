@@ -48,10 +48,7 @@ impl InspectionReport {
             self.ca_root_count,
             if self.ca_root_count == 1 { "" } else { "s" }
         ));
-        out.push_str(&format!(
-            "  fully specified : {}\n",
-            self.fully_specified
-        ));
+        out.push_str(&format!("  fully specified : {}\n", self.fully_specified));
         if self.dev_mode {
             out.push_str("  dev_mode        : ENABLED  ⚠  NEVER set in production\n");
         } else {

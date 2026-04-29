@@ -48,13 +48,13 @@ pub use circuit_breaker::{
     HealthObservation, OpenReason,
 };
 pub use cost::{cost_units, CostInputs, CostParams, DEFAULT_E_EXPAND};
-pub use policy::{
-    PolicyResolver, ProvisionalDefaults, QuotaPolicy, QuotaScope, ScopeKind, FALLBACK_DEFAULTS,
-    PROVISIONAL_DEFAULTS,
-};
 pub use deadlines::{
     run_with_deadline, run_with_deadline_or_cancel, Cancelled, DeadlineBudget, DeadlineConfig,
     DeadlineError, RecallStage,
+};
+pub use policy::{
+    PolicyResolver, ProvisionalDefaults, QuotaPolicy, QuotaScope, ScopeKind, FALLBACK_DEFAULTS,
+    PROVISIONAL_DEFAULTS,
 };
 pub use registry::{BucketDimension, BucketKey, BucketRegistry, ConsumeOutcome};
 pub use retry_budget::{
@@ -180,8 +180,8 @@ impl AdmissionState {
         );
         if expand_entities {
             metrics::set_expansion_concurrent_gauge(
-                (self.cfg.max_concurrent_expanded_recall
-                    - self.expanded_recall.available_permits()) as i64,
+                (self.cfg.max_concurrent_expanded_recall - self.expanded_recall.available_permits())
+                    as i64,
             );
         }
 
@@ -293,7 +293,10 @@ mod tests {
             "expanded_saturated"
         );
         assert_eq!(RejectReason::BodyTooLarge.metric_label(), "body_too_large");
-        assert_eq!(RejectReason::ServerShutdown.metric_label(), "server_shutdown");
+        assert_eq!(
+            RejectReason::ServerShutdown.metric_label(),
+            "server_shutdown"
+        );
     }
 
     #[tokio::test]

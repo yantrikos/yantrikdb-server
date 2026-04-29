@@ -204,11 +204,8 @@ fn apply_priority(priority: ControlPriority) -> std::io::Result<()> {
             // sched_param struct is initialized fully.
             unsafe {
                 let param = libc::sched_param { sched_priority: 1 };
-                let rc = libc::pthread_setschedparam(
-                    libc::pthread_self(),
-                    libc::SCHED_FIFO,
-                    &param,
-                );
+                let rc =
+                    libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param);
                 if rc != 0 {
                     // Most common: EPERM (no CAP_SYS_NICE). Fall back to nice.
                     return apply_priority(ControlPriority::Nice);

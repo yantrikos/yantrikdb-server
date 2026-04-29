@@ -6,7 +6,7 @@ pub mod tenant_overrides;
 pub mod versioned;
 pub mod watch;
 
-pub use live_reload::{Reloadable, ReloadError, ReloadOutcome};
+pub use live_reload::{ReloadError, ReloadOutcome, Reloadable};
 pub use tenant_overrides::{
     InMemoryTenantConfigStore, OverrideValue, TenantConfigError, TenantConfigOverride,
     TenantConfigStore,

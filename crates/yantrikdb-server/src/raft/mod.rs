@@ -51,8 +51,7 @@ pub use log_storage::SqliteRaftLogStorage;
 pub use network::{StubRaftNetwork, StubRaftNetworkFactory};
 pub use state_machine::{StateMachineState, YantrikSnapshotBuilder, YantrikStateMachine};
 pub use status::{
-    raft_status_router, record_openraft_status, spawn_raft_metrics_recorder, RaftMember,
-    RaftStatus,
+    raft_status_router, record_openraft_status, spawn_raft_metrics_recorder, RaftMember, RaftStatus,
 };
 pub use types::{
     YantrikLogEntry, YantrikNode, YantrikNodeId, YantrikRaftResponse, YantrikRaftTypeConfig,

@@ -165,7 +165,11 @@ impl yantrikdb::types::Embedder for FastEmbedder {
     ) -> std::result::Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
         // Cache check FIRST — cheap (~hash + hashmap lookup) and skips
         // both the Mutex contention and the ONNX forward pass.
-        if let Some(v) = self.inner.cache.get_for_text(text, self.inner.model_version) {
+        if let Some(v) = self
+            .inner
+            .cache
+            .get_for_text(text, self.inner.model_version)
+        {
             self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(v);
         }
@@ -306,7 +310,11 @@ mod tests {
         // the full embedder without ONNX.
         let h: u64 = 0;
         let m: u64 = 0;
-        let rate = if h + m == 0 { 0.0 } else { h as f64 / (h + m) as f64 };
+        let rate = if h + m == 0 {
+            0.0
+        } else {
+            h as f64 / (h + m) as f64
+        };
         assert_eq!(rate, 0.0);
     }
 
@@ -315,7 +323,11 @@ mod tests {
         // 7 hits, 3 misses → 70% hit rate.
         let h: u64 = 7;
         let m: u64 = 3;
-        let rate = if h + m == 0 { 0.0 } else { h as f64 / (h + m) as f64 };
+        let rate = if h + m == 0 {
+            0.0
+        } else {
+            h as f64 / (h + m) as f64
+        };
         assert!((rate - 0.7).abs() < 1e-9);
     }
 }

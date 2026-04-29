@@ -604,11 +604,8 @@ async fn recall(
     // Hard cap — RFC 009 §4 Layer 3. Reject before HNSW search so a
     // misconfigured client requesting top_k=10000 gets a 400 in
     // microseconds instead of saturating a voter for seconds.
-    if let Err(reason) =
-        crate::admission::check_top_k(top_k, state.admission.cfg.hard_top_k_cap)
-    {
-        let status = StatusCode::from_u16(reason.http_status())
-            .unwrap_or(StatusCode::BAD_REQUEST);
+    if let Err(reason) = crate::admission::check_top_k(top_k, state.admission.cfg.hard_top_k_cap) {
+        let status = StatusCode::from_u16(reason.http_status()).unwrap_or(StatusCode::BAD_REQUEST);
         return Err((
             status,
             Json(json!({
@@ -1926,10 +1923,7 @@ async fn admin_migrations_list(
     // lock-conflict with WAL writes.
     let commit_log_path = state.data_dir.join("commit_log.sqlite");
     let jobs_path = state.data_dir.join("jobs.sqlite");
-    for (label, path) in [
-        ("commit_log", &commit_log_path),
-        ("jobs", &jobs_path),
-    ] {
+    for (label, path) in [("commit_log", &commit_log_path), ("jobs", &jobs_path)] {
         let summary = match rusqlite::Connection::open_with_flags(
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,

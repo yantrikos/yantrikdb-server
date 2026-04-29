@@ -169,23 +169,15 @@ pub enum JobError {
     /// Caller tried to lease a job that's already leased by another
     /// worker (or its lease hasn't expired yet).
     #[error("job {id} is already leased; expires at {expires_at:?}")]
-    AlreadyLeased {
-        id: JobId,
-        expires_at: SystemTime,
-    },
+    AlreadyLeased { id: JobId, expires_at: SystemTime },
 
     /// Heartbeat / complete called with a stale lease (the lease has
     /// expired or another worker has stolen the job).
     #[error("lease {lease_id} is no longer valid for job {job_id}")]
-    InvalidLease {
-        job_id: JobId,
-        lease_id: LeaseId,
-    },
+    InvalidLease { job_id: JobId, lease_id: LeaseId },
 
     /// Caller tried to transition a job from a terminal state.
-    #[error(
-        "job {id} is in terminal state {state:?}; cannot transition to {attempted:?}"
-    )]
+    #[error("job {id} is in terminal state {state:?}; cannot transition to {attempted:?}")]
     TerminalState {
         id: JobId,
         state: JobState,
@@ -327,11 +319,7 @@ mod tests {
             "already_leased"
         );
         assert_eq!(
-            JobError::InvalidLease {
-                job_id,
-                lease_id,
-            }
-            .metric_label(),
+            JobError::InvalidLease { job_id, lease_id }.metric_label(),
             "invalid_lease"
         );
         assert_eq!(

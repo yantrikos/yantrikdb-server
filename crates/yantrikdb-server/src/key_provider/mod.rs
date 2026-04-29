@@ -195,11 +195,7 @@ pub trait KeyProvider: Send + Sync {
     /// Fetch the *current* key for `(tenant_id, purpose)`. Returns
     /// [`KeyError::NotFound`] if nothing has ever been issued for the
     /// pair, or if the key was destroyed.
-    async fn get_key(
-        &self,
-        tenant_id: &str,
-        purpose: KeyPurpose,
-    ) -> Result<KeyMaterial, KeyError>;
+    async fn get_key(&self, tenant_id: &str, purpose: KeyPurpose) -> Result<KeyMaterial, KeyError>;
 
     /// Fetch a specific historical version. Used to decrypt old
     /// ciphertext after the active key was rotated. Returns
@@ -217,11 +213,8 @@ pub trait KeyProvider: Send + Sync {
     /// the operator has confirmed re-encryption is complete.
     ///
     /// Returns the new version's handle.
-    async fn rotate_key(
-        &self,
-        tenant_id: &str,
-        purpose: KeyPurpose,
-    ) -> Result<KeyHandle, KeyError>;
+    async fn rotate_key(&self, tenant_id: &str, purpose: KeyPurpose)
+        -> Result<KeyHandle, KeyError>;
 
     /// Destroy ALL versions of the key for `(tenant_id, purpose)`. RFC
     /// 011 crypto-shred is the load-bearing caller. After this returns
@@ -230,11 +223,7 @@ pub trait KeyProvider: Send + Sync {
     ///
     /// Returns `false` if no key existed (no-op), `true` if at least
     /// one version was destroyed.
-    async fn destroy(
-        &self,
-        tenant_id: &str,
-        purpose: KeyPurpose,
-    ) -> Result<bool, KeyError>;
+    async fn destroy(&self, tenant_id: &str, purpose: KeyPurpose) -> Result<bool, KeyError>;
 }
 
 #[cfg(test)]
@@ -243,8 +232,14 @@ mod tests {
 
     #[test]
     fn key_purpose_strings_pinned() {
-        assert_eq!(KeyPurpose::TenantDataEncryption.as_str(), "tenant_data_encryption");
-        assert_eq!(KeyPurpose::BackupBlobEncryption.as_str(), "backup_blob_encryption");
+        assert_eq!(
+            KeyPurpose::TenantDataEncryption.as_str(),
+            "tenant_data_encryption"
+        );
+        assert_eq!(
+            KeyPurpose::BackupBlobEncryption.as_str(),
+            "backup_blob_encryption"
+        );
         assert_eq!(KeyPurpose::ClusterTls.as_str(), "cluster_tls");
         assert_eq!(KeyPurpose::AuditSigning.as_str(), "audit_signing");
     }
@@ -256,7 +251,10 @@ mod tests {
             purpose: KeyPurpose::TenantDataEncryption,
             version: 1,
         };
-        let h2 = KeyHandle { version: 2, ..h1.clone() };
+        let h2 = KeyHandle {
+            version: 2,
+            ..h1.clone()
+        };
         assert_ne!(h1, h2);
     }
 

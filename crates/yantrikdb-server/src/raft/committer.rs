@@ -40,9 +40,7 @@ use async_trait::async_trait;
 use openraft::error::{CheckIsLeaderError, ClientWriteError, ForwardToLeader, RaftError};
 use openraft::Raft;
 
-use super::types::{
-    YantrikLogEntry, YantrikNodeId, YantrikNode, YantrikRaftTypeConfig,
-};
+use super::types::{YantrikLogEntry, YantrikNode, YantrikNodeId, YantrikRaftTypeConfig};
 use crate::commit::{
     CommitError, CommitOptions, CommitReceipt, CommittedEntry, MemoryMutation, MutationCommitter,
     OpId, TenantId,
@@ -59,10 +57,7 @@ pub struct RaftCommitter {
 }
 
 impl RaftCommitter {
-    pub fn new(
-        raft: Arc<Raft<YantrikRaftTypeConfig>>,
-        local: Arc<dyn MutationCommitter>,
-    ) -> Self {
+    pub fn new(raft: Arc<Raft<YantrikRaftTypeConfig>>, local: Arc<dyn MutationCommitter>) -> Self {
         Self { raft, local }
     }
 
@@ -198,8 +193,7 @@ mod tests {
     /// Build a single-node Raft cluster with everything wired up.
     /// Returns the assembled committer + the inner local committer
     /// (so tests can verify the apply path landed entries durably).
-    async fn build_single_node_committer(
-    ) -> (RaftCommitter, Arc<LocalSqliteCommitter>) {
+    async fn build_single_node_committer() -> (RaftCommitter, Arc<LocalSqliteCommitter>) {
         let local = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
         let log_store = SqliteRaftLogStorage::open_in_memory();
         let state_machine = YantrikStateMachine::new(local.clone());
@@ -375,7 +369,10 @@ mod tests {
         }
         let mut tenants = cm.list_active_tenants().await.unwrap();
         tenants.sort();
-        assert_eq!(tenants, vec![TenantId::new(1), TenantId::new(3), TenantId::new(7)]);
+        assert_eq!(
+            tenants,
+            vec![TenantId::new(1), TenantId::new(3), TenantId::new(7)]
+        );
     }
 
     #[tokio::test]
@@ -391,7 +388,10 @@ mod tests {
         let err = RaftError::APIError(ClientWriteError::ForwardToLeader(ftl));
         let mapped = RaftCommitter::map_raft_error(err);
         match mapped {
-            CommitError::NotLeader { leader_id, leader_addr } => {
+            CommitError::NotLeader {
+                leader_id,
+                leader_addr,
+            } => {
                 assert_eq!(leader_id, Some(7));
                 assert_eq!(leader_addr.as_deref(), Some("http://10.0.0.5:7100"));
             }
@@ -408,7 +408,10 @@ mod tests {
         let err = RaftError::APIError(ClientWriteError::ForwardToLeader(ftl));
         let mapped = RaftCommitter::map_raft_error(err);
         match mapped {
-            CommitError::NotLeader { leader_id, leader_addr } => {
+            CommitError::NotLeader {
+                leader_id,
+                leader_addr,
+            } => {
                 assert_eq!(leader_id, None);
                 assert_eq!(leader_addr, None);
             }
@@ -446,11 +449,13 @@ mod tests {
             leader_id: Some(YantrikNodeId::new(3)),
             leader_node: Some(YantrikNode::new("http://10.0.0.3:7100")),
         };
-        let err =
-            RaftError::APIError(CheckIsLeaderError::ForwardToLeader(ftl));
+        let err = RaftError::APIError(CheckIsLeaderError::ForwardToLeader(ftl));
         let mapped = RaftCommitter::map_check_is_leader_error(err);
         match mapped {
-            CommitError::NotLeader { leader_id, leader_addr } => {
+            CommitError::NotLeader {
+                leader_id,
+                leader_addr,
+            } => {
                 assert_eq!(leader_id, Some(3));
                 assert_eq!(leader_addr.as_deref(), Some("http://10.0.0.3:7100"));
             }

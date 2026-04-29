@@ -375,9 +375,7 @@ pub fn print_admission(value: &Value) {
     ]);
 
     let expanded_max = admission["expanded_recall"]["max"].as_u64().unwrap_or(0);
-    let expanded_used = admission["expanded_recall"]["in_use"]
-        .as_u64()
-        .unwrap_or(0);
+    let expanded_used = admission["expanded_recall"]["in_use"].as_u64().unwrap_or(0);
     let expanded_pct = if expanded_max > 0 {
         100 * expanded_used / expanded_max
     } else {
@@ -624,7 +622,10 @@ pub fn print_raft_status(value: &Value) {
         .get("state")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    let term = obj.get("current_term").and_then(|v| v.as_u64()).unwrap_or(0);
+    let term = obj
+        .get("current_term")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let leader = obj.get("current_leader").and_then(|v| v.as_u64());
     let last_log = obj.get("last_log_index").and_then(|v| v.as_u64());
     let last_applied = obj.get("last_applied_index").and_then(|v| v.as_u64());
@@ -633,9 +634,7 @@ pub fn print_raft_status(value: &Value) {
         .get("healthy")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let lag = obj
-        .get("millis_since_quorum_ack")
-        .and_then(|v| v.as_u64());
+    let lag = obj.get("millis_since_quorum_ack").and_then(|v| v.as_u64());
 
     println!("\n{}", "openraft cluster".bold());
     let state_colored = match state {
@@ -648,7 +647,10 @@ pub fn print_raft_status(value: &Value) {
     match leader {
         Some(id) if id == node_id => println!("  leader       : {} (node-{})", "SELF".green(), id),
         Some(id) => println!("  leader       : node-{}", id),
-        None => println!("  leader       : {}", "(none — election in progress)".yellow()),
+        None => println!(
+            "  leader       : {}",
+            "(none — election in progress)".yellow()
+        ),
     }
     println!("  current term : {}", term);
     println!(
@@ -692,17 +694,18 @@ pub fn print_raft_status(value: &Value) {
         ]);
         for m in members {
             let id = m.get("node_id").and_then(|v| v.as_u64()).unwrap_or(0);
-            let is_voter = m
-                .get("is_voter")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let is_voter = m.get("is_voter").and_then(|v| v.as_bool()).unwrap_or(false);
             let addr = m.get("addr").and_then(|v| v.as_str()).unwrap_or("?");
             let role = if is_voter {
                 Cell::new("voter").fg(Color::Green)
             } else {
                 Cell::new("learner").fg(Color::Cyan)
             };
-            table.add_row(vec![Cell::new(format!("node-{}", id)), role, Cell::new(addr)]);
+            table.add_row(vec![
+                Cell::new(format!("node-{}", id)),
+                role,
+                Cell::new(addr),
+            ]);
         }
         println!("{table}");
     }

@@ -28,7 +28,9 @@ use serde::{Deserialize, Serialize};
 
 /// Monotonic, 1-indexed config version. v0 = "no config has been
 /// applied" sentinel; v1 = first applied config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub struct ConfigVersion(pub u64);
 
 impl ConfigVersion {

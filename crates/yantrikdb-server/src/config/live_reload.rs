@@ -163,7 +163,8 @@ mod tests {
     #[test]
     fn second_apply_advances_version() {
         let mut c = Counter::default();
-        c.apply(&ConfigDelta::new(ConfigVersion::SENTINEL, 42)).unwrap();
+        c.apply(&ConfigDelta::new(ConfigVersion::SENTINEL, 42))
+            .unwrap();
         c.apply(&ConfigDelta::new(ConfigVersion(1), 99)).unwrap();
         assert_eq!(c.current_version(), ConfigVersion(2));
         assert_eq!(*c.value.lock(), 99);
@@ -172,14 +173,18 @@ mod tests {
     #[test]
     fn stale_delta_rejected() {
         let mut c = Counter::default();
-        c.apply(&ConfigDelta::new(ConfigVersion::SENTINEL, 42)).unwrap();
+        c.apply(&ConfigDelta::new(ConfigVersion::SENTINEL, 42))
+            .unwrap();
         // Now at v1. A delta claiming to come from a divergent version
         // (v5 → v6) — would advance us, but from doesn't match observed.
         let stale = ConfigDelta::new(ConfigVersion(5), 7);
         let err = c.apply(&stale).unwrap_err();
         assert!(matches!(
             err,
-            ReloadError::StaleDelta { delta_from: ConfigVersion(5), observed: ConfigVersion(1) }
+            ReloadError::StaleDelta {
+                delta_from: ConfigVersion(5),
+                observed: ConfigVersion(1)
+            }
         ));
         // Original value preserved.
         assert_eq!(*c.value.lock(), 42);
@@ -188,7 +193,8 @@ mod tests {
     #[test]
     fn replay_below_current_version_is_ignored() {
         let mut c = Counter::default();
-        c.apply(&ConfigDelta::new(ConfigVersion::SENTINEL, 42)).unwrap();
+        c.apply(&ConfigDelta::new(ConfigVersion::SENTINEL, 42))
+            .unwrap();
         c.apply(&ConfigDelta::new(ConfigVersion(1), 99)).unwrap();
         // Replay an older delta — already past, no-op.
         let stale_replay = ConfigDelta {
@@ -214,7 +220,8 @@ mod tests {
     #[test]
     fn validation_failure_preserves_old_value() {
         let mut c = Counter::default();
-        c.apply(&ConfigDelta::new(ConfigVersion::SENTINEL, 42)).unwrap();
+        c.apply(&ConfigDelta::new(ConfigVersion::SENTINEL, 42))
+            .unwrap();
         // Apply with new_value=0 — validation rejects.
         let bad = ConfigDelta::new(ConfigVersion(1), 0);
         let err = c.apply(&bad).unwrap_err();

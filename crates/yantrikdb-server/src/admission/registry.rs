@@ -186,7 +186,12 @@ mod tests {
     fn first_consume_materializes_bucket() {
         let r = BucketRegistry::new();
         let pol = provisional_principal("alice");
-        let _ = r.consume(QuotaScope::principal("alice"), BucketDimension::Rps, 1, &pol);
+        let _ = r.consume(
+            QuotaScope::principal("alice"),
+            BucketDimension::Rps,
+            1,
+            &pol,
+        );
         assert_eq!(r.len(), 1);
     }
 
@@ -195,7 +200,12 @@ mod tests {
         let r = BucketRegistry::new();
         let pol = provisional_principal("alice");
         // PROVISIONAL_DEFAULTS.rps = 100 → first request always passes.
-        let outcome = r.consume(QuotaScope::principal("alice"), BucketDimension::Rps, 1, &pol);
+        let outcome = r.consume(
+            QuotaScope::principal("alice"),
+            BucketDimension::Rps,
+            1,
+            &pol,
+        );
         assert!(matches!(outcome, ConsumeOutcome::Allowed { .. }));
     }
 
@@ -265,7 +275,12 @@ mod tests {
             cost_budget_per_sec: Some(100),
             ..provisional_principal("alice")
         };
-        let outcome = r.consume(QuotaScope::principal("alice"), BucketDimension::Rps, 1, &pol);
+        let outcome = r.consume(
+            QuotaScope::principal("alice"),
+            BucketDimension::Rps,
+            1,
+            &pol,
+        );
         assert_eq!(outcome, ConsumeOutcome::NotConfigured);
         // No bucket materialized for unconfigured dimension.
         assert_eq!(r.len(), 0);
@@ -276,8 +291,18 @@ mod tests {
         let r = BucketRegistry::new();
         let pol_a = provisional_principal("alice");
         let pol_b = provisional_principal("bob");
-        let _ = r.consume(QuotaScope::principal("alice"), BucketDimension::Rps, 1, &pol_a);
-        let _ = r.consume(QuotaScope::principal("bob"), BucketDimension::Rps, 1, &pol_b);
+        let _ = r.consume(
+            QuotaScope::principal("alice"),
+            BucketDimension::Rps,
+            1,
+            &pol_a,
+        );
+        let _ = r.consume(
+            QuotaScope::principal("bob"),
+            BucketDimension::Rps,
+            1,
+            &pol_b,
+        );
         assert_eq!(r.len(), 2);
     }
 
@@ -290,9 +315,19 @@ mod tests {
         };
         // Drain the warm fraction first.
         for _ in 0..10 {
-            let _ = r.consume(QuotaScope::principal("alice"), BucketDimension::Rps, 1, &pol);
+            let _ = r.consume(
+                QuotaScope::principal("alice"),
+                BucketDimension::Rps,
+                1,
+                &pol,
+            );
         }
-        let outcome = r.consume(QuotaScope::principal("alice"), BucketDimension::Rps, 100, &pol);
+        let outcome = r.consume(
+            QuotaScope::principal("alice"),
+            BucketDimension::Rps,
+            100,
+            &pol,
+        );
         match outcome {
             ConsumeOutcome::Rejected {
                 retry_after,
@@ -312,7 +347,12 @@ mod tests {
     fn clear_drops_all_buckets() {
         let r = BucketRegistry::new();
         let pol = provisional_principal("alice");
-        let _ = r.consume(QuotaScope::principal("alice"), BucketDimension::Rps, 1, &pol);
+        let _ = r.consume(
+            QuotaScope::principal("alice"),
+            BucketDimension::Rps,
+            1,
+            &pol,
+        );
         let _ = r.consume(QuotaScope::namespace("ns1"), BucketDimension::Cost, 1, &pol);
         assert!(r.len() >= 1);
         r.clear();
@@ -327,7 +367,12 @@ mod tests {
         let r = BucketRegistry::new();
         let r2 = r.clone();
         let pol = provisional_principal("alice");
-        let _ = r.consume(QuotaScope::principal("alice"), BucketDimension::Rps, 1, &pol);
+        let _ = r.consume(
+            QuotaScope::principal("alice"),
+            BucketDimension::Rps,
+            1,
+            &pol,
+        );
         // r2 sees the same bucket because Arc<Mutex<_>> is shared.
         assert_eq!(r2.len(), 1);
     }

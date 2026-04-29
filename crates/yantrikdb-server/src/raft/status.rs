@@ -70,14 +70,9 @@ impl RaftStatus {
 
     /// Build from an already-captured RaftMetrics. Used by the metrics
     /// recorder that subscribes to the watch channel.
-    pub fn from_metrics(
-        m: &openraft::RaftMetrics<YantrikNodeId, YantrikNode>,
-    ) -> Self {
-        let voters: std::collections::BTreeSet<YantrikNodeId> = m
-            .membership_config
-            .membership()
-            .voter_ids()
-            .collect();
+    pub fn from_metrics(m: &openraft::RaftMetrics<YantrikNodeId, YantrikNode>) -> Self {
+        let voters: std::collections::BTreeSet<YantrikNodeId> =
+            m.membership_config.membership().voter_ids().collect();
         let mut members: Vec<RaftMember> = m
             .membership_config
             .nodes()

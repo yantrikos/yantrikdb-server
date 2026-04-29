@@ -49,11 +49,7 @@ pub trait HnswCompactor: Send + Sync {
     /// engine MAY defer the physical-erase step (HNSW deletes are
     /// typically tombstone-on-node + lazy compaction), but the rid
     /// MUST stop being returned by recall after this call.
-    async fn delete_rid(
-        &self,
-        tenant_id: TenantId,
-        rid: &str,
-    ) -> Result<(), CompactionError>;
+    async fn delete_rid(&self, tenant_id: TenantId, rid: &str) -> Result<(), CompactionError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -89,11 +85,7 @@ impl HnswCompactor for NoopHnswCompactor {
         "noop_hnsw_compactor"
     }
 
-    async fn delete_rid(
-        &self,
-        _tenant_id: TenantId,
-        _rid: &str,
-    ) -> Result<(), CompactionError> {
+    async fn delete_rid(&self, _tenant_id: TenantId, _rid: &str) -> Result<(), CompactionError> {
         Ok(())
     }
 }
@@ -106,11 +98,19 @@ pub enum ProcessOutcome {
     /// A job was processed successfully.
     Succeeded { tenant_id: TenantId, rid: String },
     /// A job was processed and failed permanently.
-    Failed { tenant_id: TenantId, rid: String, message: String },
+    Failed {
+        tenant_id: TenantId,
+        rid: String,
+        message: String,
+    },
     /// Transient failure — lease is allowed to expire, retried later.
     /// We mark Failed too so the worker doesn't churn; production
     /// should layer a JobQueue retry policy on top (RFC 019 PR-2).
-    TransientFailed { tenant_id: TenantId, rid: String, message: String },
+    TransientFailed {
+        tenant_id: TenantId,
+        rid: String,
+        message: String,
+    },
     /// No job was available.
     NoJob,
     /// Job payload was malformed JSON. Should never happen in
@@ -247,11 +247,7 @@ mod tests {
         fn name(&self) -> &'static str {
             "recording"
         }
-        async fn delete_rid(
-            &self,
-            tenant_id: TenantId,
-            rid: &str,
-        ) -> Result<(), CompactionError> {
+        async fn delete_rid(&self, tenant_id: TenantId, rid: &str) -> Result<(), CompactionError> {
             self.deletes.lock().push((tenant_id, rid.to_string()));
             Ok(())
         }
@@ -267,11 +263,7 @@ mod tests {
         fn name(&self) -> &'static str {
             "failing"
         }
-        async fn delete_rid(
-            &self,
-            tenant_id: TenantId,
-            rid: &str,
-        ) -> Result<(), CompactionError> {
+        async fn delete_rid(&self, tenant_id: TenantId, rid: &str) -> Result<(), CompactionError> {
             if self.permanent {
                 Err(CompactionError::Permanent {
                     tenant_id,
@@ -312,13 +304,7 @@ mod tests {
     async fn process_no_job_returns_no_job() {
         let jobs = open_jobs();
         let compactor = NoopHnswCompactor;
-        let outcome = process_one_delete_job(
-            &*jobs,
-            &compactor,
-            WorkerId::new("test"),
-            30,
-        )
-        .await;
+        let outcome = process_one_delete_job(&*jobs, &compactor, WorkerId::new("test"), 30).await;
         assert_eq!(outcome, ProcessOutcome::NoJob);
     }
 
@@ -327,13 +313,7 @@ mod tests {
         let jobs = open_jobs();
         let id = enqueue_one(&*jobs, payload(1, "rid_a")).await.unwrap();
         let compactor = RecordingCompactor::new();
-        let outcome = process_one_delete_job(
-            &*jobs,
-            &compactor,
-            WorkerId::new("test"),
-            30,
-        )
-        .await;
+        let outcome = process_one_delete_job(&*jobs, &compactor, WorkerId::new("test"), 30).await;
         assert_eq!(
             outcome,
             ProcessOutcome::Succeeded {
@@ -341,7 +321,10 @@ mod tests {
                 rid: "rid_a".into(),
             }
         );
-        assert_eq!(compactor.deletes(), vec![(TenantId::new(1), "rid_a".into())]);
+        assert_eq!(
+            compactor.deletes(),
+            vec![(TenantId::new(1), "rid_a".into())]
+        );
         let job = jobs.get(id).await.unwrap();
         assert_eq!(job.state, JobState::Succeeded);
     }
@@ -351,15 +334,13 @@ mod tests {
         let jobs = open_jobs();
         let id = enqueue_one(&*jobs, payload(1, "rid_a")).await.unwrap();
         let compactor = FailingCompactor { permanent: true };
-        let outcome = process_one_delete_job(
-            &*jobs,
-            &compactor,
-            WorkerId::new("test"),
-            30,
-        )
-        .await;
+        let outcome = process_one_delete_job(&*jobs, &compactor, WorkerId::new("test"), 30).await;
         match outcome {
-            ProcessOutcome::Failed { tenant_id, rid, message } => {
+            ProcessOutcome::Failed {
+                tenant_id,
+                rid,
+                message,
+            } => {
                 assert_eq!(tenant_id, TenantId::new(1));
                 assert_eq!(rid, "rid_a");
                 assert!(message.contains("synthetic permanent"));
@@ -375,13 +356,7 @@ mod tests {
         let jobs = open_jobs();
         let id = enqueue_one(&*jobs, payload(1, "rid_a")).await.unwrap();
         let compactor = FailingCompactor { permanent: false };
-        let outcome = process_one_delete_job(
-            &*jobs,
-            &compactor,
-            WorkerId::new("test"),
-            30,
-        )
-        .await;
+        let outcome = process_one_delete_job(&*jobs, &compactor, WorkerId::new("test"), 30).await;
         assert!(matches!(outcome, ProcessOutcome::TransientFailed { .. }));
         let job = jobs.get(id).await.unwrap();
         assert_eq!(job.state, JobState::Failed);
@@ -402,13 +377,7 @@ mod tests {
         .await
         .unwrap();
         let compactor = NoopHnswCompactor;
-        let outcome = process_one_delete_job(
-            &*jobs,
-            &compactor,
-            WorkerId::new("test"),
-            30,
-        )
-        .await;
+        let outcome = process_one_delete_job(&*jobs, &compactor, WorkerId::new("test"), 30).await;
         assert_eq!(outcome, ProcessOutcome::NoJob);
     }
 
@@ -428,13 +397,7 @@ mod tests {
             .await
             .unwrap();
         let compactor = NoopHnswCompactor;
-        let outcome = process_one_delete_job(
-            &*jobs,
-            &compactor,
-            WorkerId::new("test"),
-            30,
-        )
-        .await;
+        let outcome = process_one_delete_job(&*jobs, &compactor, WorkerId::new("test"), 30).await;
         assert!(matches!(outcome, ProcessOutcome::MalformedPayload { .. }));
         let job = jobs.get(id).await.unwrap();
         assert_eq!(job.state, JobState::Cancelled);
@@ -468,18 +431,15 @@ mod tests {
             )
             .await
             .unwrap();
-        let result = enqueue_range(&*committer, &*jobs, tenant, 1, 100).await.unwrap();
+        let result = enqueue_range(&*committer, &*jobs, tenant, 1, 100)
+            .await
+            .unwrap();
         assert_eq!(result.jobs_enqueued, 1);
 
         // Consumer side: pick up the job + dispatch.
         let compactor = RecordingCompactor::new();
-        let outcome = process_one_delete_job(
-            &*jobs,
-            &compactor,
-            WorkerId::new("e2e-worker"),
-            30,
-        )
-        .await;
+        let outcome =
+            process_one_delete_job(&*jobs, &compactor, WorkerId::new("e2e-worker"), 30).await;
         assert!(matches!(
             outcome,
             ProcessOutcome::Succeeded { ref rid, .. } if rid == "doomed"
@@ -487,13 +447,8 @@ mod tests {
         assert_eq!(compactor.deletes(), vec![(tenant, "doomed".to_string())]);
 
         // Queue is now empty.
-        let next = process_one_delete_job(
-            &*jobs,
-            &compactor,
-            WorkerId::new("e2e-worker"),
-            30,
-        )
-        .await;
+        let next =
+            process_one_delete_job(&*jobs, &compactor, WorkerId::new("e2e-worker"), 30).await;
         assert_eq!(next, ProcessOutcome::NoJob);
     }
 }

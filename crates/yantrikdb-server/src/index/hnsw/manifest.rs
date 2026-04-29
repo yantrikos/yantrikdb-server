@@ -34,8 +34,8 @@ use std::time::SystemTime;
 use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use std::sync::Arc;
+use thiserror::Error;
 
 use crate::commit::TenantId;
 
@@ -144,7 +144,9 @@ pub enum HnswManifestError {
     #[error("manifest store SQL error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
-    #[error("manifest watermark must be >= source_log_start (start={start}, watermark={watermark})")]
+    #[error(
+        "manifest watermark must be >= source_log_start (start={start}, watermark={watermark})"
+    )]
     WatermarkBeforeStart { start: u64, watermark: u64 },
 
     #[error("manifest watermark cannot move backward (current={current}, proposed={proposed})")]
@@ -331,7 +333,9 @@ impl HnswManifestStore for SqliteHnswManifestStore {
         let current = match current {
             Some(c) => c,
             None => {
-                return Err(HnswManifestError::Sqlite(rusqlite::Error::QueryReturnedNoRows))
+                return Err(HnswManifestError::Sqlite(
+                    rusqlite::Error::QueryReturnedNoRows,
+                ))
             }
         };
         if new_watermark < current {
@@ -389,12 +393,7 @@ mod tests {
     }
 
     fn fresh_manifest(tenant: i64, model: &str) -> HnswManifest {
-        HnswManifest::new(
-            TenantId::new(tenant),
-            model,
-            384,
-            DistanceMetric::Cosine,
-        )
+        HnswManifest::new(TenantId::new(tenant), model, 384, DistanceMetric::Cosine)
     }
 
     #[test]
@@ -464,7 +463,10 @@ mod tests {
         let store = open_store();
         let m = fresh_manifest(1, "MiniLM-L6-v2");
         store.upsert(&m).unwrap();
-        let back = store.get(TenantId::new(1), "MiniLM-L6-v2").unwrap().unwrap();
+        let back = store
+            .get(TenantId::new(1), "MiniLM-L6-v2")
+            .unwrap()
+            .unwrap();
         // updated_at_unix_micros may differ — assert other fields.
         assert_eq!(back.tenant_id, m.tenant_id);
         assert_eq!(back.embedding_model, m.embedding_model);
@@ -492,7 +494,10 @@ mod tests {
         m.source_log_watermark = 10;
         m.deleted_count_pending = 3;
         store.upsert(&m).unwrap();
-        let back = store.get(TenantId::new(1), "MiniLM-L6-v2").unwrap().unwrap();
+        let back = store
+            .get(TenantId::new(1), "MiniLM-L6-v2")
+            .unwrap()
+            .unwrap();
         assert_eq!(back.source_log_watermark, 10);
         assert_eq!(back.deleted_count_pending, 3);
     }
@@ -504,7 +509,10 @@ mod tests {
         m.source_log_start = 50;
         m.source_log_watermark = 10; // < start
         let err = store.upsert(&m).unwrap_err();
-        assert!(matches!(err, HnswManifestError::WatermarkBeforeStart { .. }));
+        assert!(matches!(
+            err,
+            HnswManifestError::WatermarkBeforeStart { .. }
+        ));
     }
 
     #[test]
@@ -520,7 +528,10 @@ mod tests {
         assert!(matches!(err, HnswManifestError::WatermarkRegression { .. }));
 
         // The on-disk row still says 100.
-        let back = store.get(TenantId::new(1), "MiniLM-L6-v2").unwrap().unwrap();
+        let back = store
+            .get(TenantId::new(1), "MiniLM-L6-v2")
+            .unwrap()
+            .unwrap();
         assert_eq!(back.source_log_watermark, 100);
     }
 
@@ -537,7 +548,10 @@ mod tests {
             .advance_watermark(TenantId::new(1), "MiniLM-L6-v2", 50)
             .unwrap();
 
-        let back = store.get(TenantId::new(1), "MiniLM-L6-v2").unwrap().unwrap();
+        let back = store
+            .get(TenantId::new(1), "MiniLM-L6-v2")
+            .unwrap()
+            .unwrap();
         assert_eq!(back.source_log_watermark, 50);
 
         // Backward move rejected.
@@ -580,12 +594,7 @@ mod tests {
 
     #[test]
     fn entries_covered_handles_empty_range() {
-        let m = HnswManifest::new(
-            TenantId::new(1),
-            "m",
-            384,
-            DistanceMetric::Cosine,
-        );
+        let m = HnswManifest::new(TenantId::new(1), "m", 384, DistanceMetric::Cosine);
         // start = watermark = 0
         assert_eq!(m.entries_covered(), 0);
     }
@@ -594,12 +603,7 @@ mod tests {
     fn entries_covered_saturates_on_inverted_range() {
         // Defensive: even if start > watermark slipped through (which
         // upsert would reject), `entries_covered` doesn't underflow.
-        let mut m = HnswManifest::new(
-            TenantId::new(1),
-            "m",
-            384,
-            DistanceMetric::Cosine,
-        );
+        let mut m = HnswManifest::new(TenantId::new(1), "m", 384, DistanceMetric::Cosine);
         m.source_log_start = 100;
         m.source_log_watermark = 50;
         assert_eq!(m.entries_covered(), 0);

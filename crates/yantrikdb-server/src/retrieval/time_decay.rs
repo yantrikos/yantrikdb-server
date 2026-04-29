@@ -304,9 +304,7 @@ impl TimeDecayProvider for TimeDecayIndex {
             .map(|r| (r.clone(), r.decayed_score(now)))
             .filter(|(_, score)| *score >= self.config.min_score)
             .collect();
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
         scored
     }
@@ -344,7 +342,10 @@ pub fn spawn_invalidation_bus_subscriber(
                         ns_map.retain(|_, v| !v.is_empty());
                     }
                 }
-                Ok(InvalidationEvent::Updated { tenant_id: _, rid: _ })
+                Ok(InvalidationEvent::Updated {
+                    tenant_id: _,
+                    rid: _,
+                })
                 | Ok(InvalidationEvent::EdgeChanged { .. })
                 | Ok(InvalidationEvent::TenantConfigChanged { .. }) => {
                     // Updated lacks namespace info to make the touch
@@ -533,7 +534,7 @@ mod tests {
         idx.touch(TenantId::new(1), "ns", "ghost", t0());
         idx.touch(TenantId::new(2), "ns", "a", t0()); // unknown tenant
         idx.touch(TenantId::new(1), "missing_ns", "a", t0()); // unknown ns
-        // Original row intact.
+                                                              // Original row intact.
         assert_eq!(idx.total_entries(), 1);
     }
 

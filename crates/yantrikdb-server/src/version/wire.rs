@@ -53,10 +53,7 @@ impl WireVersion {
     /// at version `event`. Returns Ok if compatible, structured error otherwise.
     pub fn check_can_replay(self, event: WireVersion) -> Result<(), VersionError> {
         if self.major != event.major {
-            return Err(VersionError::WireMajorMismatch {
-                node: self,
-                event,
-            });
+            return Err(VersionError::WireMajorMismatch { node: self, event });
         }
         // Within the same major, minor differences are forward-compatible
         // (older minor reads newer minor's events, ignoring unknown

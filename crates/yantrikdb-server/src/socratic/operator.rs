@@ -187,10 +187,7 @@ impl SocraticOperator for OutcomeToUpstreamLevers {
     fn suggest(&self, query: &str, _evidence: &EvidenceSnapshot) -> SocraticSuggestion {
         SocraticSuggestion {
             reason_code: ReasonCode::OutcomeToUpstreamLevers,
-            rewritten_query: format!(
-                "What upstream factors influence `{}`?",
-                query.trim()
-            ),
+            rewritten_query: format!("What upstream factors influence `{}`?", query.trim()),
             detail: Some("rule_edge_whitelist_pending".into()),
         }
     }
@@ -225,10 +222,7 @@ impl SocraticOperator for EntityDisambiguation {
         };
         SocraticSuggestion {
             reason_code: ReasonCode::EntityDisambiguation,
-            rewritten_query: format!(
-                "Which specific entity does `{}` refer to?",
-                query.trim()
-            ),
+            rewritten_query: format!("Which specific entity does `{}` refer to?", query.trim()),
             detail,
         }
     }
@@ -256,11 +250,7 @@ impl SocraticOperator for ContextCompletion {
         let dims = evidence.unresolved_context_dimensions.join(", ");
         SocraticSuggestion {
             reason_code: ReasonCode::ContextCompletion,
-            rewritten_query: format!(
-                "To answer `{}`, please specify: {}.",
-                query.trim(),
-                dims
-            ),
+            rewritten_query: format!("To answer `{}`, please specify: {}.", query.trim(), dims),
             detail: Some(format!("unresolved_dimensions=[{}]", dims)),
         }
     }
@@ -281,10 +271,7 @@ mod tests {
             ReasonCode::BinaryToConditional.as_str(),
             "binary_to_conditional"
         );
-        assert_eq!(
-            ReasonCode::GlobalToTemporal.as_str(),
-            "global_to_temporal"
-        );
+        assert_eq!(ReasonCode::GlobalToTemporal.as_str(), "global_to_temporal");
         assert_eq!(
             ReasonCode::PropositionToSourceComparison.as_str(),
             "proposition_to_source_comparison"
@@ -297,10 +284,7 @@ mod tests {
             ReasonCode::EntityDisambiguation.as_str(),
             "entity_disambiguation"
         );
-        assert_eq!(
-            ReasonCode::ContextCompletion.as_str(),
-            "context_completion"
-        );
+        assert_eq!(ReasonCode::ContextCompletion.as_str(), "context_completion");
     }
 
     // BINARY_TO_CONDITIONAL
@@ -432,8 +416,7 @@ mod tests {
 
     #[test]
     fn dyn_dispatch_via_trait_object() {
-        let op: std::sync::Arc<dyn SocraticOperator> =
-            std::sync::Arc::new(BinaryToConditional);
+        let op: std::sync::Arc<dyn SocraticOperator> = std::sync::Arc::new(BinaryToConditional);
         assert_eq!(op.reason_code(), ReasonCode::BinaryToConditional);
     }
 

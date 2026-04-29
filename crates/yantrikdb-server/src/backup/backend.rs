@@ -69,10 +69,7 @@ pub trait BackupBackend: Send + Sync {
 
     /// Persist a manifest. Caller is expected to call
     /// `manifest.validate_internal()` before invoking.
-    async fn put_manifest(
-        &self,
-        manifest: &SnapshotManifest,
-    ) -> Result<(), BackupBackendError>;
+    async fn put_manifest(&self, manifest: &SnapshotManifest) -> Result<(), BackupBackendError>;
 
     /// Read a manifest by snapshot_id. Returns
     /// `ManifestNotFound` if the manifest doesn't exist.
@@ -88,8 +85,7 @@ pub trait BackupBackend: Send + Sync {
     async fn delete_manifest(&self, snapshot_id: &str) -> Result<(), BackupBackendError>;
 
     /// Write a content blob at `key`. Overwrites if present.
-    async fn put_content(&self, key: &str, bytes: &[u8])
-        -> Result<(), BackupBackendError>;
+    async fn put_content(&self, key: &str, bytes: &[u8]) -> Result<(), BackupBackendError>;
 
     /// Read a content blob.
     async fn get_content(&self, key: &str) -> Result<Vec<u8>, BackupBackendError>;
@@ -127,7 +123,10 @@ impl LocalFsBackend {
 
     fn manifest_path(&self, snapshot_id: &str) -> Result<PathBuf, BackupBackendError> {
         validate_id(snapshot_id, "snapshot_id")?;
-        Ok(self.root.join("manifests").join(format!("{snapshot_id}.json")))
+        Ok(self
+            .root
+            .join("manifests")
+            .join(format!("{snapshot_id}.json")))
     }
 
     fn content_path(&self, key: &str) -> Result<PathBuf, BackupBackendError> {
@@ -196,10 +195,7 @@ impl BackupBackend for LocalFsBackend {
         "local_fs"
     }
 
-    async fn put_manifest(
-        &self,
-        manifest: &SnapshotManifest,
-    ) -> Result<(), BackupBackendError> {
+    async fn put_manifest(&self, manifest: &SnapshotManifest) -> Result<(), BackupBackendError> {
         manifest.validate_internal()?;
         let path = self.manifest_path(&manifest.snapshot_id)?;
         let json = manifest.to_json()?;
@@ -228,9 +224,8 @@ impl BackupBackend for LocalFsBackend {
             }
             Err(e) => return Err(BackupBackendError::Io(e)),
         };
-        let s = std::str::from_utf8(&bytes).map_err(|e| {
-            BackupBackendError::Other(format!("manifest UTF-8: {e}"))
-        })?;
+        let s = std::str::from_utf8(&bytes)
+            .map_err(|e| BackupBackendError::Other(format!("manifest UTF-8: {e}")))?;
         let m = SnapshotManifest::from_json(s)?;
         Ok(m)
     }
@@ -263,11 +258,7 @@ impl BackupBackend for LocalFsBackend {
         }
     }
 
-    async fn put_content(
-        &self,
-        key: &str,
-        bytes: &[u8],
-    ) -> Result<(), BackupBackendError> {
+    async fn put_content(&self, key: &str, bytes: &[u8]) -> Result<(), BackupBackendError> {
         let path = self.content_path(key)?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -308,9 +299,7 @@ impl BackupBackend for LocalFsBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backup::manifest::{
-        EncryptionMetadata, HnswSnapshotEntry, SnapshotManifestVersion,
-    };
+    use crate::backup::manifest::{EncryptionMetadata, HnswSnapshotEntry, SnapshotManifestVersion};
     use crate::commit::TenantId;
     use crate::index::hnsw::DistanceMetric;
     use crate::version::{SchemaVersion, WireVersion};
@@ -397,7 +386,10 @@ mod tests {
     async fn delete_manifest_is_idempotent() {
         let tmp = TempDir::new().unwrap();
         let backend = LocalFsBackend::new(tmp.path()).unwrap();
-        backend.put_manifest(&sample_manifest("snap-1")).await.unwrap();
+        backend
+            .put_manifest(&sample_manifest("snap-1"))
+            .await
+            .unwrap();
         backend.delete_manifest("snap-1").await.unwrap();
         // Second delete is also OK.
         backend.delete_manifest("snap-1").await.unwrap();
@@ -478,7 +470,9 @@ mod tests {
     async fn content_key_with_path_traversal_rejected() {
         let tmp = TempDir::new().unwrap();
         let backend = LocalFsBackend::new(tmp.path()).unwrap();
-        let result = backend.put_content("tenants/1/../../etc/passwd", &[0]).await;
+        let result = backend
+            .put_content("tenants/1/../../etc/passwd", &[0])
+            .await;
         match result {
             Err(BackupBackendError::InvalidKey { .. }) => {}
             other => panic!("expected InvalidKey, got {other:?}"),
@@ -535,7 +529,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let backend: std::sync::Arc<dyn BackupBackend> =
             std::sync::Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
-        backend.put_manifest(&sample_manifest("dyn-1")).await.unwrap();
+        backend
+            .put_manifest(&sample_manifest("dyn-1"))
+            .await
+            .unwrap();
         let m = backend.get_manifest("dyn-1").await.unwrap();
         assert_eq!(m.snapshot_id, "dyn-1");
         assert_eq!(backend.name(), "local_fs");

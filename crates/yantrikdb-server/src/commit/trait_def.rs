@@ -181,9 +181,7 @@ pub enum CommitError {
     /// `leader_addr` if known, or surface a 503 with `Retry-After` if
     /// the cluster is mid-election. `leader_id` / `leader_addr` are
     /// `None` when no leader is currently known.
-    #[error(
-        "not the cluster leader; redirect to leader id={leader_id:?} addr={leader_addr:?}"
-    )]
+    #[error("not the cluster leader; redirect to leader id={leader_id:?} addr={leader_addr:?}")]
     NotLeader {
         leader_id: Option<u64>,
         leader_addr: Option<String>,
@@ -378,7 +376,9 @@ mod tests {
             term: 1,
             log_index: 42,
             committed_at: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
-            applied_at: Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_001)),
+            applied_at: Some(
+                SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_001),
+            ),
         };
         let json = serde_json::to_string(&r).unwrap();
         let back: CommitReceipt = serde_json::from_str(&json).unwrap();

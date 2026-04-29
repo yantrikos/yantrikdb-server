@@ -115,8 +115,7 @@ mod tests {
 
     #[test]
     fn has_scopes_checks_all() {
-        let p = Principal::new("p1")
-            .with_scopes(ScopeSet::from_iter([Scope::Read, Scope::Recall]));
+        let p = Principal::new("p1").with_scopes(ScopeSet::from_iter([Scope::Read, Scope::Recall]));
         assert!(p.has_scopes(ScopeSet::from_iter([Scope::Read])));
         assert!(p.has_scopes(ScopeSet::from_iter([Scope::Read, Scope::Recall])));
         assert!(!p.has_scopes(ScopeSet::from_iter([Scope::Read, Scope::Forget])));
@@ -142,12 +141,8 @@ mod tests {
         // Audit operators rely on the distinction — a revoked token
         // means an operator pulled it (look at audit), an expired
         // token means the client just needs to renew.
-        let revoked = AuthOutcome::Revoked {
-            id: "p1".into(),
-        };
-        let expired = AuthOutcome::Expired {
-            id: "p1".into(),
-        };
+        let revoked = AuthOutcome::Revoked { id: "p1".into() };
+        let expired = AuthOutcome::Expired { id: "p1".into() };
         assert_ne!(revoked, expired);
     }
 }

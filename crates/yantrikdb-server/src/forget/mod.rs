@@ -48,12 +48,11 @@ pub mod delete_queue;
 pub mod tombstone;
 
 pub use crypto_shred::{
-    CryptoShredConfig, CryptoShredError, CryptoShredder, ShredKeyResult, ShredOutcome,
-    ShredPlan,
+    CryptoShredConfig, CryptoShredError, CryptoShredder, ShredKeyResult, ShredOutcome, ShredPlan,
 };
 pub use delete_queue::{
-    enqueue_one, enqueue_range, scan_tombstones_in_range, EnqueueRangeResult,
-    HnswDeletePayload, HNSW_DELETE_DEFAULT_PRIORITY, HNSW_DELETE_JOB_KIND,
+    enqueue_one, enqueue_range, scan_tombstones_in_range, EnqueueRangeResult, HnswDeletePayload,
+    HNSW_DELETE_DEFAULT_PRIORITY, HNSW_DELETE_JOB_KIND,
 };
 
 pub use tombstone::TombstoneIndex;

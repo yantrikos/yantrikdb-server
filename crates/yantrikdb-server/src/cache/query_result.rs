@@ -256,9 +256,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::policy::{
-        NoopTombstoneProvider, TombstoneAwareCache, TombstoneProvider,
-    };
+    use crate::cache::policy::{NoopTombstoneProvider, TombstoneAwareCache, TombstoneProvider};
     use std::sync::Arc;
     use std::thread;
 
@@ -310,8 +308,12 @@ mod tests {
 
     #[test]
     fn key_changes_on_tenant_change() {
-        let k1 = QueryCacheKeyBuilder::new(TenantId::new(1)).query("q").build();
-        let k2 = QueryCacheKeyBuilder::new(TenantId::new(2)).query("q").build();
+        let k1 = QueryCacheKeyBuilder::new(TenantId::new(1))
+            .query("q")
+            .build();
+        let k2 = QueryCacheKeyBuilder::new(TenantId::new(2))
+            .query("q")
+            .build();
         assert_ne!(k1, k2);
     }
 
@@ -375,8 +377,14 @@ mod tests {
     #[tokio::test]
     async fn cached_query_result_implements_rid_keyed() {
         let r = cached_result(vec!["r1", "r2"]);
-        assert_eq!(<CachedQueryResult<String> as RidKeyed>::tenant_id(&r), TenantId::new(1));
-        assert_eq!(<CachedQueryResult<String> as RidKeyed>::rids(&r), vec!["r1", "r2"]);
+        assert_eq!(
+            <CachedQueryResult<String> as RidKeyed>::tenant_id(&r),
+            TenantId::new(1)
+        );
+        assert_eq!(
+            <CachedQueryResult<String> as RidKeyed>::rids(&r),
+            vec!["r1", "r2"]
+        );
     }
 
     #[tokio::test]

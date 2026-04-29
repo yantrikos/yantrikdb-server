@@ -133,10 +133,7 @@ pub enum RetentionError {
         got: Duration,
     },
     #[error("contributor `{name}` failed: {message}")]
-    ContributorFailed {
-        name: &'static str,
-        message: String,
-    },
+    ContributorFailed { name: &'static str, message: String },
 }
 
 /// One subsystem's gate on compaction. Each contributor answers, for
@@ -211,10 +208,7 @@ impl RetentionRegistry {
         }
 
         // The minimum of the constraining floors.
-        let min_floor = floors
-            .iter()
-            .filter_map(|(_, f)| *f)
-            .min();
+        let min_floor = floors.iter().filter_map(|(_, f)| *f).min();
 
         // If a contributor had a floor, it gates compaction. The
         // safe purge watermark is `min_floor - 1` (the highest index
@@ -477,9 +471,7 @@ pub struct FollowerLagContributor {
 impl FollowerLagContributor {
     /// `measure(tenant) -> Option<min_last_applied_log_index>`. Pass
     /// `|_| None` to disable follower-lag gating in single-node mode.
-    pub fn new(
-        measure: impl Fn(TenantId) -> Option<u64> + Send + Sync + 'static,
-    ) -> Self {
+    pub fn new(measure: impl Fn(TenantId) -> Option<u64> + Send + Sync + 'static) -> Self {
         Self {
             measure: Arc::new(measure),
         }
@@ -522,9 +514,7 @@ pub struct BackupWatermarkContributor {
 }
 
 impl BackupWatermarkContributor {
-    pub fn new(
-        measure: impl Fn(TenantId) -> Option<u64> + Send + Sync + 'static,
-    ) -> Self {
+    pub fn new(measure: impl Fn(TenantId) -> Option<u64> + Send + Sync + 'static) -> Self {
         Self {
             measure: Arc::new(measure),
         }
@@ -640,9 +630,18 @@ mod tests {
         // Three contributors with floors 100, 50, 200 → min is 50,
         // safe purge through is 49.
         let r = RetentionRegistry::new()
-            .with(Arc::new(StubContributor { name: "a", floor: Some(100) }))
-            .with(Arc::new(StubContributor { name: "b", floor: Some(50) }))
-            .with(Arc::new(StubContributor { name: "c", floor: Some(200) }));
+            .with(Arc::new(StubContributor {
+                name: "a",
+                floor: Some(100),
+            }))
+            .with(Arc::new(StubContributor {
+                name: "b",
+                floor: Some(50),
+            }))
+            .with(Arc::new(StubContributor {
+                name: "c",
+                floor: Some(200),
+            }));
         let w = r.safe_purge_watermark(TenantId::new(1)).await.unwrap();
         assert_eq!(w.min_required, Some(50));
         assert_eq!(w.safe_purge_through, Some(49));
@@ -654,8 +653,14 @@ mod tests {
         // Contributor A returns None (no constraint). Contributor B
         // returns 30. Min should be 30 — A doesn't contribute.
         let r = RetentionRegistry::new()
-            .with(Arc::new(StubContributor { name: "a", floor: None }))
-            .with(Arc::new(StubContributor { name: "b", floor: Some(30) }));
+            .with(Arc::new(StubContributor {
+                name: "a",
+                floor: None,
+            }))
+            .with(Arc::new(StubContributor {
+                name: "b",
+                floor: Some(30),
+            }));
         let w = r.safe_purge_watermark(TenantId::new(1)).await.unwrap();
         assert_eq!(w.min_required, Some(30));
         assert_eq!(w.safe_purge_through, Some(29));
@@ -665,8 +670,14 @@ mod tests {
     #[tokio::test]
     async fn all_none_means_no_constraint() {
         let r = RetentionRegistry::new()
-            .with(Arc::new(StubContributor { name: "a", floor: None }))
-            .with(Arc::new(StubContributor { name: "b", floor: None }));
+            .with(Arc::new(StubContributor {
+                name: "a",
+                floor: None,
+            }))
+            .with(Arc::new(StubContributor {
+                name: "b",
+                floor: None,
+            }));
         let w = r.safe_purge_watermark(TenantId::new(1)).await.unwrap();
         assert_eq!(w.min_required, None);
         assert_eq!(w.safe_purge_through, None);
@@ -698,10 +709,16 @@ mod tests {
         // contributor — it must fail the computation. Compaction
         // is destructive; partial info = invariant violation.
         let r = RetentionRegistry::new()
-            .with(Arc::new(StubContributor { name: "ok", floor: Some(100) }))
+            .with(Arc::new(StubContributor {
+                name: "ok",
+                floor: Some(100),
+            }))
             .with(Arc::new(ErrContributor));
         let result = r.safe_purge_watermark(TenantId::new(1)).await;
-        assert!(matches!(result, Err(RetentionError::ContributorFailed { .. })));
+        assert!(matches!(
+            result,
+            Err(RetentionError::ContributorFailed { .. })
+        ));
     }
 
     #[tokio::test]
@@ -709,8 +726,10 @@ mod tests {
         // Edge: floor = 1 means "I need entry 1 still" → safe_purge_through is 0
         // (i.e., nothing may be purged). saturating_sub(1) handles
         // this without underflow.
-        let r = RetentionRegistry::new()
-            .with(Arc::new(StubContributor { name: "a", floor: Some(1) }));
+        let r = RetentionRegistry::new().with(Arc::new(StubContributor {
+            name: "a",
+            floor: Some(1),
+        }));
         let w = r.safe_purge_watermark(TenantId::new(1)).await.unwrap();
         assert_eq!(w.safe_purge_through, Some(0));
     }
@@ -720,12 +739,7 @@ mod tests {
     #[tokio::test]
     async fn hnsw_contributor_floor_is_watermark_plus_one() {
         let store = Arc::new(open_manifest_store());
-        let mut m = HnswManifest::new(
-            TenantId::new(1),
-            "minilm",
-            384,
-            DistanceMetric::Cosine,
-        );
+        let mut m = HnswManifest::new(TenantId::new(1), "minilm", 384, DistanceMetric::Cosine);
         m.source_log_watermark = 42;
         store.upsert(&m).unwrap();
 
@@ -774,13 +788,20 @@ mod tests {
     #[tokio::test]
     async fn follower_lag_floor_is_applied_plus_one() {
         let c = FollowerLagContributor::new(|t| {
-            if t == TenantId::new(1) { Some(50) } else { None }
+            if t == TenantId::new(1) {
+                Some(50)
+            } else {
+                None
+            }
         });
         assert_eq!(
             c.min_required_log_index(TenantId::new(1)).await.unwrap(),
             Some(51)
         );
-        assert_eq!(c.min_required_log_index(TenantId::new(2)).await.unwrap(), None);
+        assert_eq!(
+            c.min_required_log_index(TenantId::new(2)).await.unwrap(),
+            None
+        );
     }
 
     // ── Backup watermark contributor ────────────────────────────────
@@ -788,7 +809,10 @@ mod tests {
     #[tokio::test]
     async fn backup_watermark_disabled_reports_none() {
         let c = BackupWatermarkContributor::disabled();
-        assert_eq!(c.min_required_log_index(TenantId::new(1)).await.unwrap(), None);
+        assert_eq!(
+            c.min_required_log_index(TenantId::new(1)).await.unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -826,12 +850,13 @@ mod tests {
                 .unwrap();
         }
         // "now" = real now (writes were just done; all inside 24h).
-        let c = TombstoneRetentionContributor::new(
-            committer.clone(),
-            RetentionPolicy::default(),
-        );
+        let c = TombstoneRetentionContributor::new(committer.clone(), RetentionPolicy::default());
         let f = c.min_required_log_index(TenantId::new(1)).await.unwrap();
-        assert_eq!(f, Some(1), "all entries inside window → floor at first entry");
+        assert_eq!(
+            f,
+            Some(1),
+            "all entries inside window → floor at first entry"
+        );
     }
 
     #[tokio::test]
@@ -847,8 +872,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let two_days_later =
-            SystemTime::now() + Duration::from_secs(48 * 60 * 60);
+        let two_days_later = SystemTime::now() + Duration::from_secs(48 * 60 * 60);
         let c = TombstoneRetentionContributor::with_clock(
             committer.clone(),
             RetentionPolicy::default(),

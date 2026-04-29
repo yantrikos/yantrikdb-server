@@ -77,10 +77,7 @@ pub enum FaultKind {
     },
     /// Full network partition between two sets of peers. While active,
     /// no messages flow in either direction.
-    Partition {
-        side_a: Vec<u32>,
-        side_b: Vec<u32>,
-    },
+    Partition { side_a: Vec<u32>, side_b: Vec<u32> },
     /// Pause delivery on the leader's outbound. Followers don't see
     /// heartbeats — used to force an election.
     PauseLeader { node_id: u32 },
@@ -123,9 +120,7 @@ pub struct FaultRecord {
 impl FaultRecord {
     /// Whether this fault has expired and should be cleaned up.
     pub fn is_expired(&self, now: Instant) -> bool {
-        self.expires_at
-            .map(|exp| now >= exp)
-            .unwrap_or(false)
+        self.expires_at.map(|exp| now >= exp).unwrap_or(false)
     }
 }
 
@@ -284,7 +279,10 @@ impl FaultyNetwork for RegistryFaultyNetwork {
                         return true;
                     }
                 }
-                FaultKind::Partition { ref side_a, ref side_b } => {
+                FaultKind::Partition {
+                    ref side_a,
+                    ref side_b,
+                } => {
                     let from_a = side_a.contains(&from);
                     let from_b = side_b.contains(&from);
                     let to_a = side_a.contains(&to);
@@ -331,7 +329,8 @@ impl FaultyNetwork for RegistryFaultyNetwork {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let pseudo = ((from as u64) ^ ((to as u64) << 16) ^ (now_secs << 32)).wrapping_mul(2654435761);
+        let pseudo =
+            ((from as u64) ^ ((to as u64) << 16) ^ (now_secs << 32)).wrapping_mul(2654435761);
         let unit = ((pseudo % 1_000_000) as f64) / 1_000_000.0;
 
         for fault in self.registry.list() {
@@ -372,15 +371,16 @@ mod tests {
             },
             None,
         );
-        let id2 = r.inject(
-            FaultKind::PauseLeader { node_id: 1 },
-            Some(60),
-        );
+        let id2 = r.inject(FaultKind::PauseLeader { node_id: 1 }, Some(60));
         assert_ne!(id1, id2, "fault IDs must be unique");
         let list = r.list();
         assert_eq!(list.len(), 2);
-        let has_drop = list.iter().any(|f| matches!(f.kind, FaultKind::DropMessages { .. }));
-        let has_pause = list.iter().any(|f| matches!(f.kind, FaultKind::PauseLeader { .. }));
+        let has_drop = list
+            .iter()
+            .any(|f| matches!(f.kind, FaultKind::DropMessages { .. }));
+        let has_pause = list
+            .iter()
+            .any(|f| matches!(f.kind, FaultKind::PauseLeader { .. }));
         assert!(has_drop && has_pause);
     }
 

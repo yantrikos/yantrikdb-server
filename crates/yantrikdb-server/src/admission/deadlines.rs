@@ -155,7 +155,10 @@ impl DeadlineBudget {
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum DeadlineError {
     #[error("stage `{stage}` deadline exceeded after {elapsed_ms}ms")]
-    Exceeded { stage: &'static str, elapsed_ms: u64 },
+    Exceeded {
+        stage: &'static str,
+        elapsed_ms: u64,
+    },
 }
 
 /// Race a future against the stage's remaining deadline. Returns
@@ -304,7 +307,10 @@ mod tests {
         })
         .await;
         let err = result.unwrap_err();
-        assert!(matches!(err, DeadlineError::Exceeded { stage: "parse", .. }));
+        assert!(matches!(
+            err,
+            DeadlineError::Exceeded { stage: "parse", .. }
+        ));
     }
 
     #[tokio::test]
@@ -339,16 +345,12 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
             token_clone.cancel();
         });
-        let result: Result<Result<u32, _>, _> = run_with_deadline_or_cancel(
-            &b,
-            RecallStage::Expansion,
-            &token,
-            async {
+        let result: Result<Result<u32, _>, _> =
+            run_with_deadline_or_cancel(&b, RecallStage::Expansion, &token, async {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 42
-            },
-        )
-        .await;
+            })
+            .await;
         let inner = result.unwrap();
         assert!(inner.is_err()); // Cancelled
     }
@@ -362,16 +364,12 @@ mod tests {
         };
         let b = DeadlineBudget::new(cfg);
         let token = CancellationToken::new();
-        let result: Result<Result<u32, _>, _> = run_with_deadline_or_cancel(
-            &b,
-            RecallStage::Parse,
-            &token,
-            async {
+        let result: Result<Result<u32, _>, _> =
+            run_with_deadline_or_cancel(&b, RecallStage::Parse, &token, async {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 42
-            },
-        )
-        .await;
+            })
+            .await;
         // Deadline fires before token does → outer Err.
         assert!(matches!(result, Err(DeadlineError::Exceeded { .. })));
     }
@@ -380,6 +378,9 @@ mod tests {
     fn cap_for_returns_per_stage_bound() {
         let cfg = DeadlineConfig::default();
         assert_eq!(cfg.cap_for(RecallStage::Parse), Duration::from_millis(50));
-        assert_eq!(cfg.cap_for(RecallStage::Expansion), Duration::from_millis(2000));
+        assert_eq!(
+            cfg.cap_for(RecallStage::Expansion),
+            Duration::from_millis(2000)
+        );
     }
 }

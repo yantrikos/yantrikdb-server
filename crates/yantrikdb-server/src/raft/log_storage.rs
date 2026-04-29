@@ -491,7 +491,9 @@ mod tests {
         let mut s = SqliteRaftLogStorage::open_in_memory();
         let e1 = entry_at(1, 1, 1, upsert_entry("a"));
         let e2 = entry_at(2, 1, 1, upsert_entry("b"));
-        s.append_durable(vec![e1.clone(), e2.clone()]).await.unwrap();
+        s.append_durable(vec![e1.clone(), e2.clone()])
+            .await
+            .unwrap();
 
         let got = s.try_get_log_entries(1..3).await.unwrap();
         assert_eq!(got.len(), 2);

@@ -171,9 +171,7 @@ pub enum ShadowMigrationError {
         from: ShadowMigrationPhase,
         to: ShadowMigrationPhase,
     },
-    #[error(
-        "shadow watermark {target_wm} below source watermark {source_wm}; not caught up"
-    )]
+    #[error("shadow watermark {target_wm} below source watermark {source_wm}; not caught up")]
     NotCaughtUp { target_wm: u64, source_wm: u64 },
     #[error("no migration in progress for tenant `{0}`")]
     NotFound(String),
@@ -220,7 +218,10 @@ impl ShadowMigrationState {
         // Caught-up gate: shadow must be caught up before DualRead and
         // again at Cutover. RFC 013-B: "DualRead: shadow index is caught
         // up."; "Cutover when source_log_watermark >= target_watermark."
-        if matches!(next, ShadowMigrationPhase::DualRead | ShadowMigrationPhase::Cutover) {
+        if matches!(
+            next,
+            ShadowMigrationPhase::DualRead | ShadowMigrationPhase::Cutover
+        ) {
             if self.target_log_watermark < self.source_log_watermark {
                 return Err(ShadowMigrationError::NotCaughtUp {
                     target_wm: self.target_log_watermark,
@@ -384,7 +385,8 @@ impl DualReadMerger {
     ///   score (or `ShadowIndex` on ties — shadow is the future).
     pub fn merge(source: Vec<ScoredHit>, shadow: Vec<ScoredHit>, top_k: usize) -> Vec<ScoredHit> {
         use std::collections::HashMap;
-        let mut by_rid: HashMap<String, ScoredHit> = HashMap::with_capacity(source.len() + shadow.len());
+        let mut by_rid: HashMap<String, ScoredHit> =
+            HashMap::with_capacity(source.len() + shadow.len());
         for h in source {
             by_rid.insert(h.rid.clone(), h);
         }
@@ -512,7 +514,8 @@ mod tests {
     #[test]
     fn legal_transition_succeeds() {
         let mut s = ShadowMigrationState::new("t1", cfg_default(), 100, 1).unwrap();
-        s.transition_to(ShadowMigrationPhase::Backfilling, 2).unwrap();
+        s.transition_to(ShadowMigrationPhase::Backfilling, 2)
+            .unwrap();
         assert_eq!(s.phase, ShadowMigrationPhase::Backfilling);
         assert_eq!(s.phase_entered_at_unix_micros, 2);
     }
@@ -523,18 +526,24 @@ mod tests {
         let err = s
             .transition_to(ShadowMigrationPhase::Cutover, 2)
             .unwrap_err();
-        assert!(matches!(err, ShadowMigrationError::InvalidTransition { .. }));
+        assert!(matches!(
+            err,
+            ShadowMigrationError::InvalidTransition { .. }
+        ));
     }
 
     #[test]
     fn cutover_blocked_until_caught_up() {
         let mut s = ShadowMigrationState::new("t1", cfg_default(), 100, 1).unwrap();
-        s.transition_to(ShadowMigrationPhase::Backfilling, 2).unwrap();
-        s.transition_to(ShadowMigrationPhase::DualRead, 3).unwrap_err(); // not caught up
+        s.transition_to(ShadowMigrationPhase::Backfilling, 2)
+            .unwrap();
+        s.transition_to(ShadowMigrationPhase::DualRead, 3)
+            .unwrap_err(); // not caught up
 
         // Catch up part-way — still blocked.
         s.advance_target(50);
-        s.transition_to(ShadowMigrationPhase::DualRead, 4).unwrap_err();
+        s.transition_to(ShadowMigrationPhase::DualRead, 4)
+            .unwrap_err();
 
         // Fully catch up — ok.
         s.advance_target(100);
@@ -549,7 +558,8 @@ mod tests {
     #[test]
     fn cutover_blocked_if_source_advances_past_target() {
         let mut s = ShadowMigrationState::new("t1", cfg_default(), 100, 1).unwrap();
-        s.transition_to(ShadowMigrationPhase::Backfilling, 2).unwrap();
+        s.transition_to(ShadowMigrationPhase::Backfilling, 2)
+            .unwrap();
         s.advance_target(100);
         s.transition_to(ShadowMigrationPhase::DualRead, 3).unwrap();
         // New writes land in source while we were dual-reading.
@@ -557,7 +567,13 @@ mod tests {
         let err = s
             .transition_to(ShadowMigrationPhase::Cutover, 4)
             .unwrap_err();
-        assert!(matches!(err, ShadowMigrationError::NotCaughtUp { target_wm: 100, source_wm: 150 }));
+        assert!(matches!(
+            err,
+            ShadowMigrationError::NotCaughtUp {
+                target_wm: 100,
+                source_wm: 150
+            }
+        ));
     }
 
     #[test]
@@ -625,7 +641,8 @@ mod tests {
     fn store_list_active_excludes_terminal() {
         let store = InMemoryMigrationStore::new();
         let mut a = ShadowMigrationState::new("t1", cfg_default(), 100, 1).unwrap();
-        a.transition_to(ShadowMigrationPhase::Backfilling, 2).unwrap();
+        a.transition_to(ShadowMigrationPhase::Backfilling, 2)
+            .unwrap();
         let mut b = ShadowMigrationState::new("t2", cfg_default(), 100, 1).unwrap();
         b.transition_to(ShadowMigrationPhase::Aborted, 2).unwrap();
         store.upsert(a).unwrap();
@@ -687,10 +704,22 @@ mod tests {
         // greater than every source hit. Top 5 then must all come from
         // shadow.
         let src: Vec<ScoredHit> = (0..20)
-            .map(|i| h(&format!("s{}", i), 0.5 - i as f32 * 0.01, HitSource::SourceIndex))
+            .map(|i| {
+                h(
+                    &format!("s{}", i),
+                    0.5 - i as f32 * 0.01,
+                    HitSource::SourceIndex,
+                )
+            })
             .collect();
         let sha: Vec<ScoredHit> = (0..20)
-            .map(|i| h(&format!("h{}", i), 1.0 - i as f32 * 0.005, HitSource::ShadowIndex))
+            .map(|i| {
+                h(
+                    &format!("h{}", i),
+                    1.0 - i as f32 * 0.005,
+                    HitSource::ShadowIndex,
+                )
+            })
             .collect();
         let merged = DualReadMerger::merge(src, sha, 5);
         assert_eq!(merged.len(), 5);

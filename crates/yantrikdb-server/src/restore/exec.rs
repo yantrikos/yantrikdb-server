@@ -56,10 +56,7 @@ pub enum RestoreExecutorError {
          in `{path}`; SingleTenant mode refuses to overwrite. \
          Use WipeAndRestore explicitly if that's intended."
     )]
-    TenantPathOccupied {
-        tenant_id: TenantId,
-        path: PathBuf,
-    },
+    TenantPathOccupied { tenant_id: TenantId, path: PathBuf },
 
     #[error(
         "destination data dir `{path}` is not empty; NewCluster \
@@ -259,11 +256,7 @@ impl RestoreExecutor {
         }
     }
 
-    async fn write_atomic(
-        &self,
-        dest: &Path,
-        bytes: &[u8],
-    ) -> Result<(), RestoreExecutorError> {
+    async fn write_atomic(&self, dest: &Path, bytes: &[u8]) -> Result<(), RestoreExecutorError> {
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -364,10 +357,7 @@ mod tests {
         let dest_tmp = TempDir::new().unwrap();
         let dest_path = dest_tmp.path().join("data");
         let exec = RestoreExecutor::new(backend, &dest_path);
-        let outcome = exec
-            .execute(&plan, RestoreMode::NewCluster)
-            .await
-            .unwrap();
+        let outcome = exec.execute(&plan, RestoreMode::NewCluster).await.unwrap();
         assert_eq!(outcome.tenant_id, TenantId::new(1));
         assert_eq!(outcome.mode, RestoreMode::NewCluster);
         assert_eq!(outcome.items.len(), 2);
@@ -442,7 +432,9 @@ mod tests {
         let dest_path = dest_tmp.path().join("data");
         // Pre-populate a DIFFERENT tenant's dir; that data must
         // remain untouched.
-        tokio::fs::create_dir_all(dest_path.join("tenant_99")).await.unwrap();
+        tokio::fs::create_dir_all(dest_path.join("tenant_99"))
+            .await
+            .unwrap();
         let other_path = dest_path.join("tenant_99").join("untouched.bin");
         tokio::fs::write(&other_path, b"keep-this").await.unwrap();
 
@@ -470,7 +462,9 @@ mod tests {
         let dest_tmp = TempDir::new().unwrap();
         let dest_path = dest_tmp.path().join("data");
         // Seed destination with stale data.
-        tokio::fs::create_dir_all(dest_path.join("tenant_99")).await.unwrap();
+        tokio::fs::create_dir_all(dest_path.join("tenant_99"))
+            .await
+            .unwrap();
         tokio::fs::write(dest_path.join("tenant_99").join("stale.bin"), b"stale")
             .await
             .unwrap();
@@ -598,17 +592,18 @@ mod tests {
         let dest_tmp = TempDir::new().unwrap();
         let dest_path = dest_tmp.path().join("data");
         let exec = RestoreExecutor::new(backend, &dest_path);
-        let outcome = exec
-            .execute(&plan, RestoreMode::NewCluster)
-            .await
-            .unwrap();
+        let outcome = exec.execute(&plan, RestoreMode::NewCluster).await.unwrap();
         // The HNSW path must be inside `<data_dir>/tenant_1/hnsw/`,
         // not escaped to `<data_dir>/etc/passwd`.
         let expected_safe = dest_path
             .join("tenant_1")
             .join("hnsw")
             .join(".._etc_passwd.bin");
-        let (_, actual) = outcome.items.iter().find(|(d, _)| d.kind.starts_with("hnsw:")).unwrap();
+        let (_, actual) = outcome
+            .items
+            .iter()
+            .find(|(d, _)| d.kind.starts_with("hnsw:"))
+            .unwrap();
         assert_eq!(actual, &expected_safe);
         assert!(actual.starts_with(&dest_path));
     }
@@ -642,10 +637,7 @@ mod tests {
         let dest_tmp = TempDir::new().unwrap();
         let dest_path = dest_tmp.path().join("data");
         let exec = RestoreExecutor::new(backend, &dest_path);
-        let outcome = exec
-            .execute(&plan, RestoreMode::NewCluster)
-            .await
-            .unwrap();
+        let outcome = exec.execute(&plan, RestoreMode::NewCluster).await.unwrap();
 
         let sqlite_item = outcome
             .items

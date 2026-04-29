@@ -52,9 +52,7 @@ pub mod query_result;
 
 pub use embedding::{EmbeddingCache, EmbeddingCacheConfig, EmbeddingCacheKey};
 pub use invalidation::{InvalidationBus, InvalidationEvent};
-pub use policy::{
-    Cache, NoopTombstoneProvider, RidKeyed, TombstoneAwareCache, TombstoneProvider,
-};
+pub use policy::{Cache, NoopTombstoneProvider, RidKeyed, TombstoneAwareCache, TombstoneProvider};
 pub use query_result::{
     CachedQueryResult, QueryCacheKey, QueryCacheKeyBuilder, QueryResultCache,
     QueryResultCacheConfig,

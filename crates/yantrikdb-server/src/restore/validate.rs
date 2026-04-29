@@ -100,9 +100,7 @@ pub enum RestoreValidatorError {
     #[error("manifest validation: {0}")]
     Manifest(#[from] ManifestValidationError),
 
-    #[error(
-        "content blob `{key}` checksum mismatch: expected `{expected}`, got `{actual}`"
-    )]
+    #[error("content blob `{key}` checksum mismatch: expected `{expected}`, got `{actual}`")]
     ChecksumMismatch {
         key: String,
         expected: String,
@@ -162,12 +160,7 @@ impl RestoreValidator {
 
         // HNSW snapshots.
         for h in &manifest.hnsw_snapshots {
-            verify_blob(
-                self.backend.as_ref(),
-                &h.content_key,
-                h.checksum.as_deref(),
-            )
-            .await?;
+            verify_blob(self.backend.as_ref(), &h.content_key, h.checksum.as_deref()).await?;
             items.push(RestorePlanItem {
                 kind: RestorePlanItemKind::HnswSnapshot {
                     embedding_model: h.embedding_model.clone(),
@@ -225,9 +218,7 @@ pub async fn verify_blob(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backup::manifest::{
-        EncryptionMetadata, HnswSnapshotEntry, SnapshotManifestVersion,
-    };
+    use crate::backup::manifest::{EncryptionMetadata, HnswSnapshotEntry, SnapshotManifestVersion};
     use crate::backup::LocalFsBackend;
     use crate::index::hnsw::DistanceMetric;
     use crate::version::SchemaVersion;
@@ -293,15 +284,17 @@ mod tests {
             .await
             .unwrap();
         for h in &manifest.hnsw_snapshots {
-            backend.put_content(&h.content_key, hnsw_bytes).await.unwrap();
+            backend
+                .put_content(&h.content_key, hnsw_bytes)
+                .await
+                .unwrap();
         }
     }
 
     #[tokio::test]
     async fn validate_passes_on_matching_destination() {
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let sqlite = b"sqlite-checkpoint-bytes";
         let hnsw = b"hnsw-data-bytes";
         let m = manifest_with_content("snap-1", sqlite, hnsw);
@@ -331,8 +324,7 @@ mod tests {
         // applied tombstones beyond what the snapshot captures.
         // Restoring would resurrect those memories — refuse.
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let sqlite = b"x";
         let hnsw = b"y";
         let m = manifest_with_content("snap-1", sqlite, hnsw);
@@ -352,8 +344,7 @@ mod tests {
     #[tokio::test]
     async fn validate_refuses_wire_major_mismatch() {
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let sqlite = b"x";
         let hnsw = b"y";
         let m = manifest_with_content("snap-1", sqlite, hnsw);
@@ -373,8 +364,7 @@ mod tests {
     #[tokio::test]
     async fn validate_refuses_hnsw_model_mismatch() {
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let m = manifest_with_content("snap-1", b"x", b"y");
         populate_backend(backend.as_ref(), &m, b"x", b"y").await;
 
@@ -394,8 +384,7 @@ mod tests {
         // Manifest claims checksum X; backend serves bytes whose
         // checksum is Y. Catches storage corruption + tampering.
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let m = manifest_with_content("snap-1", b"original", b"hnsw");
         // Tamper: store DIFFERENT bytes for the sqlite key.
         backend.put_manifest(&m).await.unwrap();
@@ -423,8 +412,7 @@ mod tests {
     #[tokio::test]
     async fn validate_refuses_hnsw_checksum_mismatch() {
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let m = manifest_with_content("snap-1", b"sqlite", b"original");
         backend.put_manifest(&m).await.unwrap();
         backend
@@ -449,8 +437,7 @@ mod tests {
         // Manifest claims content_key, backend doesn't have the
         // blob (e.g. operator deleted by accident).
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let m = manifest_with_content("snap-1", b"sqlite", b"hnsw");
         // Only put manifest + hnsw; leave sqlite blob missing.
         backend.put_manifest(&m).await.unwrap();
@@ -474,8 +461,7 @@ mod tests {
         // validation. (They lose the corruption-detection benefit
         // but that's a known trade-off, not a refuse-restore one.)
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let mut m = manifest_with_content("snap-1", b"x", b"y");
         m.sqlite_checkpoint_checksum = None;
         m.hnsw_snapshots[0].checksum = None;
@@ -490,8 +476,7 @@ mod tests {
         // A tenant with no tombstones at snapshot time has
         // forget_floor=None — restore is unconstrained.
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let mut m = manifest_with_content("snap-1", b"x", b"y");
         m.forget_floor = None;
         populate_backend(backend.as_ref(), &m, b"x", b"y").await;
@@ -505,11 +490,12 @@ mod tests {
     #[tokio::test]
     async fn validate_missing_manifest_returns_backend_error() {
         let tmp = TempDir::new().unwrap();
-        let backend: Arc<dyn BackupBackend> =
-            Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
+        let backend: Arc<dyn BackupBackend> = Arc::new(LocalFsBackend::new(tmp.path()).unwrap());
         let v = RestoreValidator::new(backend);
         match v.validate("does-not-exist", dest()).await {
-            Err(RestoreValidatorError::Backend(BackupBackendError::ManifestNotFound { .. })) => {}
+            Err(RestoreValidatorError::Backend(BackupBackendError::ManifestNotFound {
+                ..
+            })) => {}
             other => panic!("expected ManifestNotFound, got {other:?}"),
         }
     }

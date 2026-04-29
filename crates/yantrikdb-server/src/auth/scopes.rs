@@ -129,7 +129,9 @@ impl ScopeSet {
 
     pub fn iter(&self) -> impl Iterator<Item = Scope> + '_ {
         let bits = self.0;
-        Scope::all().into_iter().filter(move |s| bits & s.bit() != 0)
+        Scope::all()
+            .into_iter()
+            .filter(move |s| bits & s.bit() != 0)
     }
 
     /// Comma-separated wire-form representation, e.g. `"read,recall"`.
@@ -142,8 +144,7 @@ impl ScopeSet {
     pub fn parse_csv(s: &str) -> Result<Self, String> {
         let mut set = Self::empty();
         for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            let sc = Scope::parse(part)
-                .ok_or_else(|| format!("unknown scope `{}`", part))?;
+            let sc = Scope::parse(part).ok_or_else(|| format!("unknown scope `{}`", part))?;
             set.add(sc);
         }
         Ok(set)

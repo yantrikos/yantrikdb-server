@@ -142,7 +142,11 @@ impl MigrationRunner {
             }
 
             let name = migration.name();
-            tracing::info!(migration_id = id, migration_name = name, "applying migration");
+            tracing::info!(
+                migration_id = id,
+                migration_name = name,
+                "applying migration"
+            );
 
             let tx = conn.transaction().map_err(|e| MigrationError::Sqlite {
                 migration_id: id,
@@ -181,7 +185,11 @@ impl MigrationRunner {
 
             applied_count += 1;
             last_applied_id = id;
-            tracing::info!(migration_id = id, migration_name = name, "migration applied");
+            tracing::info!(
+                migration_id = id,
+                migration_name = name,
+                "migration applied"
+            );
         }
 
         Ok(applied_count)
@@ -199,9 +207,8 @@ impl MigrationRunner {
 
     fn applied_ids(conn: &Connection) -> Result<std::collections::HashSet<u32>, rusqlite::Error> {
         let mut stmt = conn.prepare("SELECT id FROM _yantrikdb_meta_migrations")?;
-        let ids: rusqlite::Result<Vec<u32>> = stmt
-            .query_map([], |row| row.get::<_, u32>(0))?
-            .collect();
+        let ids: rusqlite::Result<Vec<u32>> =
+            stmt.query_map([], |row| row.get::<_, u32>(0))?.collect();
         Ok(ids?.into_iter().collect())
     }
 
@@ -210,11 +217,12 @@ impl MigrationRunner {
     /// visibility into rolling-upgrade state.
     pub fn applied_summary(conn: &Connection) -> Result<Vec<(u32, String)>, rusqlite::Error> {
         Self::ensure_meta_table(conn)?;
-        let mut stmt = conn.prepare(
-            "SELECT id, name FROM _yantrikdb_meta_migrations ORDER BY id ASC",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, name FROM _yantrikdb_meta_migrations ORDER BY id ASC")?;
         let rows: rusqlite::Result<Vec<(u32, String)>> = stmt
-            .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?)))?
+            .query_map([], |row| {
+                Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+            })?
             .collect();
         rows
     }
@@ -264,7 +272,10 @@ mod tests {
         assert!(!summary.is_empty());
         // Ordered by id ASC.
         for window in summary.windows(2) {
-            assert!(window[0].0 < window[1].0, "summary not ordered: {summary:?}");
+            assert!(
+                window[0].0 < window[1].0,
+                "summary not ordered: {summary:?}"
+            );
         }
         // m001 is the first migration.
         assert_eq!(summary[0].0, 1);

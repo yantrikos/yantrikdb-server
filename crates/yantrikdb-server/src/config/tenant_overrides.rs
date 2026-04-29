@@ -119,9 +119,7 @@ impl TenantConfigOverride {
 pub enum TenantConfigError {
     #[error("tenant `{0}` has no overrides")]
     NotFound(String),
-    #[error(
-        "stale version for tenant `{tenant}`: incoming `{incoming}`, observed `{observed}`"
-    )]
+    #[error("stale version for tenant `{tenant}`: incoming `{incoming}`, observed `{observed}`")]
     StaleVersion {
         tenant: String,
         incoming: ConfigVersion,
@@ -204,10 +202,7 @@ impl TenantConfigStore for InMemoryTenantConfigStore {
 /// supplies its own `&TenantConfigOverride` (already loaded from the
 /// store) — the resolver is a pure function so it can be called many
 /// times per request without re-hitting the store.
-pub fn resolve<'a>(
-    overrides: &'a TenantConfigOverride,
-    key: &str,
-) -> Option<&'a OverrideValue> {
+pub fn resolve<'a>(overrides: &'a TenantConfigOverride, key: &str) -> Option<&'a OverrideValue> {
     overrides.get(key)
 }
 
@@ -241,7 +236,10 @@ mod tests {
         assert_eq!(OverrideValue::UInt(0).type_str(), "uint");
         assert_eq!(OverrideValue::Float(0.0).type_str(), "float");
         assert_eq!(OverrideValue::Bool(true).type_str(), "bool");
-        assert_eq!(OverrideValue::Duration(Duration::ZERO).type_str(), "duration");
+        assert_eq!(
+            OverrideValue::Duration(Duration::ZERO).type_str(),
+            "duration"
+        );
     }
 
     #[test]
@@ -301,9 +299,12 @@ mod tests {
     #[test]
     fn store_list_returns_all_tenants_sorted() {
         let s = InMemoryTenantConfigStore::new();
-        s.upsert(TenantConfigOverride::new("zzz", ConfigVersion(1))).unwrap();
-        s.upsert(TenantConfigOverride::new("aaa", ConfigVersion(1))).unwrap();
-        s.upsert(TenantConfigOverride::new("mmm", ConfigVersion(1))).unwrap();
+        s.upsert(TenantConfigOverride::new("zzz", ConfigVersion(1)))
+            .unwrap();
+        s.upsert(TenantConfigOverride::new("aaa", ConfigVersion(1)))
+            .unwrap();
+        s.upsert(TenantConfigOverride::new("mmm", ConfigVersion(1)))
+            .unwrap();
         let listed = s.list();
         assert_eq!(listed, vec!["aaa".to_string(), "mmm".into(), "zzz".into()]);
     }

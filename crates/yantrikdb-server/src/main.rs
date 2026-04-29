@@ -823,18 +823,16 @@ cluster_secret = "{secret}"
                         eprintln!("error {}: {}", cluster_status, cluster_text);
                         std::process::exit(1);
                     }
-                    let cluster_value: serde_json::Value =
-                        serde_json::from_str(&cluster_text)?;
+                    let cluster_value: serde_json::Value = serde_json::from_str(&cluster_text)?;
 
                     // /v1/health/deep is best-effort — if it errors, we
                     // still show cluster topology rather than failing.
-                    let health_value: Option<serde_json::Value> =
-                        match health_req.send() {
-                            Ok(r) if r.status().is_success() => {
-                                serde_json::from_str(&r.text().unwrap_or_default()).ok()
-                            }
-                            _ => None,
-                        };
+                    let health_value: Option<serde_json::Value> = match health_req.send() {
+                        Ok(r) if r.status().is_success() => {
+                            serde_json::from_str(&r.text().unwrap_or_default()).ok()
+                        }
+                        _ => None,
+                    };
 
                     let combined = serde_json::json!({
                         "cluster": cluster_value,
@@ -879,7 +877,9 @@ cluster_secret = "{secret}"
                         println!("───────────────────────");
                         println!("  this node    : node-{}  ({})", s.node_id, s.state);
                         match s.current_leader {
-                            Some(id) if id == s.node_id => println!("  leader       : SELF (node-{})", id),
+                            Some(id) if id == s.node_id => {
+                                println!("  leader       : SELF (node-{})", id)
+                            }
                             Some(id) => println!("  leader       : node-{}", id),
                             None => println!("  leader       : (none — election in progress)"),
                         }
@@ -1091,10 +1091,7 @@ cluster_secret = "{secret}"
                     let v: serde_json::Value = serde_json::from_str(&text)?;
                     println!("Job {}", v["id"].as_str().unwrap_or("?"));
                     println!("──────────");
-                    println!(
-                        "  tenant   : {}",
-                        v["tenant_id"].as_i64().unwrap_or(0)
-                    );
+                    println!("  tenant   : {}", v["tenant_id"].as_i64().unwrap_or(0));
                     println!("  kind     : {}", v["kind"].as_str().unwrap_or("?"));
                     println!("  state    : {}", v["state"].as_str().unwrap_or("?"));
                     println!("  priority : {}", v["priority"].as_u64().unwrap_or(0));
@@ -1107,11 +1104,7 @@ cluster_secret = "{secret}"
                 }
                 Ok(())
             }
-            JobsAction::Cancel {
-                url,
-                token,
-                job_id,
-            } => {
+            JobsAction::Cancel { url, token, job_id } => {
                 let url = format!("{}/v1/jobs/{}", url.trim_end_matches('/'), job_id);
                 let resp = reqwest::blocking::Client::new()
                     .delete(&url)
@@ -1201,7 +1194,9 @@ cluster_secret = "{secret}"
                         println!("   is SKIPPED. Never set this in production.");
                     }
                 } else {
-                    println!("\n(no certs configured — cluster_tls is opt-in until openraft mode lands)");
+                    println!(
+                        "\n(no certs configured — cluster_tls is opt-in until openraft mode lands)"
+                    );
                 }
                 Ok(())
             }
@@ -1243,8 +1238,14 @@ cluster_secret = "{secret}"
                         "  high_watermark : {}",
                         v["high_watermark"].as_u64().unwrap_or(0)
                     );
-                    println!("  from_index     : {}", v["from_index"].as_u64().unwrap_or(0));
-                    println!("  returned       : {}", v["entries"].as_array().map(|a| a.len()).unwrap_or(0));
+                    println!(
+                        "  from_index     : {}",
+                        v["from_index"].as_u64().unwrap_or(0)
+                    );
+                    println!(
+                        "  returned       : {}",
+                        v["entries"].as_array().map(|a| a.len()).unwrap_or(0)
+                    );
                     println!();
                     if let Some(entries) = v["entries"].as_array() {
                         for e in entries {
@@ -1335,9 +1336,9 @@ cluster_secret = "{secret}"
                     return Ok(());
                 }
 
-                let admission = value
-                    .get("admission")
-                    .ok_or_else(|| anyhow::anyhow!("server did not return admission state — older server version?"))?;
+                let admission = value.get("admission").ok_or_else(|| {
+                    anyhow::anyhow!("server did not return admission state — older server version?")
+                })?;
                 let runtime = value.get("runtime");
 
                 println!("YantrikDB admission state (RFC 009)");
@@ -1350,9 +1351,7 @@ cluster_secret = "{secret}"
                     "  max request body bytes  : {}",
                     admission["max_request_body_bytes"].as_u64().unwrap_or(0)
                 );
-                let in_flight_max = admission["in_flight_recall"]["max"]
-                    .as_u64()
-                    .unwrap_or(0);
+                let in_flight_max = admission["in_flight_recall"]["max"].as_u64().unwrap_or(0);
                 let in_flight_used = admission["in_flight_recall"]["in_use"]
                     .as_u64()
                     .unwrap_or(0);
@@ -1366,12 +1365,8 @@ cluster_secret = "{secret}"
                         0
                     }
                 );
-                let expanded_max = admission["expanded_recall"]["max"]
-                    .as_u64()
-                    .unwrap_or(0);
-                let expanded_used = admission["expanded_recall"]["in_use"]
-                    .as_u64()
-                    .unwrap_or(0);
+                let expanded_max = admission["expanded_recall"]["max"].as_u64().unwrap_or(0);
+                let expanded_used = admission["expanded_recall"]["in_use"].as_u64().unwrap_or(0);
                 println!(
                     "  expanded concurrent     : {}/{} ({}%)",
                     expanded_used,
@@ -1460,10 +1455,16 @@ fn render_version_gauges(out: &mut String) {
     let snap = crate::version::VersionSnapshot::local();
     out.push_str("# HELP yantrikdb_wire_version_major Local wire-protocol major version\n");
     out.push_str("# TYPE yantrikdb_wire_version_major gauge\n");
-    out.push_str(&format!("yantrikdb_wire_version_major {}\n", snap.wire.major));
+    out.push_str(&format!(
+        "yantrikdb_wire_version_major {}\n",
+        snap.wire.major
+    ));
     out.push_str("# HELP yantrikdb_wire_version_minor Local wire-protocol minor version\n");
     out.push_str("# TYPE yantrikdb_wire_version_minor gauge\n");
-    out.push_str(&format!("yantrikdb_wire_version_minor {}\n", snap.wire.minor));
+    out.push_str(&format!(
+        "yantrikdb_wire_version_minor {}\n",
+        snap.wire.minor
+    ));
     out.push_str(
         "# HELP yantrikdb_min_supported_wire_version_major Oldest wire-protocol major this binary can replay\n",
     );
@@ -1472,9 +1473,7 @@ fn render_version_gauges(out: &mut String) {
         "yantrikdb_min_supported_wire_version_major {}\n",
         snap.min_supported_wire.major
     ));
-    out.push_str(
-        "# HELP yantrikdb_schema_version Per-table schema version this binary expects\n",
-    );
+    out.push_str("# HELP yantrikdb_schema_version Per-table schema version this binary expects\n");
     out.push_str("# TYPE yantrikdb_schema_version gauge\n");
     for (table, ver) in &snap.table_schema_versions {
         out.push_str(&format!(
@@ -1614,9 +1613,8 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     // RFC 009 admission control: hard caps + concurrency semaphores.
     // Defaults are sized for a typical 4-core deployment. Operators tune
     // via [admission] config block once benchmark validation lands in PR-3.
-    let admission = crate::admission::AdmissionState::new(
-        crate::admission::AdmissionConfig::default(),
-    );
+    let admission =
+        crate::admission::AdmissionState::new(crate::admission::AdmissionConfig::default());
 
     // RFC 009 §4 Layer 1: dedicated tokio runtime for Raft control plane.
     // Cluster background tasks (heartbeat, sync_loop, election) spawn on
@@ -1691,9 +1689,10 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         Arc<dyn crate::commit::MutationCommitter>,
         Option<Arc<crate::raft::RaftAssembly>>,
     ) = match cfg.cluster.raft_mode {
-        crate::raft::RaftClusterMode::Disabled => {
-            (local_committer.clone() as Arc<dyn crate::commit::MutationCommitter>, None)
-        }
+        crate::raft::RaftClusterMode::Disabled => (
+            local_committer.clone() as Arc<dyn crate::commit::MutationCommitter>,
+            None,
+        ),
         crate::raft::RaftClusterMode::OpenRaft => {
             let raft_log_path = cfg.server.data_dir.join("raft_log.sqlite");
             let raft_log_conn = rusqlite::Connection::open(&raft_log_path)

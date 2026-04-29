@@ -167,7 +167,10 @@ mod tests {
         };
         let err = VersionPolicy::can_emit_at_version(&event, &gate).unwrap_err();
         match err {
-            VersionError::ClusterTooOld { event: e, cluster_min } => {
+            VersionError::ClusterTooOld {
+                event: e,
+                cluster_min,
+            } => {
                 assert_eq!(e, WireVersion::new(1, 5));
                 assert_eq!(cluster_min, WireVersion::new(1, 0));
             }

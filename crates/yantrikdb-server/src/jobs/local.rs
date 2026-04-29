@@ -46,10 +46,9 @@ impl LocalSqliteJobQueue {
     }
 
     pub fn open_in_memory() -> Result<Self, JobError> {
-        let mut conn =
-            Connection::open_in_memory().map_err(|e| JobError::StorageFailure {
-                message: format!("failed to open in-memory SQLite: {e}"),
-            })?;
+        let mut conn = Connection::open_in_memory().map_err(|e| JobError::StorageFailure {
+            message: format!("failed to open in-memory SQLite: {e}"),
+        })?;
         Self::configure_pragmas(&conn)?;
         Self::run_migrations(&mut conn)?;
         Ok(Self {
@@ -85,11 +84,10 @@ impl JobQueue for LocalSqliteJobQueue {
             let conn = conn.lock();
             let id = JobId::new_random();
             let now_micros = systime_to_micros(SystemTime::now());
-            let payload = serde_json::to_vec(&job.payload).map_err(|e| {
-                JobError::StorageFailure {
+            let payload =
+                serde_json::to_vec(&job.payload).map_err(|e| JobError::StorageFailure {
                     message: format!("payload serialize failed: {e}"),
-                }
-            })?;
+                })?;
             conn.execute(
                 "INSERT INTO durable_jobs (
                     id, tenant_id, kind, payload, state, priority, created_at_unix_micros
@@ -161,8 +159,10 @@ impl JobQueue for LocalSqliteJobQueue {
                 let mut stmt = tx.prepare(&sql).map_err(|e| JobError::StorageFailure {
                     message: format!("prepare pickup query: {e}"),
                 })?;
-                let param_refs: Vec<&dyn rusqlite::ToSql> =
-                    params_vec.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+                let param_refs: Vec<&dyn rusqlite::ToSql> = params_vec
+                    .iter()
+                    .map(|v| v as &dyn rusqlite::ToSql)
+                    .collect();
                 stmt.query_row(param_refs.as_slice(), |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -191,18 +191,19 @@ impl JobQueue for LocalSqliteJobQueue {
             let expires_micros = now_micros + (lease_ttl_secs * 1_000_000) as i64;
 
             // Flip to Leased.
-            let updated = tx.execute(
-                "UPDATE durable_jobs
+            let updated = tx
+                .execute(
+                    "UPDATE durable_jobs
                  SET state = 'Leased',
                      leased_by = ?1,
                      leased_at_unix_micros = ?2,
                      lease_expires_at_unix_micros = ?3
                  WHERE id = ?4 AND state = 'Pending'",
-                params![worker_id.0, now_micros, expires_micros, id_str],
-            )
-            .map_err(|e| JobError::StorageFailure {
-                message: format!("UPDATE to Leased: {e}"),
-            })?;
+                    params![worker_id.0, now_micros, expires_micros, id_str],
+                )
+                .map_err(|e| JobError::StorageFailure {
+                    message: format!("UPDATE to Leased: {e}"),
+                })?;
 
             if updated != 1 {
                 // Race: another worker leased between our SELECT and
@@ -215,17 +216,17 @@ impl JobQueue for LocalSqliteJobQueue {
                 message: format!("commit: {e}"),
             })?;
 
-            let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).map_err(|e| {
-                JobError::StorageFailure {
+            let payload: serde_json::Value =
+                serde_json::from_slice(&payload_bytes).map_err(|e| JobError::StorageFailure {
                     message: format!("payload deserialize: {e}"),
-                }
-            })?;
-            let job_id = id_str
-                .parse::<uuid7::Uuid>()
-                .map(JobId)
-                .map_err(|e| JobError::StorageFailure {
-                    message: format!("job id parse: {e}"),
                 })?;
+            let job_id =
+                id_str
+                    .parse::<uuid7::Uuid>()
+                    .map(JobId)
+                    .map_err(|e| JobError::StorageFailure {
+                        message: format!("job id parse: {e}"),
+                    })?;
             let job_record = JobRecord {
                 id: job_id,
                 tenant_id: TenantId::new(tenant_id),
@@ -302,7 +303,9 @@ impl JobQueue for LocalSqliteJobQueue {
             let now_micros = systime_to_micros(SystemTime::now());
             let (state, error_message) = match &outcome {
                 Outcome::Succeeded => (JobState::Succeeded, None),
-                Outcome::Failed { error_message } => (JobState::Failed, Some(error_message.clone())),
+                Outcome::Failed { error_message } => {
+                    (JobState::Failed, Some(error_message.clone()))
+                }
             };
             let updated = conn
                 .execute(
@@ -444,8 +447,10 @@ impl JobQueue for LocalSqliteJobQueue {
             let mut stmt = conn.prepare(&sql).map_err(|e| JobError::StorageFailure {
                 message: format!("prepare list: {e}"),
             })?;
-            let param_refs: Vec<&dyn rusqlite::ToSql> =
-                params_vec.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+            let param_refs: Vec<&dyn rusqlite::ToSql> = params_vec
+                .iter()
+                .map(|v| v as &dyn rusqlite::ToSql)
+                .collect();
             let rows = stmt
                 .query_map(param_refs.as_slice(), row_to_record)
                 .map_err(|e| JobError::StorageFailure {
@@ -507,10 +512,9 @@ fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<JobRecord> {
     let completed_at_micros: Option<i64> = row.get(10)?;
     let error_message: Option<String> = row.get(11)?;
 
-    let id = id_str
-        .parse::<uuid7::Uuid>()
-        .map(JobId)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+    let id = id_str.parse::<uuid7::Uuid>().map(JobId).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Blob, Box::new(e))
     })?;
@@ -781,10 +785,7 @@ mod tests {
         let n = q.expire_stale_leases().await.unwrap();
         assert_eq!(n, 1);
         // Job should be Pending again.
-        let pending = q
-            .list(None, Some(JobState::Pending), 100)
-            .await
-            .unwrap();
+        let pending = q.list(None, Some(JobState::Pending), 100).await.unwrap();
         assert_eq!(pending.len(), 1);
     }
 
@@ -804,17 +805,11 @@ mod tests {
         .await
         .unwrap();
 
-        let t1_only = q
-            .list(Some(TenantId::new(1)), None, 100)
-            .await
-            .unwrap();
+        let t1_only = q.list(Some(TenantId::new(1)), None, 100).await.unwrap();
         assert_eq!(t1_only.len(), 1);
         assert_eq!(t1_only[0].tenant_id, TenantId::new(1));
 
-        let pending_only = q
-            .list(None, Some(JobState::Pending), 100)
-            .await
-            .unwrap();
+        let pending_only = q.list(None, Some(JobState::Pending), 100).await.unwrap();
         assert_eq!(pending_only.len(), 2);
     }
 
@@ -846,7 +841,10 @@ mod tests {
         // Wait for the lease to expire + reclaim it.
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         q.expire_stale_leases().await.unwrap();
-        let err = q.heartbeat(lease.lease_id, lease.job_id, 60).await.unwrap_err();
+        let err = q
+            .heartbeat(lease.lease_id, lease.job_id, 60)
+            .await
+            .unwrap_err();
         assert!(matches!(err, JobError::InvalidLease { .. }));
     }
 

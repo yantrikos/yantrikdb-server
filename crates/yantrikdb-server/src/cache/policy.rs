@@ -271,11 +271,8 @@ mod tests {
     async fn noop_provider_any_tombstoned_returns_false_for_any_input() {
         let p = NoopTombstoneProvider;
         assert!(
-            !p.any_tombstoned(
-                TenantId::new(1),
-                &["a".into(), "b".into(), "c".into()]
-            )
-            .await
+            !p.any_tombstoned(TenantId::new(1), &["a".into(), "b".into(), "c".into()])
+                .await
         );
         assert!(!p.any_tombstoned(TenantId::new(1), &[]).await);
     }

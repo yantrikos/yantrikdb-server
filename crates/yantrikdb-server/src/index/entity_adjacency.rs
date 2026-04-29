@@ -69,12 +69,8 @@ pub trait EntityAdjacencyProvider: Send + Sync {
     /// Look up the top-N adjacent rids for `(tenant_id, entity_id)`.
     /// `limit` truncates the per-entity sorted list. Returns an
     /// empty Vec on lookup miss (unknown tenant or unknown entity).
-    fn top_adjacent(
-        &self,
-        tenant_id: TenantId,
-        entity_id: &str,
-        limit: usize,
-    ) -> Vec<AdjacencyRow>;
+    fn top_adjacent(&self, tenant_id: TenantId, entity_id: &str, limit: usize)
+        -> Vec<AdjacencyRow>;
 
     /// Convenience: union of top-N adjacent across multiple seed
     /// entities, deduped by rid (first occurrence wins). Used when
@@ -119,13 +115,7 @@ impl EntityAdjacencyIndex {
     /// and `dst` get an entry — the index is undirected from the
     /// recall path's POV (neighbors-of-X works regardless of
     /// edge direction in the underlying graph).
-    pub fn upsert_edge(
-        &self,
-        tenant_id: TenantId,
-        src: &str,
-        dst: &str,
-        weight: f64,
-    ) {
+    pub fn upsert_edge(&self, tenant_id: TenantId, src: &str, dst: &str, weight: f64) {
         let mut map = self.inner.write();
         let tenant_map = map.entry(tenant_id).or_default();
         Self::upsert_directed(tenant_map, src, dst, weight);
@@ -167,11 +157,7 @@ impl EntityAdjacencyIndex {
         });
     }
 
-    fn delete_directed(
-        tenant_map: &mut HashMap<String, AdjacencyList>,
-        from: &str,
-        to: &str,
-    ) {
+    fn delete_directed(tenant_map: &mut HashMap<String, AdjacencyList>, from: &str, to: &str) {
         if let Some(list) = tenant_map.get_mut(from) {
             list.retain(|r| r.rid != to);
             if list.is_empty() {
@@ -262,7 +248,11 @@ pub fn spawn_invalidation_bus_subscriber(
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(InvalidationEvent::EdgeChanged { tenant_id, src, dst }) => {
+                Ok(InvalidationEvent::EdgeChanged {
+                    tenant_id,
+                    src,
+                    dst,
+                }) => {
                     // Coarse: drop and re-add. The weight is
                     // re-derived by the integration layer in a
                     // follow-up PR.
@@ -384,7 +374,7 @@ mod tests {
         idx.upsert_edge(TenantId::new(1), "alice", "bob", 0.5);
         idx.delete_edge(TenantId::new(1), "alice", "ghost"); // unknown
         idx.delete_edge(TenantId::new(2), "alice", "bob"); // unknown tenant
-        // alice→bob still intact.
+                                                           // alice→bob still intact.
         assert_eq!(idx.top_adjacent(TenantId::new(1), "alice", 10).len(), 1);
     }
 

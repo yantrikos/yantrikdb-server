@@ -43,6 +43,4 @@
 pub mod entity_adjacency;
 pub mod hnsw;
 
-pub use entity_adjacency::{
-    AdjacencyRow, EntityAdjacencyIndex, EntityAdjacencyProvider,
-};
+pub use entity_adjacency::{AdjacencyRow, EntityAdjacencyIndex, EntityAdjacencyProvider};

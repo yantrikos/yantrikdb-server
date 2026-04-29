@@ -99,11 +99,7 @@ impl RrfConfig {
 /// Each output `score` is the merged RRF score (NOT the original
 /// source score — distinct dimension). Tie-break by `doc_id` ascending
 /// for determinism.
-pub fn rrf_merge(
-    sources: Vec<Vec<ScoredDoc>>,
-    cfg: RrfConfig,
-    top_k: usize,
-) -> Vec<ScoredDoc> {
+pub fn rrf_merge(sources: Vec<Vec<ScoredDoc>>, cfg: RrfConfig, top_k: usize) -> Vec<ScoredDoc> {
     use std::collections::HashMap;
 
     let k = cfg.k.max(1) as f32;
@@ -238,11 +234,7 @@ mod tests {
     #[test]
     fn rrf_score_formula_correct_for_simple_case() {
         // One source, one doc at rank 1, k=60 → score = 1 / (60+1) = 1/61
-        let merged = rrf_merge(
-            vec![vec![doc("a", 0.0)]],
-            RrfConfig::default(),
-            10,
-        );
+        let merged = rrf_merge(vec![vec![doc("a", 0.0)]], RrfConfig::default(), 10);
         let expected = 1.0 / 61.0;
         assert!((merged[0].score - expected).abs() < 1e-6);
     }

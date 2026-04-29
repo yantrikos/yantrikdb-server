@@ -30,6 +30,42 @@ pub struct AppState {
     /// Inflight blocking operations counter for load shedding.
     /// When this exceeds the max, new requests are rejected with 503.
     pub inflight: std::sync::atomic::AtomicU32,
+    /// RFC 009 admission control: hard caps + concurrency semaphores.
+    /// See [`crate::admission`].
+    pub admission: crate::admission::AdmissionState,
+    /// Optional handle to the dedicated control-plane runtime. `Some`
+    /// when the runtime split is active (RFC 009 §4 Layer 1). Cluster
+    /// background tasks (heartbeat, sync_loop, election) spawn here so
+    /// they don't compete with HTTP/recall handlers for CPU.
+    /// `None` in tests/CLI commands that share a single runtime.
+    pub control_runtime: Option<tokio::runtime::Handle>,
+    /// RFC 010: durable mutation committer. `LocalSqliteCommitter` in
+    /// single-node mode; `RaftCommitter` after RFC 010 PR-4 lands.
+    /// API handlers route writes through this to get
+    /// (a) durable commit-log persistence, (b) replay safety, (c)
+    /// cross-implementation portability when cluster mode flips.
+    pub commit_log: std::sync::Arc<dyn crate::commit::MutationCommitter>,
+    /// RFC 010 PR-4: openraft assembly when cluster runs in
+    /// `RaftClusterMode::OpenRaft`. `None` in single-node mode. Used
+    /// by the http_gateway to mount `/v1/cluster/raft` (status) and
+    /// `/v1/raft/*` (peer-to-peer RPC receive routes), and by the
+    /// metrics recorder.
+    pub raft: Option<std::sync::Arc<crate::raft::RaftAssembly>>,
+    /// RFC 010 PR-5: in-memory fault-injection registry. Empty in
+    /// production builds; populated by Jepsen runners via
+    /// `/v1/debug/fault/inject`. The cluster transport layer (RFC 010
+    /// PR-4) consults this to decide drop/delay/corrupt behavior.
+    pub fault_registry: crate::debug::FaultRegistry,
+    /// RFC 019: durable background job queue. Substrate for HNSW delete
+    /// queue (011), snapshot creation (012), index reconciliation (013),
+    /// re-embedding (013-B), cache warming (015). Each consumer-RFC's
+    /// worker loop holds an `Arc<dyn JobQueue>` cloned from this.
+    pub jobs: std::sync::Arc<dyn crate::jobs::JobQueue>,
+    /// Resolved data directory (mirrors `cfg.server.data_dir`). Stored
+    /// here so HTTP handlers can locate per-RFC SQLite files (e.g. the
+    /// `/v1/admin/migrations` endpoint enumerates commit_log.sqlite and
+    /// jobs.sqlite from this path).
+    pub data_dir: std::path::PathBuf,
 }
 
 /// Maximum concurrent blocking operations before shedding load.

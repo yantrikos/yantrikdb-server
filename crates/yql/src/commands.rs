@@ -46,6 +46,38 @@ fn execute_meta(client: &Client, line: &str) -> Result<()> {
             format::print_json(&health);
             Ok(())
         }
+        "admission" | "a" => {
+            // RFC 009: surface admission state from /v1/health/deep so
+            // the operator can see caps + current usage at a glance.
+            let deep = client.get("/v1/health/deep")?;
+            format::print_admission(&deep);
+            Ok(())
+        }
+        "version" | "v" => {
+            // RFC 017-A: surface wire/schema version state for
+            // rolling-upgrade visibility.
+            let deep = client.get("/v1/health/deep")?;
+            format::print_version(&deep);
+            Ok(())
+        }
+        "fault" => {
+            // RFC 010 PR-5: list active fault injections.
+            let faults = client.get("/v1/debug/fault")?;
+            format::print_faults(&faults);
+            Ok(())
+        }
+        "jobs" | "j" => {
+            // RFC 019: list durable background jobs (master-token gated).
+            let jobs = client.get("/v1/jobs?limit=100")?;
+            format::print_jobs(&jobs);
+            Ok(())
+        }
+        "migrations" | "m" => {
+            // RFC 017-B: schema migration status (master-token gated).
+            let migrations = client.get("/v1/admin/migrations")?;
+            format::print_migrations(&migrations);
+            Ok(())
+        }
         "dt" | "databases" | "l" => {
             let dbs = client.get("/v1/databases")?;
             format::print_databases(&dbs);
@@ -69,6 +101,13 @@ fn execute_meta(client: &Client, line: &str) -> Result<()> {
         "cluster" => {
             let result = client.get("/v1/cluster")?;
             format::print_cluster(&result);
+            Ok(())
+        }
+        "raft" => {
+            // RFC 010 PR-4 openraft cluster status. Distinct from
+            // \cluster which targets the legacy Raft-lite cluster.
+            let result = client.get("/v1/cluster/raft")?;
+            format::print_raft_status(&result);
             Ok(())
         }
         "json" => {
@@ -274,7 +313,13 @@ fn print_help() {
     println!("  \\personality \\p  derived personality traits");
     println!("  \\think     \\t    run consolidation + conflict scan");
     println!("  \\cluster         cluster status (replication / failover)");
+    println!("  \\raft            openraft cluster status (RFC 010 PR-4)");
     println!("  \\health          server health");
+    println!("  \\admission \\a    RFC 009 admission state (caps + usage)");
+    println!("  \\version   \\v    RFC 017-A wire + schema version state");
+    println!("  \\fault           RFC 010 PR-5 active fault injections (cluster master token)");
+    println!("  \\jobs      \\j    RFC 019 durable jobs (cluster master token)");
+    println!("  \\migrations \\m   RFC 017-B applied schema migrations (cluster master token)");
     println!("  \\json <path>     raw GET request");
     println!("  \\help      \\h    this help");
     println!("  \\quit      \\q    exit");

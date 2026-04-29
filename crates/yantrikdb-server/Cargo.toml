@@ -36,7 +36,7 @@ parking_lot = { version = "0.12", features = ["deadlock_detection"] }
 axum = { version = "0.8", features = ["json"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -81,11 +81,32 @@ console-subscriber = { version = "0.4", optional = true }
 anyhow = "1"
 blake3 = "1"
 thiserror = "2"
-uuid7 = "1"
+uuid7 = { version = "1", features = ["serde"] }
 bytes = "1"
 
-# For `cluster status` CLI command
-reqwest = { version = "0.12", features = ["json", "blocking"] }
+# RFC 010: dyn-dispatched async trait for MutationCommitter so we can
+# swap LocalSqliteCommitter ↔ RaftCommitter at runtime without rewiring
+# every handler. Native async-in-trait (Rust 1.75+) doesn't support
+# dyn dispatch, hence the crate.
+async-trait = "0.1"
+
+# RFC 010 PR-4: openraft for cluster consensus. 0.9 stable line — 0.10
+# is alpha. `serde` enables on-wire log entries; `storage-v2` splits
+# RaftLogStorage and RaftStateMachine cleanly (PR-4-b/c map onto each).
+# `generic-snapshot-data` lets us define our own snapshot type instead
+# of being stuck with `Cursor<Vec<u8>>` (PR-4-c will use a SQLite
+# checkpoint stream).
+openraft = { version = "0.9", features = ["serde", "storage-v2", "generic-snapshot-data"] }
+
+# For `cluster status` CLI command + cluster Raft transport with mTLS.
+# `rustls-tls` enables Identity/Certificate APIs and uses rustls (same TLS
+# stack as our cluster acceptor in security::cluster_tls).
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+
+# RFC 009 — control-runtime SCHED_FIFO priority on Linux. No-op on other
+# platforms (the runtime split + admission caps still apply).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

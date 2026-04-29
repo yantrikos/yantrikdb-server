@@ -300,12 +300,54 @@ async fn health_deep(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Va
         json!({"enabled": false, "algorithm": null})
     };
 
+    // RFC 009 admission/observability snapshot — exposed in /health/deep
+    // so operators can inspect admission state without scraping /metrics.
+    // The CLI (`yantrikdb cluster status`) and yql (`\admission`) both
+    // surface these fields.
+    let in_flight_used = state.admission.cfg.max_in_flight_recall
+        - state.admission.in_flight_recall.available_permits();
+    let expanded_used = state.admission.cfg.max_concurrent_expanded_recall
+        - state.admission.expanded_recall.available_permits();
+    let admission_state = json!({
+        "hard_top_k_cap": state.admission.cfg.hard_top_k_cap,
+        "max_request_body_bytes": state.admission.cfg.max_request_body_bytes,
+        "in_flight_recall": {
+            "max": state.admission.cfg.max_in_flight_recall,
+            "in_use": in_flight_used,
+        },
+        "expanded_recall": {
+            "max": state.admission.cfg.max_concurrent_expanded_recall,
+            "in_use": expanded_used,
+        },
+    });
+
+    let runtime_state = json!({
+        "control_runtime_isolated": state.control_runtime.is_some(),
+    });
+
+    // RFC 017-A version snapshot — rolling-upgrade visibility for operators.
+    // Cluster gate state is wired when RFC 010 PR-1 attaches a VersionGate
+    // to AppState; until then this block surfaces the local build's
+    // version primitives only. The shape is forward-compatible: operators
+    // can rely on `version.wire`, `version.min_supported_wire`, and
+    // `version.table_schema_versions` from RFC 017-A onward.
+    let local_snap = crate::version::VersionSnapshot::local();
+    let version_block = json!({
+        "build_id": local_snap.build_id,
+        "wire": local_snap.wire,
+        "min_supported_wire": local_snap.min_supported_wire,
+        "table_schema_versions": local_snap.table_schema_versions,
+    });
+
     (
         status,
         Json(json!({
             "status": if all_pass { "healthy" } else { "degraded" },
             "encryption": encryption_status,
             "checks": checks,
+            "admission": admission_state,
+            "runtime": runtime_state,
+            "version": version_block,
         })),
     )
 }
@@ -541,6 +583,65 @@ async fn recall(
     Json(body): Json<Value>,
 ) -> AppResult {
     let _timer = crate::metrics::HandlerTimer::new("recall");
+
+    // Parse the two admission-relevant fields up front so we can reject
+    // BEFORE auth or HNSW search runs. Order matters: bad requests should
+    // burn the smallest possible amount of CPU.
+    let top_k = body.get("top_k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    // v1 default for `expand_entities` stays `true` (backwards-compat —
+    // see RFC 009 §"Backwards-compat contract"). The /v2 endpoints
+    // shipped in PR-6 will flip the default to `false`.
+    let expand_entities = body
+        .get("expand_entities")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    // Observability: count + histogram every recall request, regardless
+    // of fate. Dashboards key on these for traffic shape analysis.
+    crate::metrics::record_recall_request("v1", expand_entities);
+    crate::metrics::record_recall_top_k("v1", top_k);
+
+    // Hard cap — RFC 009 §4 Layer 3. Reject before HNSW search so a
+    // misconfigured client requesting top_k=10000 gets a 400 in
+    // microseconds instead of saturating a voter for seconds.
+    if let Err(reason) =
+        crate::admission::check_top_k(top_k, state.admission.cfg.hard_top_k_cap)
+    {
+        let status = StatusCode::from_u16(reason.http_status())
+            .unwrap_or(StatusCode::BAD_REQUEST);
+        return Err((
+            status,
+            Json(json!({
+                "error": reason.message(),
+                "reason": reason.metric_label(),
+                "hard_top_k_cap": state.admission.cfg.hard_top_k_cap,
+            })),
+        ));
+    }
+
+    // Acquire admission permits BEFORE auth/engine resolution. Rejecting
+    // on capacity is cheaper than resolving the tenant for a request
+    // we're going to reject anyway. RAII: permits drop on function exit.
+    let _permits = match state
+        .admission
+        .acquire_recall_permits(expand_entities)
+        .await
+    {
+        Ok(p) => p,
+        Err(reason) => {
+            let status = StatusCode::from_u16(reason.http_status())
+                .unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+            return Err((
+                status,
+                Json(json!({
+                    "error": reason.message(),
+                    "reason": reason.metric_label(),
+                    "retry_after_ms": 200,
+                })),
+            ));
+        }
+    };
+
     let (_, engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
@@ -550,7 +651,7 @@ async fn recall(
             .as_str()
             .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'query'"))?
             .into(),
-        top_k: body.get("top_k").and_then(|v| v.as_u64()).unwrap_or(10) as usize,
+        top_k,
         memory_type: body
             .get("memory_type")
             .and_then(|v| v.as_str())
@@ -559,10 +660,7 @@ async fn recall(
             .get("include_consolidated")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
-        expand_entities: body
-            .get("expand_entities")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
+        expand_entities,
         namespace: body
             .get("namespace")
             .and_then(|v| v.as_str())
@@ -1585,6 +1683,271 @@ async fn list_flagged(
     execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
+// ── RFC 010 PR-5: Jepsen / debug surface ───────────────────────────
+
+/// Verify the caller holds the cluster master token. Debug endpoints
+/// are operator-only — they're destructive when used wrong (fault
+/// injection drops cluster traffic), so PR-5 keeps the gate strict.
+/// RFC 014-B will replace this with an RBAC scope check.
+fn require_master_token(state: &AppState, headers: &axum::http::HeaderMap) -> Result<(), AppError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "missing Bearer token"))?;
+    if let Some(ref cluster) = state.cluster {
+        if let Some(ref secret) = cluster.config.cluster_secret {
+            if token == secret.as_str() {
+                return Ok(());
+            }
+        }
+    }
+    // Single-node mode without a configured cluster secret: deny outright.
+    // Safer than auto-allowing any valid bearer; debug endpoints SHOULD
+    // require explicit operator opt-in via cluster_secret.
+    Err(app_error(
+        StatusCode::FORBIDDEN,
+        "debug endpoints require the cluster master token",
+    ))
+}
+
+async fn debug_history(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(tenant_id): AxumPath<i64>,
+    axum::extract::Query(params): axum::extract::Query<crate::debug::history::HistoryParams>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("debug_history");
+    require_master_token(&state, &headers)?;
+    let resp = crate::debug::history::read_history(
+        &state.commit_log,
+        crate::commit::TenantId::new(tenant_id),
+        &params,
+    )
+    .await
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("read_history failed: {e}"),
+        )
+    })?;
+    Ok(Json(serde_json::to_value(resp).map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("history serialize failed: {e}"),
+        )
+    })?))
+}
+
+#[derive(serde::Deserialize)]
+struct DebugFaultInjectBody {
+    fault: crate::debug::FaultKind,
+    /// Auto-clear after this many seconds. Useful for self-cleaning
+    /// chaos tests that don't want to leave a leaked fault on a node
+    /// after a CI run dies.
+    ttl_secs: Option<u64>,
+}
+
+async fn debug_fault_inject(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<DebugFaultInjectBody>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("debug_fault_inject");
+    require_master_token(&state, &headers)?;
+    let id = state.fault_registry.inject(body.fault, body.ttl_secs);
+    Ok(Json(json!({
+        "fault_id": id.to_string(),
+    })))
+}
+
+async fn debug_fault_list(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("debug_fault_list");
+    require_master_token(&state, &headers)?;
+    let faults = state.fault_registry.list();
+    Ok(Json(serde_json::to_value(faults).map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("fault list serialize failed: {e}"),
+        )
+    })?))
+}
+
+async fn debug_fault_clear(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("debug_fault_clear");
+    require_master_token(&state, &headers)?;
+    let n = state.fault_registry.clear();
+    Ok(Json(json!({ "cleared": n })))
+}
+
+async fn debug_fault_remove(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(fault_id): AxumPath<u64>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("debug_fault_remove");
+    require_master_token(&state, &headers)?;
+    let removed = state
+        .fault_registry
+        .remove(crate::debug::FaultId::new(fault_id));
+    if removed {
+        Ok(Json(json!({ "removed": true })))
+    } else {
+        Err(app_error(
+            StatusCode::NOT_FOUND,
+            format!("no fault with id fault_{fault_id}"),
+        ))
+    }
+}
+
+// ── Phase 1 polish: jobs + migrations admin surface ────────────────
+
+#[derive(serde::Deserialize)]
+struct JobsListParams {
+    /// Filter by tenant id (optional).
+    tenant: Option<i64>,
+    /// Filter by state ("Pending" | "Leased" | "Succeeded" | "Failed" | "Cancelled").
+    state: Option<String>,
+    /// Maximum entries to return. Capped at 500 server-side.
+    limit: Option<usize>,
+}
+
+const MAX_JOBS_LIST_LIMIT: usize = 500;
+
+async fn jobs_list(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<JobsListParams>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("jobs_list");
+    require_master_token(&state, &headers)?;
+    let tenant_filter = params.tenant.map(crate::commit::TenantId::new);
+    let state_filter = params
+        .state
+        .as_deref()
+        .and_then(crate::jobs::JobState::from_str);
+    let limit = params.limit.unwrap_or(100).min(MAX_JOBS_LIST_LIMIT);
+    let records = state
+        .jobs
+        .list(tenant_filter, state_filter, limit)
+        .await
+        .map_err(|e| {
+            app_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("jobs list failed: {e}"),
+            )
+        })?;
+    Ok(Json(serde_json::to_value(records).map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("jobs list serialize failed: {e}"),
+        )
+    })?))
+}
+
+async fn jobs_get(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(job_id_str): AxumPath<String>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("jobs_get");
+    require_master_token(&state, &headers)?;
+    let uuid = job_id_str.parse::<uuid7::Uuid>().map_err(|e| {
+        app_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid job id `{job_id_str}`: {e}"),
+        )
+    })?;
+    let record = state
+        .jobs
+        .get(crate::jobs::JobId(uuid))
+        .await
+        .map_err(|e| match e {
+            crate::jobs::JobError::NotFound { .. } => {
+                app_error(StatusCode::NOT_FOUND, e.to_string())
+            }
+            other => app_error(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+        })?;
+    Ok(Json(serde_json::to_value(record).map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("job serialize failed: {e}"),
+        )
+    })?))
+}
+
+async fn jobs_cancel(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(job_id_str): AxumPath<String>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("jobs_cancel");
+    require_master_token(&state, &headers)?;
+    let uuid = job_id_str.parse::<uuid7::Uuid>().map_err(|e| {
+        app_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid job id `{job_id_str}`: {e}"),
+        )
+    })?;
+    state
+        .jobs
+        .cancel(crate::jobs::JobId(uuid))
+        .await
+        .map_err(|e| match e {
+            crate::jobs::JobError::NotFound { .. } => {
+                app_error(StatusCode::NOT_FOUND, e.to_string())
+            }
+            crate::jobs::JobError::TerminalState { .. } => {
+                app_error(StatusCode::CONFLICT, e.to_string())
+            }
+            other => app_error(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+        })?;
+    Ok(Json(json!({ "cancelled": job_id_str })))
+}
+
+async fn admin_migrations_list(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("admin_migrations");
+    require_master_token(&state, &headers)?;
+    // Migrations are tracked separately per SQLite file. Surface the
+    // commit_log + jobs DBs (the two we know about). Future RFCs adding
+    // per-tenant DBs will register them here.
+    let mut all = serde_json::json!({});
+    // Re-open each DB read-only via a fresh connection so we don't
+    // compete with the live committer's mutex. SQLite read-only doesn't
+    // lock-conflict with WAL writes.
+    let commit_log_path = state.data_dir.join("commit_log.sqlite");
+    let jobs_path = state.data_dir.join("jobs.sqlite");
+    for (label, path) in [
+        ("commit_log", &commit_log_path),
+        ("jobs", &jobs_path),
+    ] {
+        let summary = match rusqlite::Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) {
+            Ok(conn) => match crate::migrations::MigrationRunner::applied_summary(&conn) {
+                Ok(rows) => serde_json::json!(rows
+                    .iter()
+                    .map(|(id, name)| serde_json::json!({"id": id, "name": name}))
+                    .collect::<Vec<_>>()),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            },
+            Err(e) => serde_json::json!({"error": format!("open failed: {e}")}),
+        };
+        all[label] = summary;
+    }
+    Ok(Json(all))
+}
+
 /// Simple timestamp for backup filenames.
 fn chrono_ts() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1597,7 +1960,19 @@ fn chrono_ts() -> String {
 
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let body_limit = state.admission.cfg.max_request_body_bytes;
+    // Build the openraft sub-router up-front so we can merge it AFTER
+    // the AppState-typed routes have all been chained. Order matters:
+    // axum's `.merge()` unifies state types, and merging a state=()
+    // router (these openraft routes set their own state via
+    // `with_state(raft)`, so they expose state=() upward) before the
+    // AppState routes confuses inference. Built here, merged at the
+    // bottom of the chain.
+    let raft_sub_router = state.raft.as_ref().map(|assembly| {
+        crate::raft::raft_status_router(assembly.raft.clone())
+            .merge(crate::raft::raft_receive_router(assembly.raft.clone()))
+    });
+    let mut app = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/health/deep", get(health_deep))
         .route("/v1/remember", post(remember))
@@ -1627,6 +2002,30 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/contest", get(get_contest))
         .route("/v1/move_events", post(record_move_event))
         .route("/v1/flagged_propositions", get(list_flagged))
-        .route("/metrics", get(metrics))
-        .with_state(state)
+        // RFC 010 PR-5 Jepsen / debug surface (cluster master token required)
+        .route("/v1/debug/history/{tenant_id}", get(debug_history))
+        .route("/v1/debug/fault/inject", post(debug_fault_inject))
+        .route("/v1/debug/fault", get(debug_fault_list))
+        .route("/v1/debug/fault/clear", post(debug_fault_clear))
+        .route("/v1/debug/fault/{fault_id}", delete(debug_fault_remove))
+        // Phase 1 polish: RFC 019 jobs admin surface (master-token gated)
+        .route("/v1/jobs", get(jobs_list))
+        .route("/v1/jobs/{job_id}", get(jobs_get))
+        .route("/v1/jobs/{job_id}", delete(jobs_cancel))
+        // Phase 1 polish: RFC 017-B migration visibility (master-token gated)
+        .route("/v1/admin/migrations", get(admin_migrations_list))
+        .route("/metrics", get(metrics));
+    // Apply layer + state, then merge the openraft sub-router (which
+    // already binds its own State<Arc<Raft>>).
+    let mut app = app
+        // RFC 009 §4 Layer 3: hard request body size cap. Bodies above
+        // `admission.max_request_body_bytes` get HTTP 413 from this layer
+        // before any handler runs. Defends against memory-blow attacks
+        // and misconfigured clients.
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(body_limit))
+        .with_state(state);
+    if let Some(raft_router) = raft_sub_router {
+        app = app.merge(raft_router);
+    }
+    app
 }

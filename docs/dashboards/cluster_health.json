@@ -1,0 +1,233 @@
+{
+  "__comment": "RFC 009 PR-1 Grafana dashboard for cluster health. Lands alongside the runtime split + scheduling-latency probe. Imports cleanly into Grafana 10+. Datasource: Prometheus (UID parametrized as $datasource).",
+  "annotations": {
+    "list": [
+      {
+        "name": "Term changes",
+        "datasource": {"type": "prometheus", "uid": "$datasource"},
+        "enable": true,
+        "expr": "increase(yantrikdb_raft_term_changes_total[1m]) > 0",
+        "iconColor": "red",
+        "titleFormat": "Raft term changed",
+        "textFormat": "term increased — possible election storm"
+      }
+    ]
+  },
+  "title": "YantrikDB — Cluster Health (RFC 009)",
+  "description": "Tracks the term=1423 thrashing fingerprint, scheduling latency (acceptance gate), and admission control health. If you see a node here misbehaving, RFC 009 isn't doing its job.",
+  "tags": ["yantrikdb", "rfc009", "raft"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Datasource"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Raft term changes (the term=1423 fingerprint)",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "yantrikdb_raft_term_changes_total",
+          "legendFormat": "term changes",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {"calcs": ["last"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "red", "value": 50}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Term-change rate (changes/min)",
+      "type": "timeseries",
+      "gridPos": {"x": 6, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "rate(yantrikdb_raft_term_changes_total[1m])",
+          "legendFormat": "term changes/sec",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 0.1}
+            ]
+          },
+          "custom": {"drawStyle": "line", "lineWidth": 2}
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Active election count",
+      "type": "stat",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "sum(yantrikdb_raft_elections_total) by (result)",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Raft task scheduling latency p99 (PR-1 acceptance gate)",
+      "description": "Under app saturation, this MUST stay below 10ms (with priority privileges) or 100ms (without). If it crosses, the runtime split + caps are not isolating Raft from app load.",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(yantrikdb_raft_task_poll_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(yantrikdb_raft_task_poll_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.005},
+              {"color": "red", "value": 0.010}
+            ]
+          },
+          "custom": {"drawStyle": "line", "lineWidth": 2, "thresholdsStyle": {"mode": "line"}}
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Heartbeat lag p50/p99",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(yantrikdb_raft_heartbeat_lag_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(yantrikdb_raft_heartbeat_lag_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 6,
+      "title": "Recall traffic by version + expand",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "rate(yantrikdb_recall_requests_total[1m])",
+          "legendFormat": "{{api_version}} expand={{expand}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Recall rejections by reason",
+      "description": "If you see steady non-zero here, admission control is firing. Spikes during incidents are normal (the system shedding load); steady state non-zero means a misbehaving client.",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "rate(yantrikdb_recall_rejected_total[1m])",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "In-flight recalls (gauge)",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 20, "w": 8, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "yantrikdb_recall_in_flight",
+          "legendFormat": "in-flight",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Concurrent expanded recalls (gauge)",
+      "type": "timeseries",
+      "gridPos": {"x": 8, "y": 20, "w": 8, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "yantrikdb_expansion_concurrent",
+          "legendFormat": "expanded concurrent",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Recall top_k distribution (v1)",
+      "type": "heatmap",
+      "gridPos": {"x": 16, "y": 20, "w": 8, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {
+          "expr": "sum(rate(yantrikdb_recall_request_top_k_bucket{api_version=\"v1\"}[1m])) by (le)",
+          "legendFormat": "{{le}}",
+          "refId": "A",
+          "format": "heatmap"
+        }
+      ]
+    }
+  ]
+}

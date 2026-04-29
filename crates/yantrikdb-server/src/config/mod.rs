@@ -1,6 +1,19 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
+pub mod live_reload;
+pub mod tenant_overrides;
+pub mod versioned;
+pub mod watch;
+
+pub use live_reload::{Reloadable, ReloadError, ReloadOutcome};
+pub use tenant_overrides::{
+    InMemoryTenantConfigStore, OverrideValue, TenantConfigError, TenantConfigOverride,
+    TenantConfigStore,
+};
+pub use versioned::{ConfigDelta, ConfigVersion, VersionedConfig};
+pub use watch::{ConfigWatch, ConfigWatchSender};
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -12,6 +25,9 @@ pub struct ServerConfig {
     pub background: BackgroundSection,
     pub limits: LimitsSection,
     pub cluster: ClusterSection,
+    /// RFC 014-A: cluster-transport mTLS. Optional in legacy cluster
+    /// mode; production gate for RFC 010 PR-4 openraft.
+    pub cluster_tls: crate::security::ClusterTlsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -191,6 +207,13 @@ pub struct ClusterSection {
 
     /// Replication mode: async (default) or sync.
     pub replication_mode: ReplicationMode,
+
+    /// RFC 010 PR-4: which Raft engine drives the cluster. Defaults to
+    /// `Disabled` (single-node, no Raft). `OpenRaft` activates the
+    /// production-grade openraft engine — and triggers the mTLS
+    /// production gate at server startup (see
+    /// [`crate::raft::build_raft_cluster`]).
+    pub raft_mode: crate::raft::RaftClusterMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -235,6 +258,7 @@ impl Default for ClusterSection {
             election_timeout_ms: 5000,
             cluster_secret: None,
             replication_mode: ReplicationMode::Async,
+            raft_mode: crate::raft::RaftClusterMode::Disabled,
         }
     }
 }

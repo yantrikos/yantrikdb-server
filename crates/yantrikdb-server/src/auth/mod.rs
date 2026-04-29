@@ -2,9 +2,35 @@
 //!
 //! Tokens are `ydb_<64 hex chars>` (32 bytes of randomness).
 //! Stored as SHA-256 hashes in control.db.
+//!
+//! ## RFC 014-B Auth / RBAC substrate
+//!
+//! Submodules add the trait surface for the Auth/RBAC layer:
+//! - [`scopes`] — typed scope enum + scope set (bitset).
+//! - [`principal`] — [`principal::Principal`] + [`principal::AuthOutcome`].
+//! - [`provider`] — [`provider::AuthProvider`] trait + [`provider::AuthError`].
+//! - [`audit`] — [`audit::AuditEvent`] + [`audit::AuditSink`] trait.
+//!
+//! The `tower::Layer` middleware and the control-DB-backed
+//! `AuthProvider` impl are NOT in this substrate slice — they're
+//! deferred to a follow-up PR. Substrate composition is interface +
+//! tests + reference impls (in-memory provider, in-memory audit sink)
+//! so handlers and integration tests can plug them in immediately.
 
 use rand::Rng;
 use sha2::{Digest, Sha256};
+
+pub mod audit;
+pub mod principal;
+pub mod provider;
+pub mod scopes;
+
+pub use audit::{
+    AuditEvent, AuditEventKind, AuditOutcome, AuditSink, InMemoryAuditSink, NoopAuditSink,
+};
+pub use principal::{AuthOutcome, Principal};
+pub use provider::{AuthError, AuthProvider, InMemoryAuthProvider};
+pub use scopes::{Scope, ScopeSet};
 
 /// Generate a new token: `ydb_<64 hex chars>`.
 pub fn generate_token() -> String {

@@ -22,6 +22,7 @@ YantrikDB is different. It's a **cognitive memory engine** — embed it, run it 
 [![PyPI](https://img.shields.io/pypi/v/yantrikdb)](https://pypi.org/project/yantrikdb/)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fyantrikos%2Fyantrikdb-blue)](https://github.com/yantrikos/yantrikdb-server/pkgs/container/yantrikdb)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![SafeSkill 87/100](https://img.shields.io/badge/SafeSkill-87%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/yantrikos-yantrikdb-server)
 
 ![YantrikDB demo: storing three facts, recalling them, then think() flagging a contradiction between two memories](docs/images/demo.gif)
 

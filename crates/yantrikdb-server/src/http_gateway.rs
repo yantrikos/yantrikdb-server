@@ -1356,7 +1356,18 @@ async fn control_snapshot(
 ///
 /// Takes a consistent snapshot by WAL-checkpointing then copying the SQLite
 /// file while holding the engine lock. Returns the backup path + BLAKE3
-/// checksum. Authenticated by cluster master token.
+/// checksum.
+///
+/// ## Authentication
+///
+/// Two acceptable tokens (issue #7 fix):
+/// 1. **Cluster master token** — accepted always. Existing cluster-mode
+///    behavior. Allows snapshotting any database.
+/// 2. **Per-database token for the target database** — accepted in any
+///    mode (single-node OR cluster). The token must authenticate against
+///    the SAME database named in the request body. Single-node operators
+///    have no cluster master token; this lets them snapshot their own
+///    database with the token they already have.
 ///
 /// Body: `{"database": "default", "output_dir": "/tmp/backups"}` (optional
 /// output_dir, defaults to data_dir/snapshots/).
@@ -1365,13 +1376,19 @@ async fn admin_snapshot(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
-    // Require cluster master token
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "missing Bearer token"))?;
 
+    let db_name = body
+        .get("database")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+
+    // Try cluster master first (preserves cluster-mode behavior).
     let is_master = state
         .cluster
         .as_ref()
@@ -1380,17 +1397,36 @@ async fn admin_snapshot(
         .unwrap_or(false);
 
     if !is_master {
-        return Err(app_error(
-            StatusCode::FORBIDDEN,
-            "snapshot requires cluster master token",
-        ));
+        // Fall back to per-database token. The token must authenticate
+        // against the SAME database being snapshotted — operators can't
+        // use a token for db A to snapshot db B.
+        let token_hash = auth::hash_token(token);
+        let control = state.control.lock();
+        let token_db_id = control
+            .validate_token(&token_hash)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "invalid or revoked token"))?;
+        let target_db = control
+            .get_database(&db_name)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or_else(|| {
+                app_error(
+                    StatusCode::NOT_FOUND,
+                    format!("database '{}' not found", db_name),
+                )
+            })?;
+        drop(control);
+        if token_db_id != target_db.id {
+            return Err(app_error(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "token does not authenticate database '{}' — provide cluster master token \
+                     or a token for that specific database",
+                    db_name
+                ),
+            ));
+        }
     }
-
-    let db_name = body
-        .get("database")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_string();
 
     let output_dir = body
         .get("output_dir")

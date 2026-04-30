@@ -90,7 +90,26 @@ impl EncryptionSection {
 
     /// Resolve the master key from this configuration. Generates one if needed.
     pub fn resolve_key(&self, data_dir: &Path) -> anyhow::Result<Option<[u8; 32]>> {
-        // Priority 1: explicit hex value
+        // Priority 0: env var override (issue #6 — env-friendly setup).
+        // Documented as the env-equivalent of `[encryption] key_hex`. Takes
+        // precedence over TOML so an operator can rotate the key without
+        // editing the file.
+        if let Ok(hex_str) = std::env::var("YANTRIKDB_ENCRYPTION_KEY_HEX") {
+            let bytes = hex::decode(hex_str.trim())
+                .map_err(|e| anyhow::anyhow!("invalid YANTRIKDB_ENCRYPTION_KEY_HEX: {}", e))?;
+            if bytes.len() != 32 {
+                anyhow::bail!(
+                    "YANTRIKDB_ENCRYPTION_KEY_HEX must decode to exactly 32 bytes (got {})",
+                    bytes.len()
+                );
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            tracing::info!("encryption: enabled via YANTRIKDB_ENCRYPTION_KEY_HEX env var");
+            return Ok(Some(key));
+        }
+
+        // Priority 1: explicit hex value in TOML
         if let Some(ref hex_str) = self.key_hex {
             let bytes = hex::decode(hex_str)
                 .map_err(|e| anyhow::anyhow!("invalid encryption.key_hex: {}", e))?;
@@ -352,5 +371,59 @@ impl ServerConfig {
 
     pub fn control_db_path(&self) -> PathBuf {
         self.server.data_dir.join("control.db")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #6 regression: YANTRIKDB_ENCRYPTION_KEY_HEX env var must be
+    /// honored as the env-equivalent of `[encryption] key_hex` in TOML.
+    /// Pre-fix: env var was silently ignored, encryption disabled.
+    ///
+    /// All env-var assertions consolidated into ONE test because env vars
+    /// are process-global and Rust runs tests in parallel by default.
+    /// Splitting these into multiple #[test]s race on the shared var.
+    #[test]
+    fn encryption_env_var_handling() {
+        const VAR: &str = "YANTRIKDB_ENCRYPTION_KEY_HEX";
+        let cfg_default = EncryptionSection {
+            key_path: None,
+            auto_generate: false,
+            key_hex: None,
+        };
+
+        // Case 1: 64 hex chars (32 bytes) — env var produces the right key.
+        let key_hex = "f".repeat(64);
+        std::env::set_var(VAR, &key_hex);
+        let resolved = cfg_default.resolve_key(Path::new("/tmp")).unwrap();
+        assert_eq!(resolved, Some([0xffu8; 32]), "env var should produce key");
+
+        // Case 2: invalid hex — error mentions the env var name.
+        std::env::set_var(VAR, "not-hex-at-all");
+        let err = cfg_default.resolve_key(Path::new("/tmp")).unwrap_err();
+        assert!(err.to_string().contains(VAR));
+
+        // Case 3: valid hex but wrong byte length — error mentions length.
+        std::env::set_var(VAR, "ab"); // 1 byte
+        let err = cfg_default.resolve_key(Path::new("/tmp")).unwrap_err();
+        assert!(err.to_string().contains("32 bytes"));
+
+        // Case 4: env var takes precedence over TOML — set both, env wins.
+        std::env::set_var(VAR, &key_hex);
+        let cfg_with_toml = EncryptionSection {
+            key_path: None,
+            auto_generate: false,
+            key_hex: Some("0".repeat(64)), // would resolve to all-zeros
+        };
+        let resolved = cfg_with_toml.resolve_key(Path::new("/tmp")).unwrap();
+        assert_eq!(
+            resolved,
+            Some([0xffu8; 32]),
+            "env var must beat TOML key_hex"
+        );
+
+        std::env::remove_var(VAR);
     }
 }

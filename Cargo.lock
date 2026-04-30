@@ -4891,8 +4891,8 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb"
-version = "0.6.2"
-source = "git+https://github.com/yantrikos/yantrikdb.git?branch=main#cd41207aae3a2498d8001b275cf24e7a74fdb446"
+version = "0.6.3"
+source = "git+https://github.com/yantrikos/yantrikdb.git?branch=main#3b97afa24ecc9f4b2e6eb6165161cbf61fc437ce"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -4935,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb-server"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4972,7 +4972,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid7",
- "yantrikdb 0.6.2",
+ "yantrikdb 0.6.3",
  "yantrikdb-protocol",
 ]
 

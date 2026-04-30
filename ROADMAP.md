@@ -48,20 +48,20 @@ proven via leader-kill failover tests), but the operator surface
 around it has gaps that surfaced in real-world ops on 2026-04-29
 during a routine voter migration.
 
-The four critical-path issues for `v0.9.0-beta` are tracked on the
-issue tracker and linked here once filed:
+The four critical-path issues for `v0.9.0-beta`:
 
-1. **Cluster reform tool: automated raft-lite → openraft migration.**
-   One-shot CLI replacing the current 7-step manual procedure.
-2. **Upgrade openraft 0.9 → 0.10-alpha + wire `transfer_leader`.**
-   Unblocks issue #18 (preferred-leader pinning) and the manual
-   leader-selection ask.
-3. **Cluster membership API CLI:** `add-learner`, `promote`,
+1. **#22 — Cluster reform tool: automated raft-lite → openraft
+   migration.** One-shot CLI replacing the current 7-step manual
+   procedure.
+2. **#23 — Upgrade openraft 0.9 → 0.10 + wire `transfer_leader`.**
+   Unblocks #18 (preferred-leader pinning) and manual
+   leader-selection.
+3. **#24 — Cluster membership API CLI:** `add-learner`, `promote`,
    `transfer-leader`, `remove` subcommands. Replaces the
    "edit toml + sed + restart" dance.
-4. **Chunked snapshot streaming with parallel applier per engine.**
-   Replaces the current single-threaded full-snapshot path that takes
-   ~30 min for a 290 MB engine snapshot.
+4. **#25 — Chunked snapshot streaming with parallel applier per
+   engine.** Replaces the current single-threaded full-snapshot
+   path that takes ~30 min for a 290 MB engine snapshot.
 
 Operator visibility — paired but separately tracked:
 

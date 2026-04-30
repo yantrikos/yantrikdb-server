@@ -419,11 +419,26 @@ async fn remember(
     // Quota check: max_memories
     check_memory_quota(&state, db_id, &engine, 1)?;
 
+    let text: String = body["text"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'text'"))?
+        .into();
+
+    // Issue #19: pre-embed in the server before delegating to the
+    // engine. If the embedder hiccups, we return 5xx synchronously so
+    // the caller can retry — instead of silently storing a row with
+    // `embedding=NULL` that poisons subsequent /v1/recall.
+    let client_supplied: Option<Vec<f32>> = body.get("embedding").and_then(|v| {
+        v.as_array().map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_f64().map(|f| f as f32))
+                .collect()
+        })
+    });
+    let embedding = resolve_embedding(state.as_ref(), &text, client_supplied).await?;
+
     let cmd = Command::Remember {
-        text: body["text"]
-            .as_str()
-            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'text'"))?
-            .into(),
+        text,
         memory_type: body
             .get("memory_type")
             .and_then(|v| v.as_str())
@@ -462,15 +477,70 @@ async fn remember(
             .get("emotional_state")
             .and_then(|v| v.as_str())
             .map(String::from),
-        embedding: body.get("embedding").and_then(|v| {
-            v.as_array().map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_f64().map(|f| f as f32))
-                    .collect()
-            })
-        }),
+        embedding,
     };
     execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+}
+
+/// Issue #19 helper: resolve the embedding for a `/v1/remember`-style
+/// payload, failing fast if the server's built-in embedder hiccups.
+///
+/// Decision tree:
+/// 1. Caller supplied `embedding` in the request body — use it as-is.
+///    The client takes responsibility for its own embedding pipeline.
+/// 2. Server has a configured embedder — call it via `spawn_blocking`
+///    (the underlying ONNX model holds a `parking_lot::Mutex` that we
+///    must not hold across an `await`). Cache hits return in
+///    microseconds; misses pay the model cost.
+/// 3. No embedder configured — return `None` and let the engine path
+///    decide what to do (typically rejects the write or stores NULL,
+///    depending on engine config; out of this fix's scope).
+///
+/// Failure mode: if the server embedder returns an error, return
+/// `Err((500, ...))` immediately. The caller sees a clear failure
+/// signal instead of a deceptive `200 {rid: ...}` for a row that's
+/// actually broken.
+async fn resolve_embedding(
+    state: &AppState,
+    text: &str,
+    client_supplied: Option<Vec<f32>>,
+) -> Result<Option<Vec<f32>>, AppError> {
+    if client_supplied.is_some() {
+        return Ok(client_supplied);
+    }
+    let Some(embedder) = state.pool.embedder().cloned() else {
+        return Ok(None);
+    };
+    let owned_text = text.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        use yantrikdb::types::Embedder;
+        embedder.embed(&owned_text)
+    })
+    .await
+    .map_err(|join_err| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("embed task panicked: {}", join_err),
+        )
+    })?;
+    match result {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => {
+            crate::metrics::increment_embedder_failure("remember");
+            tracing::error!(
+                error = %e,
+                text_len = text.len(),
+                "embedder failed during /v1/remember; refusing to write a row with NULL embedding"
+            );
+            Err(app_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "embedder failed: {} (issue #19 — write refused to prevent NULL-embedding row that would poison recall on this namespace; please retry)",
+                    e
+                ),
+            ))
+        }
+    }
 }
 
 async fn remember_batch(
@@ -571,6 +641,63 @@ async fn remember_batch(
                 })
             }),
         });
+    }
+
+    // Issue #19: pre-embed any memory that didn't ship with a
+    // client-supplied embedding. Batch the misses through one
+    // `embed_batch` call so concurrent ONNX-mutex acquisitions are
+    // coalesced (the embedder cache + batch path was wired in
+    // commit `e52228e`). On embedder failure we return 5xx and the
+    // entire batch is rejected — partial success would land
+    // NULL-embedding rows in the engine and re-create the bug.
+    if let Some(embedder) = state.pool.embedder().cloned() {
+        let needs_embed: Vec<usize> = memories
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.embedding.is_none())
+            .map(|(i, _)| i)
+            .collect();
+        if !needs_embed.is_empty() {
+            let texts: Vec<String> = needs_embed
+                .iter()
+                .map(|&i| memories[i].text.clone())
+                .collect();
+            let result = tokio::task::spawn_blocking(move || {
+                use yantrikdb::types::Embedder;
+                let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                embedder.embed_batch(&refs)
+            })
+            .await
+            .map_err(|e| {
+                app_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("embed batch task panicked: {}", e),
+                )
+            })?;
+            match result {
+                Ok(embeddings) => {
+                    for (idx, vec) in needs_embed.iter().zip(embeddings.into_iter()) {
+                        memories[*idx].embedding = Some(vec);
+                    }
+                }
+                Err(e) => {
+                    crate::metrics::increment_embedder_failure("remember_batch");
+                    tracing::error!(
+                        error = %e,
+                        miss_count = needs_embed.len(),
+                        batch_size = memories.len(),
+                        "embedder failed during /v1/remember/batch; refusing partial-NULL write"
+                    );
+                    return Err(app_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!(
+                            "embedder failed: {} (issue #19 — batch refused to prevent NULL-embedding rows; please retry)",
+                            e
+                        ),
+                    ));
+                }
+            }
+        }
     }
 
     let cmd = Command::RememberBatch { memories };

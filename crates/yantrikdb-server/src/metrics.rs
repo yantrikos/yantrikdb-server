@@ -133,6 +133,18 @@ pub struct MetricsStore {
     recall_request_counts: Mutex<HashMap<(&'static str, bool), u64>>,
     /// Histogram: requested top_k values, labelled by api_version.
     recall_request_top_k: Mutex<HashMap<&'static str, HistogramData>>,
+
+    /// Counter: embedder failures during write paths, labelled by handler
+    /// (`remember` | `remember_batch`). Issue #19 — surfaces the
+    /// previously-silent NULL-embedding writes that poisoned recall on
+    /// the namespace.
+    embedder_failures: Mutex<HashMap<&'static str, u64>>,
+
+    /// Gauge: per-tenant count of rows with `embedding IS NULL`. Issue
+    /// #20 — should be 0 in steady state (issue #19 closes the writer
+    /// side). Hourly background healthcheck updates this. Non-zero
+    /// values indicate pre-v0.8.1 stale data or a regression.
+    null_embedding_counts: Mutex<HashMap<i64, i64>>,
 }
 
 impl MetricsStore {
@@ -160,6 +172,8 @@ impl MetricsStore {
             openraft_learners: std::sync::atomic::AtomicU64::new(0),
             recall_request_counts: Mutex::new(HashMap::new()),
             recall_request_top_k: Mutex::new(HashMap::new()),
+            embedder_failures: Mutex::new(HashMap::new()),
+            null_embedding_counts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -432,6 +446,37 @@ impl MetricsStore {
 pub fn increment_recall_rejected(reason: &'static str) {
     let mut map = global().recall_rejected_counts.lock();
     *map.entry(reason).or_insert(0) += 1;
+}
+
+/// Issue #19: increment the embedder-failure counter for write paths.
+/// `handler` MUST be `"remember"` or `"remember_batch"` — pinned for
+/// dashboard query stability. Surfaces previously-silent failures that
+/// would have stored NULL-embedding rows and poisoned recall.
+pub fn increment_embedder_failure(handler: &'static str) {
+    let mut map = global().embedder_failures.lock();
+    *map.entry(handler).or_insert(0) += 1;
+}
+
+/// Read a snapshot of embedder-failure counts. For `/metrics` rendering
+/// and ops dashboards. Returns `(handler, count)` pairs.
+pub fn embedder_failure_counts() -> Vec<(&'static str, u64)> {
+    let map = global().embedder_failures.lock();
+    map.iter().map(|(k, v)| (*k, *v)).collect()
+}
+
+/// Issue #20: set the per-tenant NULL-embedding gauge. Called by the
+/// hourly background healthcheck loop. Steady-state value should be 0
+/// after v0.8.1 is deployed (issue #19 closes the writer-side hole).
+pub fn set_null_embedding_count(tenant_id: i64, count: i64) {
+    let mut map = global().null_embedding_counts.lock();
+    map.insert(tenant_id, count);
+}
+
+/// Read snapshot of NULL-embedding counts per tenant. For `/metrics`
+/// rendering. Returns `(tenant_id, count)` pairs.
+pub fn null_embedding_counts_snapshot() -> Vec<(i64, i64)> {
+    let map = global().null_embedding_counts.lock();
+    map.iter().map(|(k, v)| (*k, *v)).collect()
 }
 
 /// Set the in-flight recall gauge.

@@ -97,6 +97,16 @@ impl TenantPool {
         self.engines.lock().len()
     }
 
+    /// Borrow the configured embedder, if any. The HTTP layer uses this
+    /// to pre-embed `/v1/remember` payloads before delegating to the
+    /// engine — see issue #19. Pre-embedding lets us fail-fast when
+    /// the model service hiccups instead of silently writing a row
+    /// with `embedding=NULL` that then poisons the namespace's
+    /// similarity-recall path.
+    pub fn embedder(&self) -> Option<&FastEmbedder> {
+        self.embedder.as_ref()
+    }
+
     /// Get the data directory path.
     pub fn data_dir(&self) -> &Path {
         &self.data_dir

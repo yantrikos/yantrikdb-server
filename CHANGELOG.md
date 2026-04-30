@@ -5,6 +5,59 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-04-30
+
+Operational patch. Fixes two bugs reported by `yantrikdb-agi` after
+two blocking incidents on 2026-04-29 (21:00 UTC + 01:00 UTC) where
+`/v1/recall` returned 500 for the entire `skill_substrate` namespace.
+
+### Fixed
+
+- **#19** `/v1/remember` and `/v1/remember/batch` could silently store
+  rows with `embedding=NULL` when the embedder service hiccupped
+  (timeout, transient ONNX runtime failure, etc.). The endpoint
+  returned 200 with a normal `{rid: ...}` response while the row was
+  effectively broken — and a single NULL-embedding row poisoned every
+  subsequent `/v1/recall` on the namespace with
+  `database error: Invalid column type Null at index: 1, name: embedding`.
+  Both handlers now pre-embed in the server (using the existing
+  `FastEmbedder` + cache wired in v0.8.0) before delegating to the
+  engine. On embedder failure, the request returns 5xx synchronously
+  so the caller can retry. The batch handler runs misses through one
+  coalesced `embed_batch` call so concurrent ONNX-mutex acquisitions
+  remain efficient. New Prometheus counter:
+  `yantrikdb_embedder_failures_total{handler}`.
+
+- **#20** No proactive surface for detecting `memories` rows with
+  `embedding IS NULL`. Operators only discovered them when a recall
+  failed. Added an hourly background healthcheck that counts
+  NULL-embedding rows per tenant and emits
+  `yantrikdb_null_embedding_count{tenant}` Prometheus gauge.
+  Non-zero values trigger a `tracing::warn!` line with the SQL one-liner
+  to remediate. Should be 0 in steady state on v0.8.1+ deployments;
+  non-zero indicates pre-v0.8.1 stale data or a regression to flag.
+
+### Deferred
+
+- **#18** Leader affinity / preferred-leader pinning was investigated
+  for v0.8.1 inclusion but blocked: openraft 0.9.24 (the version we
+  pin) does not expose `transfer_leader` — that's a 0.10 feature.
+  Bundling the openraft 0.10-alpha upgrade with leader-affinity is
+  the right path; it lands in v0.9.0. See issue #18 comments for the
+  blocker analysis. Operational workaround unchanged: manual CT
+  bounce + the tuned watchdog (CHECK_INTERVAL=60, HANG_RECHECK=120,
+  MAX_HANGS=5) keeps the bounce contained.
+
+### Notes for operators
+
+- Existing pre-v0.8.1 databases may have NULL-embedding rows from
+  prior writes. After upgrading, watch `yantrikdb_null_embedding_count`
+  for an hour; if non-zero, run
+  `DELETE FROM memories WHERE embedding IS NULL` against the affected
+  tenant DB to clean up. The fix prevents new ones; cleanup is one-shot.
+
+[0.8.1]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.1
+
 ## [0.8.0] — 2026-04-29
 
 Substrate-first release. Twelve RFC interface layers shipped as a single

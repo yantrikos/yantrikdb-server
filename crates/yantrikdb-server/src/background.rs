@@ -109,6 +109,24 @@ impl WorkerRegistry {
             }));
         }
 
+        // NULL-embedding healthcheck (issue #20). Surfaces rows whose
+        // embedder failed silently — see issue #19 for the writer-side
+        // root cause that was fixed in v0.8.1. This check is the
+        // observability defense layer: if a regression re-introduces
+        // silent NULL writes, operators see it via the
+        // `yantrikdb_null_embedding_count` Prometheus gauge instead of
+        // discovering it when /v1/recall starts 500-ing.
+        {
+            let interval = Duration::from_secs(60 * 60); // every hour
+            let engine = Arc::clone(&engine);
+            let token = cancel.clone();
+            let name = db_name.clone();
+            let id = db_id;
+            handles.push(tokio::spawn(async move {
+                null_embedding_check_loop(engine, interval, token, name, id).await;
+            }));
+        }
+
         tracing::info!(
             db_id,
             db_name = %db_name,
@@ -384,6 +402,81 @@ pub async fn run_oplog_gc_loop(
         if let Ok(Some(count)) = result {
             if count > 0 {
                 tracing::info!(db = %db_name, pruned = count, "oplog GC complete");
+            }
+        }
+    }
+}
+
+/// NULL-embedding healthcheck (issue #20).
+///
+/// Periodically counts rows in `memories` with `embedding IS NULL` per
+/// tenant, emits the count to a Prometheus gauge, and logs a warning
+/// when count > 0. The writer-side fix in v0.8.1 (issue #19) makes
+/// this scenario impossible going forward; this loop catches:
+/// - Pre-v0.8.1 data already on disk
+/// - Future regressions that re-introduce the silent-NULL bug
+/// - Operator-induced state (manual SQL inserts, bad imports)
+///
+/// Cheap query: a covering index on `embedding` could be added if the
+/// COUNT(*) becomes expensive, but at typical tenant sizes the scan
+/// is well under 100ms and runs hourly.
+async fn null_embedding_check_loop(
+    engine: Arc<Mutex<YantrikDB>>,
+    interval: Duration,
+    cancel: CancellationToken,
+    db_name: String,
+    db_id: i64,
+) {
+    // Initial delay — give the engine 5 minutes to settle after startup.
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(5 * 60)) => {}
+        _ = cancel.cancelled() => return,
+    }
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = cancel.cancelled() => {
+                tracing::debug!(db = %db_name, "null-embedding healthcheck shutting down");
+                return;
+            }
+        }
+
+        let result = tokio::task::spawn_blocking({
+            let engine = Arc::clone(&engine);
+            let db_name = db_name.clone();
+            move || -> Option<i64> {
+                let db = engine.lock();
+                let conn = db.conn();
+                match conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE embedding IS NULL",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                ) {
+                    Ok(n) => Some(n),
+                    Err(e) => {
+                        tracing::warn!(
+                            db = %db_name,
+                            error = %e,
+                            "null-embedding healthcheck query failed"
+                        );
+                        None
+                    }
+                }
+            }
+        })
+        .await;
+
+        if let Ok(Some(count)) = result {
+            crate::metrics::set_null_embedding_count(db_id, count);
+            if count > 0 {
+                tracing::warn!(
+                    db = %db_name,
+                    null_embedding_count = count,
+                    "null-embedding rows detected — these poison /v1/recall on the namespace; \
+                     run `DELETE FROM memories WHERE embedding IS NULL` to remediate \
+                     (issue #20)"
+                );
             }
         }
     }

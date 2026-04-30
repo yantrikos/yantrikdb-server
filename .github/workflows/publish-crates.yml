@@ -35,8 +35,13 @@ jobs:
       #     the v0.7.3 manifest-verification error)
       #   - exits non-zero on any genuine publish failure
       #
-      # Order matches the dependency graph: protocol → engine → witness →
-      # server → yql.
+      # Order matches the dependency graph: protocol → witness → server → yql.
+      # NOTE: the `yantrikdb` (core engine) crate lives in the separate
+      # yantrikos/yantrikdb repo and is published by THAT repo's own
+      # workflow. Don't try to publish it from here — `cargo publish -p
+      # yantrikdb` against this workspace fails with "package ID
+      # specification did not match any packages" (caught at v0.8.0
+      # release; engine repo workflow is independent).
 
       - name: Publish yantrikdb-protocol
         env:
@@ -44,14 +49,6 @@ jobs:
         run: .github/scripts/publish-crate.sh yantrikdb-protocol
 
       - name: Wait for protocol to be indexed
-        run: sleep 30
-
-      - name: Publish yantrikdb (core)
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: .github/scripts/publish-crate.sh yantrikdb
-
-      - name: Wait for core to be indexed
         run: sleep 30
 
       - name: Publish yantrikdb-witness

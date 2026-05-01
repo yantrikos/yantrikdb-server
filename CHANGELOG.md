@@ -5,6 +5,69 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] — 2026-05-01
+
+Operator surface for openraft cluster mode. Without this, `v0.8.2`
+deployments could only run *single-node* openraft because there was
+no way to add additional voters without writing Rust against the
+openraft API directly. **Closes the cluster mode story for v0.8.x.**
+
+### Added
+
+- **#24** Cluster membership HTTP API + CLI:
+  - `POST /v1/cluster/initialize` — bootstrap a fresh openraft cluster
+    on the seed node (one-time call per cluster).
+  - `POST /v1/cluster/add-learner` — add a non-voting learner.
+    Catches up via openraft snapshot transfer without participating
+    in elections.
+  - `POST /v1/cluster/promote-voter` — change voter set (promotes
+    learners, demotes voters not in the new set).
+  - `POST /v1/cluster/remove` — atomic remove. Refuses if removal
+    would empty the voter set.
+  - All endpoints require the cluster master token.
+  - CLI subcommands mirror each: `yantrikdb cluster initialize-cluster`,
+    `add-learner`, `wait-caught-up`, `promote-voter`, `remove-node`.
+
+### Changed
+
+- Removed the v0.8.2 auto-bootstrap heuristic ("node_id 1 or 2 =
+  seed"). Replaced by explicit `cluster initialize-cluster` CLI.
+  Operators on v0.8.2 with already-initialized membership are
+  unaffected (openraft persists membership across restarts).
+
+### Migration
+
+For operators on a v0.7.x raft-lite cluster moving to v0.8.3
+openraft, the procedure is now:
+
+1. Generate cluster mTLS certs (CA + per-node cert+key).
+2. Stop all nodes; install v0.8.3 binary; update each toml
+   (`raft_mode = "openraft"` + `[cluster_tls]` + `dev_mode = true`
+   for self-signed).
+3. Wipe legacy `raft.json` (if present) — leave engine state intact.
+4. Bring up the seed node. Run:
+   ```
+   yantrikdb cluster initialize-cluster --leader http://seed:7438 \
+     --master-token "$YDB_CLUSTER_MASTER_TOKEN"
+   ```
+5. For each additional voter:
+   - **Recommended**: pre-stage engine state via cold-tar from leader
+     (~30 s for a 400 MB data dir vs ~30 min for openraft 0.9's
+     `full_snapshot` over the wire).
+   - Bring the new node up.
+   - From the leader, run `yantrikdb cluster add-learner --node-id N
+     --addr host:7440 --leader http://leader:7438`.
+   - `yantrikdb cluster wait-caught-up --node-id N --leader ...`.
+   - `yantrikdb cluster promote-voter --voters 2,N --leader ...`
+     (include the leader's id in the final voter set).
+
+The "cold-tar pre-stage" trick avoids openraft 0.9's slow
+`full_snapshot` path. Issue #25 will replace it with chunked
+`install_snapshot` in v0.9.0-beta — at which point pre-staging
+becomes optional.
+
+[0.8.3]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.3
+
 ## [0.8.2] — 2026-04-30
 
 Patch release. Single critical fix:

@@ -43,7 +43,8 @@ pub mod status;
 pub mod types;
 
 pub use assembly::{
-    build_raft_cluster, AssemblyError, RaftAssembly, RaftAssemblyConfig, RaftClusterMode,
+    build_raft_cluster, initialize_single_node, AssemblyError, RaftAssembly, RaftAssemblyConfig,
+    RaftClusterMode,
 };
 pub use committer::RaftCommitter;
 pub use http_network::{raft_receive_router, HttpRaftNetwork, HttpRaftNetworkFactory};

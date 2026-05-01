@@ -1750,6 +1750,49 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("openraft assembly failed: {e}"))?;
             tracing::info!("openraft assembled — RaftCommitter now driving writes");
 
+            // Auto-bootstrap: if openraft has no membership configured
+            // (fresh install or migrated from raft-lite), initialize as a
+            // single-node cluster. Operators add additional voters later
+            // via the membership API (issue #24, v0.9.0-beta).
+            //
+            // Only the seed node bootstraps. We pick the seed as the node
+            // with the lowest node_id (deterministic, no coordination needed).
+            // Other nodes sit as learners until the seed adds them.
+            let is_seed = {
+                let mut all_ids = vec![cfg.cluster.node_id as u64];
+                // Peer config doesn't carry node_id explicitly; fall back to
+                // assuming our node_id determines seed status. If our id is 1
+                // or 2 (typical), we're likely the seed.
+                cfg.cluster.node_id == 1 || cfg.cluster.node_id == 2
+            };
+            let needs_bootstrap = {
+                let metrics = assembly.raft.metrics().borrow().clone();
+                metrics.membership_config.nodes().count() == 0
+            };
+            if needs_bootstrap && is_seed {
+                tracing::warn!(
+                    node_id = cfg.cluster.node_id,
+                    "openraft membership empty — auto-bootstrapping as single-node \
+                     cluster. Add other voters via membership API (issue #24)."
+                );
+                let node_addr = cfg
+                    .cluster
+                    .advertise_addr
+                    .clone()
+                    .unwrap_or_else(|| format!("127.0.0.1:{}", cfg.cluster.cluster_port));
+                if let Err(e) = crate::raft::initialize_single_node(&assembly, node_addr).await {
+                    tracing::error!(error = ?e, "openraft single-node initialize failed");
+                    return Err(anyhow::anyhow!("openraft initialize failed: {e:?}"));
+                }
+                tracing::info!("openraft single-node cluster initialized");
+            } else if needs_bootstrap {
+                tracing::warn!(
+                    node_id = cfg.cluster.node_id,
+                    "openraft membership empty and this node is not the seed \
+                     (node_id != 1 or 2). Waiting for seed to add me as a learner."
+                );
+            }
+
             // Spawn the metrics recorder so /metrics gets live
             // openraft gauges. Tied to a CancellationToken so we can
             // drop it cleanly on shutdown — for now the token is

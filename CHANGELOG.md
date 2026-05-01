@@ -5,6 +5,37 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] — 2026-05-01
+
+`/v1/health` cleanup. Fixes a misleading status shown to operators
+running `cluster.raft_mode = "openraft"`.
+
+### Fixed
+
+- `/v1/health` now reflects **openraft state** when openraft mode is
+  active (`accepts_writes` true on the openraft leader, `term` and
+  `leader` from `RaftMetrics`, etc.). Previously it always reported
+  the legacy raft-lite view, which on a healthy openraft cluster
+  shows `accepts_writes: false` (because the raft-lite layer never
+  successfully forms a quorum once openraft is the real write path).
+
+  Discovered during the issue #28 cluster reform when both nodes of
+  a verified-working 2-voter openraft cluster reported
+  `accepts_writes: false` to monitoring scrapes — false alarm,
+  cluster was healthy.
+
+  The legacy raft-lite view is still available in the response when
+  raft-lite is the configured mode (no openraft assembly active).
+  New `raft_mode` field on the cluster block disambiguates.
+
+### Notes for operators
+
+If you were filtering on `cluster.accepts_writes` in a Grafana panel,
+no change needed — the value is now correct (true on openraft leader)
+instead of always-false on healthy openraft clusters.
+
+[0.8.5]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.5
+
 ## [0.8.4] — 2026-05-01
 
 Critical hotfix. Without this, v0.8.2/v0.8.3 openraft clusters

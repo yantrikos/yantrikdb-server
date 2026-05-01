@@ -160,7 +160,26 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "status": "ok",
         "engines_loaded": state.pool.loaded_count(),
     });
-    if let Some(ref cluster) = state.cluster {
+    // When openraft is active, the cluster block reflects openraft's view
+    // (the actual write path). Falls back to the legacy raft-lite view
+    // for non-openraft deployments. Without this preference, /v1/health
+    // misleadingly reported `accepts_writes: false` while the openraft
+    // commit path was happily accepting writes — clients monitoring
+    // /v1/health would dismiss a healthy cluster as down.
+    if let Some(ref assembly) = state.raft {
+        let metrics = assembly.raft.metrics().borrow().clone();
+        let is_leader = matches!(metrics.state, openraft::ServerState::Leader);
+        let role_str = format!("{:?}", metrics.state);
+        payload["cluster"] = json!({
+            "node_id": u64::from(metrics.id),
+            "role": role_str,
+            "term": metrics.current_term,
+            "leader": metrics.current_leader.map(u64::from),
+            "accepts_writes": is_leader,
+            "healthy": metrics.current_leader.is_some(),
+            "raft_mode": "openraft",
+        });
+    } else if let Some(ref cluster) = state.cluster {
         payload["cluster"] = json!({
             "node_id": cluster.node_id(),
             "role": format!("{:?}", cluster.state.leader_role()),
@@ -168,6 +187,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
             "leader": cluster.state.current_leader(),
             "accepts_writes": cluster.state.accepts_writes(),
             "healthy": cluster.is_healthy(),
+            "raft_mode": "raft-lite",
         });
     }
     Json(payload)

@@ -1828,6 +1828,51 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     let workers = background::WorkerRegistry::new(&cfg.background);
     let control = Arc::new(Mutex::new(control));
 
+    // v0.8.8: eager engine warm-up. A database server should serve queries
+    // at steady-state latency, not the cold-load latency of HNSW reload
+    // (~10 s for a 400 MB engine). Without this, the first query against
+    // any unloaded namespace blocks for tens of seconds — clients with
+    // default timeouts (8 s) see "transport: timeout" failures even though
+    // the server is healthy. Eager-load at startup so every database is
+    // warm before HTTP starts accepting requests.
+    //
+    // Loaded sequentially. With N databases, startup adds ~N × cold-load
+    // time. For larger fleets, switch to parallel via tokio::spawn_blocking
+    // — but sequential keeps disk I/O contention bounded and gives clean
+    // log output. Acceptable cost for a server that runs for days.
+    {
+        let dbs = control.lock().list_databases().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not enumerate databases for warm-up");
+            Vec::new()
+        });
+        let total = dbs.len();
+        if total > 0 {
+            tracing::info!(count = total, "warming up engines (eager load)");
+            let warm_start = std::time::Instant::now();
+            for (i, db) in dbs.iter().enumerate() {
+                let t0 = std::time::Instant::now();
+                match pool.get_engine(db) {
+                    Ok(_) => tracing::info!(
+                        db = %db.name,
+                        progress = format!("{}/{}", i + 1, total),
+                        elapsed_ms = t0.elapsed().as_millis() as u64,
+                        "warmed engine"
+                    ),
+                    Err(e) => tracing::warn!(
+                        db = %db.name,
+                        error = %e,
+                        "failed to warm engine — will lazy-load on first query"
+                    ),
+                }
+            }
+            tracing::info!(
+                total_elapsed_ms = warm_start.elapsed().as_millis() as u64,
+                count = total,
+                "engine warm-up complete"
+            );
+        }
+    }
+
     // Initialize cluster context if clustering is enabled
     let cluster_ctx = if cfg.cluster.is_clustered() {
         let raft_path = cfg.server.data_dir.join("raft.json");

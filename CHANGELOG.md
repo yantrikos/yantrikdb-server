@@ -5,6 +5,43 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8] — 2026-05-01
+
+Performance fix. Operators reported recall queries timing out
+(8 s default client timeout) on first hit against any namespace,
+even though steady-state recall latency is ~20 ms.
+
+### Fixed
+
+- **Eager engine warm-up at startup.** Previously engines were
+  loaded lazily on first query — `TenantPool::get_engine()` is
+  called inline from the request handler, blocking the request for
+  ~10 s while HNSW reloads from disk for a 400 MB engine. Clients
+  with default timeouts saw "transport: timeout" errors even though
+  the server was healthy.
+
+  Now: at startup, after `TenantPool` is created, the server
+  enumerates all databases from `control.db` and calls `get_engine`
+  for each (sequentially, with progress logging). HTTP starts
+  accepting requests AFTER all engines are warmed, so every recall
+  hits a loaded engine.
+
+  Cost: ~10 s × N databases at startup. Acceptable for a server
+  that runs for days; principle is "a database server should serve
+  queries at steady-state latency, not cold-load latency."
+
+  Discovered debugging architect-side recall timeouts in production
+  on a 7-database cluster. Steady-state recall is 17–23 ms warm;
+  cold-load was 11 s.
+
+### Trade-off
+
+- Startup is slower (linear in number of databases) but predictable.
+- For very large fleets (100+ databases), consider parallel warm-up
+  via `tokio::spawn_blocking` — filed for v0.9.x.
+
+[0.8.8]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.8
+
 ## [0.8.7] — 2026-05-01
 
 Critical bug fix. v0.8.5 fixed `/v1/health` to reflect openraft state

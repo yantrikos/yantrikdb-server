@@ -5,6 +5,61 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10] — 2026-05-01
+
+Critical follow-up to v0.8.9. The admission-control inflight counter
+in `execute_cmd` was incremented before the `await` on
+`spawn_blocking` and decremented inline afterward. When axum dropped
+the future on client timeout / disconnect, the decrement was skipped
+and the counter leaked +1 per cancellation. Over hours of traffic
+the counter saturates at `MAX_INFLIGHT` (256) and the gate stays
+permanently closed — every subsequent request is rejected with
+`server overloaded: 256 inflight ops (max 256). Retry later.`,
+even when the actual `recall_in_flight` gauge reads 0–2 and CPU
+sits below 1%.
+
+Field observation (homelab leader, 12 h uptime, single-vCPU Docker):
+all recall requests fast-rejected with the 256/256 message. Container
+restart was the only recovery. Pre-existing v0.8.9 read-pool
+benchmarks still passed *immediately after restart*, then the gate
+re-saturated as Lane B agents accumulated 30 s timeouts.
+
+### Fixed
+
+- **`InflightGuard` RAII drop guard.** The counter is now wrapped in
+  a stack-local guard whose `Drop` impl runs the `fetch_sub` on
+  every exit path including future cancellation, panic unwind from
+  `spawn_blocking`, and early `?` propagation. Replaces the inline
+  `inflight.fetch_sub(1, Ordering::Relaxed)` after the `await`
+  which only ran on the success path.
+
+### Reproduced + verified
+
+Stress test on the patched binary (single-vCPU container,
+Docker on Windows): 1000 forced-cancel requests
+(`curl --max-time 0.03`) followed by a 50-concurrent recall round
+returned 35×200 / 15×503 — exactly the v0.8.9 acceptance numbers.
+Pre-fix, the same workload would have permanently saturated the
+counter and forced 0×200 / 50×503 with no recovery short of
+restart.
+
+`yantrikdb_recall_in_flight` and `yantrikdb_expansion_concurrent`
+gauges (which were *not* affected by the leak) confirmed no real
+backlog: both returned to 1–2 within 30 s of the cancel storm.
+
+### Operator notes
+
+- If you upgraded to v0.8.9 and saw ".140 returning 503 'server
+  overloaded: 256 inflight ops' even though `engines_loaded:7` and
+  CPU is idle" — that's this bug. v0.8.10 fixes it; no migration
+  needed beyond replacing the binary / image.
+- The leak existed in v0.8.0 onward but was masked by the v0.8.0–8
+  Mutex contention bottleneck (concurrent recalls were so slow that
+  cancellations were rare). v0.8.9's read pool made the server fast
+  enough that real workloads cancelled enough to expose it.
+
+[0.8.10]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.10
+
 ## [0.8.9] — 2026-05-01
 
 Critical fix for concurrent recall. A single client issuing parallel

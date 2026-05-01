@@ -167,7 +167,23 @@ async fn execute_cmd(
 ) -> AppResult {
     use std::sync::atomic::Ordering;
 
-    // Load shed: reject if too many ops in flight
+    // Load shed: reject if too many ops in flight.
+    //
+    // The decrement MUST run on every exit path including cancellation.
+    // Earlier versions decremented inline after the await, which leaks
+    // the counter when axum drops the future on client disconnect /
+    // timeout — over hours of traffic the counter saturates at
+    // MAX_INFLIGHT and the gate stays permanently closed (v0.8.9 field
+    // observation: 256/256 leaked after 12h uptime, container restart
+    // was the only recovery). RAII guard fixes it: Drop fires regardless
+    // of how the future exits.
+    struct InflightGuard<'a>(&'a std::sync::atomic::AtomicU32);
+    impl Drop for InflightGuard<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     let current = inflight.fetch_add(1, Ordering::Relaxed);
     if current >= crate::server::MAX_INFLIGHT {
         inflight.fetch_sub(1, Ordering::Relaxed);
@@ -180,6 +196,7 @@ async fn execute_cmd(
             ),
         ));
     }
+    let _inflight_guard = InflightGuard(inflight);
 
     // Extract a static op name from the command for lock-hold telemetry.
     // Strings are matched against `Command` variants; new variants need a
@@ -215,8 +232,9 @@ async fn execute_cmd(
         )
     });
 
-    inflight.fetch_sub(1, Ordering::Relaxed);
-
+    // _inflight_guard drops here on every path (success, error, panic
+    // unwind from spawn_blocking) — replaces the previous inline
+    // fetch_sub that leaked under future cancellation.
     let result = result?;
     match result {
         Ok(CommandResult::Json(v)) => Ok(Json(v)),

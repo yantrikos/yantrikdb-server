@@ -5,6 +5,40 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] — 2026-05-01
+
+Critical hotfix. Without this, v0.8.2/v0.8.3 openraft clusters
+become unresponsive under live multi-voter replication load.
+
+### Fixed
+
+- **#27** Resolved properly: `SplitRuntime` (RFC 009 §4 Layer 1
+  CPU-isolated control-plane runtime) is back. The v0.8.2/v0.8.3
+  workaround (cluster + HTTP sharing one tokio runtime) caused HTTP
+  gateway starvation when openraft replication traffic ramped up
+  on `cluster_port` 7440. Symptom: `.141` HTTP gateway became
+  unresponsive within ~30 sec of a follower joining the cluster,
+  cluster connections backing up to ~46 in the listen queue while
+  HTTP requests timed out.
+
+  Fix: converted `fn main()` from `#[tokio::main]` to manual sync
+  main. The macro builds an outer Runtime, and any nested Runtime
+  built inside async context panics on drop. Sync main owns the
+  tokio runtime explicitly, runs `async_main()` via `block_on()`,
+  and drops both the main runtime and `SplitRuntime` from sync
+  context where blocking is permitted.
+
+### Migration
+
+- **From v0.8.3**: rolling restart on each node. No config changes.
+  `SplitRuntime` re-engages automatically when `cluster.raft_mode =
+  "openraft"` and `cluster.role = "voter"`.
+- **From v0.8.2 / v0.8.1 / v0.7.x**: same as v0.8.3's migration
+  procedure (see v0.8.3 changelog) — this hotfix only changes the
+  runtime architecture, not the on-disk format or wire protocol.
+
+[0.8.4]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.4
+
 ## [0.8.3] — 2026-05-01
 
 Operator surface for openraft cluster mode. Without this, `v0.8.2`

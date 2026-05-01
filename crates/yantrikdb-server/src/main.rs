@@ -475,12 +475,40 @@ enum TokenAction {
     Revoke { token: String },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// v0.8.4 (issue #27): sync `fn main` that owns the tokio runtime
+/// explicitly, replacing the previous `#[tokio::main]` macro. This lets
+/// `SplitRuntime` (RFC 009 §4 Layer 1: dedicated control-plane runtime)
+/// be built in sync context and dropped in sync context — without that
+/// invariant, `Runtime::Drop` panics with "Cannot drop a runtime in a
+/// context where blocking is not allowed" because the macro builds an
+/// outer Runtime and any nested Runtime would drop while we're still
+/// inside the outer runtime's async context.
+fn main() -> anyhow::Result<()> {
     // rustls 0.23+ requires a process-level CryptoProvider before any TLS
     // operation. Without this, openraft mode panics at startup (issue #26).
     // Idempotent install — uses aws-lc-rs (the rustls 0.23 modern default).
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Build the main app runtime explicitly. The default tokio runtime
+    // (multi-threaded, all features) is what `#[tokio::main]` would
+    // create. We construct it ourselves so we can drop it from sync
+    // context on shutdown.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("ydb-main")
+        .build()
+        .map_err(|e| anyhow::anyhow!("build main tokio runtime: {e}"))?;
+
+    let result = runtime.block_on(async_main());
+
+    // Now we're back in sync context. Tokio runtimes (the main one above
+    // plus any SplitRuntime constructed inside async_main and shut down
+    // before async_main returns) drop without panicking here.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(5));
+    result
+}
+
+async fn async_main() -> anyhow::Result<()> {
 
     // Structured logging. Set YANTRIKDB_LOG_JSON=1 for newline-delimited JSON
     // output (for log aggregators, grep-friendly ops). Default is human-readable.
@@ -1809,20 +1837,23 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     //
     // The split runtime lives for the lifetime of the server. We hold
     // it in a local so its destructor runs on graceful shutdown.
-    // ISSUE #27: SplitRuntime::new() panics with "Cannot drop a runtime in
-    // a context where blocking is not allowed" when called from within
-    // #[tokio::main]. Disabled in v0.8.2 to unblock openraft mode.
-    // Cost: cluster control plane shares the tokio runtime with HTTP/recall
-    // (no CPU isolation between them). Re-enable in v0.9.0 with sync fn main()
-    // that owns the runtime explicitly.
-    let split_runtime: Option<crate::runtime::SplitRuntime> = None;
-    let control_runtime_handle: Option<tokio::runtime::Handle> = None;
-    if cluster_ctx.is_some() {
-        tracing::warn!(
-            "split_runtime disabled in v0.8.2 (issue #27) — cluster control plane \
-             shares tokio runtime with HTTP. Will re-enable in v0.9.0."
-        );
-    }
+    // v0.8.4 (issue #27 resolved): SplitRuntime is back. The v0.8.4
+    // `fn main()` is sync, so the nested-Runtime drop panic from
+    // v0.8.2 no longer applies. Cluster control plane gets its own
+    // CPU-isolated runtime; HTTP/recall stays responsive under heavy
+    // openraft replication traffic.
+    let split_runtime = if cluster_ctx.is_some() {
+        match crate::runtime::SplitRuntime::new(crate::runtime::RuntimeConfig::default()) {
+            Ok(rt) => Some(rt),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not build split runtime; falling back to single runtime");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let control_runtime_handle = split_runtime.as_ref().map(|rt| rt.control_handle());
 
     // RFC 014-A: validate cluster-mTLS config at startup. If certs are
     // configured, prove they load successfully BEFORE the cluster

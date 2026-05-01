@@ -509,7 +509,6 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn async_main() -> anyhow::Result<()> {
-
     // Structured logging. Set YANTRIKDB_LOG_JSON=1 for newline-delimited JSON
     // output (for log aggregators, grep-friendly ops). Default is human-readable.
     //
@@ -1025,7 +1024,10 @@ cluster_secret = "{secret}"
                     }
                     Ok(())
                 }
-                ClusterAction::InitializeCluster { leader, master_token } => {
+                ClusterAction::InitializeCluster {
+                    leader,
+                    master_token,
+                } => {
                     let url = format!("{}/v1/cluster/initialize", leader.trim_end_matches('/'));
                     let resp = reqwest::blocking::Client::new()
                         .post(&url)
@@ -1040,7 +1042,12 @@ cluster_secret = "{secret}"
                     println!("{}", text);
                     Ok(())
                 }
-                ClusterAction::AddLearner { node_id, addr, leader, master_token } => {
+                ClusterAction::AddLearner {
+                    node_id,
+                    addr,
+                    leader,
+                    master_token,
+                } => {
                     let url = format!("{}/v1/cluster/add-learner", leader.trim_end_matches('/'));
                     let body = serde_json::json!({"node_id": node_id, "addr": addr});
                     let resp = reqwest::blocking::Client::new()
@@ -1058,9 +1065,16 @@ cluster_secret = "{secret}"
                     println!("{}", text);
                     Ok(())
                 }
-                ClusterAction::WaitCaughtUp { node_id, leader, master_token: _, max_lag, timeout_secs } => {
+                ClusterAction::WaitCaughtUp {
+                    node_id,
+                    leader,
+                    master_token: _,
+                    max_lag,
+                    timeout_secs,
+                } => {
                     let url = format!("{}/v1/cluster/raft", leader.trim_end_matches('/'));
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+                    let deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                     let client = reqwest::blocking::Client::new();
                     loop {
                         if std::time::Instant::now() > deadline {
@@ -1073,13 +1087,23 @@ cluster_secret = "{secret}"
                             continue;
                         }
                         let v: serde_json::Value = resp.json()?;
-                        let leader_idx = v.get("last_log_index").and_then(|x| x.as_u64()).unwrap_or(0);
-                        let members = v.get("members").and_then(|m| m.as_array()).cloned().unwrap_or_default();
-                        let target = members.iter().find(|m| {
-                            m.get("node_id").and_then(|n| n.as_u64()) == Some(node_id)
-                        });
+                        let leader_idx = v
+                            .get("last_log_index")
+                            .and_then(|x| x.as_u64())
+                            .unwrap_or(0);
+                        let members = v
+                            .get("members")
+                            .and_then(|m| m.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let target = members
+                            .iter()
+                            .find(|m| m.get("node_id").and_then(|n| n.as_u64()) == Some(node_id));
                         if target.is_none() {
-                            eprintln!("node {} is not yet a member; call add-learner first", node_id);
+                            eprintln!(
+                                "node {} is not yet a member; call add-learner first",
+                                node_id
+                            );
                             std::process::exit(1);
                         }
                         // Per-member last_log_index isn't always exposed by /v1/cluster/raft;
@@ -1095,7 +1119,11 @@ cluster_secret = "{secret}"
                         std::thread::sleep(std::time::Duration::from_secs(3));
                     }
                 }
-                ClusterAction::PromoteVoter { voters, leader, master_token } => {
+                ClusterAction::PromoteVoter {
+                    voters,
+                    leader,
+                    master_token,
+                } => {
                     let url = format!("{}/v1/cluster/promote-voter", leader.trim_end_matches('/'));
                     let body = serde_json::json!({"voters": voters});
                     let resp = reqwest::blocking::Client::new()
@@ -1113,7 +1141,11 @@ cluster_secret = "{secret}"
                     println!("{}", text);
                     Ok(())
                 }
-                ClusterAction::RemoveNode { node_id, leader, master_token } => {
+                ClusterAction::RemoveNode {
+                    node_id,
+                    leader,
+                    master_token,
+                } => {
                     let url = format!("{}/v1/cluster/remove", leader.trim_end_matches('/'));
                     let body = serde_json::json!({"node_id": node_id});
                     let resp = reqwest::blocking::Client::new()

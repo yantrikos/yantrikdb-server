@@ -197,10 +197,28 @@ where
 
         match frame_to_command(&frame) {
             Ok(cmd) => {
-                // Reject writes on non-leader nodes in clustered mode
-                if let Some(ref cluster) = state.cluster {
-                    if is_write_command(&cmd) && !cluster.state.accepts_writes() {
-                        let leader = cluster.state.current_leader();
+                // v0.8.7: openraft is the source of truth for write
+                // acceptance when active; falls back to legacy raft-lite.
+                // Without this, a healthy openraft leader rejected wire-
+                // protocol writes citing "no leader elected" (raft-lite
+                // has no quorum once openraft is the real write path).
+                if is_write_command(&cmd) {
+                    let mut deny: Option<(Option<u64>, &'static str)> = None;
+                    if let Some(ref assembly) = state.raft {
+                        let m = assembly.raft.metrics().borrow().clone();
+                        let is_leader = matches!(m.state, openraft::ServerState::Leader);
+                        if !is_leader {
+                            deny = Some((m.current_leader.map(u64::from), "openraft"));
+                        }
+                    } else if let Some(ref cluster) = state.cluster {
+                        if !cluster.state.accepts_writes() {
+                            deny = Some((
+                                cluster.state.current_leader().map(|id| id as u64),
+                                "raft-lite",
+                            ));
+                        }
+                    }
+                    if let Some((leader, _mode)) = deny {
                         let msg = match leader {
                             Some(id) => format!("not the leader (current leader: node {})", id),
                             None => "no leader elected (cluster not ready)".into(),

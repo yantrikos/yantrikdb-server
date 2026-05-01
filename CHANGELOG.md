@@ -5,6 +5,49 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7] — 2026-05-01
+
+Critical bug fix. v0.8.5 fixed `/v1/health` to reflect openraft state
+when active, but **the actual write/read paths still consulted the
+legacy raft-lite leader detection**. On a healthy openraft cluster:
+
+- `POST /v1/remember` returned `503 read-only: no leader elected`
+- `POST /v1/recall` and `/v1/forget` failed similarly
+- Wire-protocol writes (port 7437) returned `READONLY_NODE` errors
+- Prometheus `yantrikdb_cluster_is_leader` gauge read 0 on the actual
+  leader
+
+Discovered by yantrikdb-agi within 10 min of v0.8.5 deploy when their
+Lane B smoke test failed against the new cluster. Architect was able
+to query `/v1/health` (got openraft view, "leader") and then post a
+write to that same node and get back `503 no leader elected` —
+exactly the kind of split-state bug that should never ship.
+
+### Fixed
+
+- New helper `cluster_state_view()` returns canonical
+  `(node_id, role, term, leader, accepts_writes, healthy, raft_mode)`.
+  Prefers openraft when `state.raft` is `Some`, falls back to legacy
+  raft-lite. All client-facing endpoints now route through it:
+  - `GET /v1/health` (already used openraft via direct read in v0.8.5;
+    refactored to use helper)
+  - `GET /v1/health/deep` (cluster_quorum check)
+  - `GET /metrics` (`yantrikdb_cluster_term`, `_is_leader`, `_healthy`
+    gauges; new `raft_mode` label)
+  - `check_writable` gating `/v1/remember`, `/v1/forget`,
+    `/v1/correct`, `/v1/admin/*` write endpoints
+  - Wire-protocol server (port 7437) write-command rejection
+- Error responses on follower writes now include `leader_node_id`,
+  `leader_addr`, and `raft_mode` fields so clients can redirect.
+
+### Notes for operators
+
+If you deployed v0.8.5 or v0.8.6 in openraft mode, **upgrade
+immediately**. Single-node deployments and raft-lite clusters
+unaffected.
+
+[0.8.7]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.7
+
 ## [0.8.6] — 2026-05-01
 
 `cargo fmt` cleanup — no functional change.

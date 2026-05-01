@@ -20,6 +20,63 @@ use crate::server::AppState;
 
 type AppResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 
+/// v0.8.7 (issue #28 follow-up): canonical cluster-state view that
+/// prefers openraft when active, falls back to legacy raft-lite.
+///
+/// Without this helper, every endpoint that exposed cluster state
+/// independently chose between the two layers — leading to split-state
+/// bugs where /v1/health reports openraft truth while /v1/remember
+/// rejects writes citing legacy raft-lite (which has no quorum once
+/// openraft is the real write path).
+#[derive(Debug, Clone)]
+struct ClusterStateView {
+    node_id: u64,
+    role: String,
+    term: u64,
+    leader: Option<u64>,
+    leader_addr: Option<String>,
+    accepts_writes: bool,
+    healthy: bool,
+    raft_mode: &'static str,
+}
+
+fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
+    if let Some(ref assembly) = state.raft {
+        let m = assembly.raft.metrics().borrow().clone();
+        let is_leader = matches!(m.state, openraft::ServerState::Leader);
+        let leader_id = m.current_leader.map(u64::from);
+        let leader_addr = leader_id.and_then(|lid| {
+            m.membership_config
+                .nodes()
+                .find(|(id, _)| u64::from(**id) == lid)
+                .map(|(_, n)| n.addr.clone())
+        });
+        return Some(ClusterStateView {
+            node_id: u64::from(m.id),
+            role: format!("{:?}", m.state),
+            term: m.current_term,
+            leader: leader_id,
+            leader_addr,
+            accepts_writes: is_leader,
+            healthy: m.current_leader.is_some(),
+            raft_mode: "openraft",
+        });
+    }
+    if let Some(ref cluster) = state.cluster {
+        return Some(ClusterStateView {
+            node_id: cluster.node_id() as u64,
+            role: format!("{:?}", cluster.state.leader_role()),
+            term: cluster.state.current_term(),
+            leader: cluster.state.current_leader().map(|id| id as u64),
+            leader_addr: None,
+            accepts_writes: cluster.state.accepts_writes(),
+            healthy: cluster.is_healthy(),
+            raft_mode: "raft-lite",
+        });
+    }
+    None
+}
+
 /// Shared engine handle. Type alias keeps the complex nested generic out
 /// of function signatures and avoids clippy::type_complexity.
 type EngineHandle = Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>;
@@ -160,34 +217,15 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "status": "ok",
         "engines_loaded": state.pool.loaded_count(),
     });
-    // When openraft is active, the cluster block reflects openraft's view
-    // (the actual write path). Falls back to the legacy raft-lite view
-    // for non-openraft deployments. Without this preference, /v1/health
-    // misleadingly reported `accepts_writes: false` while the openraft
-    // commit path was happily accepting writes — clients monitoring
-    // /v1/health would dismiss a healthy cluster as down.
-    if let Some(ref assembly) = state.raft {
-        let metrics = assembly.raft.metrics().borrow().clone();
-        let is_leader = matches!(metrics.state, openraft::ServerState::Leader);
-        let role_str = format!("{:?}", metrics.state);
+    if let Some(view) = cluster_state_view(&state) {
         payload["cluster"] = json!({
-            "node_id": u64::from(metrics.id),
-            "role": role_str,
-            "term": metrics.current_term,
-            "leader": metrics.current_leader.map(u64::from),
-            "accepts_writes": is_leader,
-            "healthy": metrics.current_leader.is_some(),
-            "raft_mode": "openraft",
-        });
-    } else if let Some(ref cluster) = state.cluster {
-        payload["cluster"] = json!({
-            "node_id": cluster.node_id(),
-            "role": format!("{:?}", cluster.state.leader_role()),
-            "term": cluster.state.current_term(),
-            "leader": cluster.state.current_leader(),
-            "accepts_writes": cluster.state.accepts_writes(),
-            "healthy": cluster.is_healthy(),
-            "raft_mode": "raft-lite",
+            "node_id": view.node_id,
+            "role": view.role,
+            "term": view.term,
+            "leader": view.leader,
+            "accepts_writes": view.accepts_writes,
+            "healthy": view.healthy,
+            "raft_mode": view.raft_mode,
         });
     }
     Json(payload)
@@ -287,19 +325,20 @@ async fn health_deep(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Va
         checks.push(control_check);
     }
 
-    // 3. Cluster quorum (if clustered)
-    if let Some(ref cluster) = state.cluster {
-        let healthy = cluster.is_healthy();
-        if !healthy {
+    // 3. Cluster quorum (if clustered) — uses cluster_state_view so
+    //    openraft is the source of truth when active.
+    if let Some(view) = cluster_state_view(&state) {
+        if !view.healthy {
             all_pass = false;
         }
         checks.push(json!({
             "check": "cluster_quorum",
-            "pass": healthy,
-            "node_id": cluster.node_id(),
-            "role": format!("{:?}", cluster.state.leader_role()),
-            "term": cluster.state.current_term(),
-            "leader": cluster.state.current_leader(),
+            "pass": view.healthy,
+            "node_id": view.node_id,
+            "role": view.role,
+            "term": view.term,
+            "leader": view.leader,
+            "raft_mode": view.raft_mode,
         }));
     }
 
@@ -407,21 +446,27 @@ fn check_memory_quota(
 }
 
 /// Reject if cluster is enabled and this node doesn't accept writes.
+/// Uses [`cluster_state_view`] so openraft is the source of truth when active.
 fn check_writable(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {
-    if let Some(ref cluster) = state.cluster {
-        if !cluster.state.accepts_writes() {
-            let leader = cluster.state.current_leader();
-            let msg = match leader {
-                Some(id) => format!("read-only: not the leader (current leader: node {})", id),
-                None => "read-only: no leader elected".into(),
-            };
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"error": msg, "leader": leader})),
-            ));
-        }
+    let Some(view) = cluster_state_view(state) else {
+        return Ok(()); // No cluster — single-node, accepts writes.
+    };
+    if view.accepts_writes {
+        return Ok(());
     }
-    Ok(())
+    let msg = match view.leader {
+        Some(id) => format!("read-only: not the leader (current leader: node {})", id),
+        None => "read-only: no leader elected".into(),
+    };
+    Err((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": msg,
+            "leader_node_id": view.leader,
+            "leader_addr": view.leader_addr,
+            "raft_mode": view.raft_mode,
+        })),
+    ))
 }
 
 async fn remember(
@@ -1466,21 +1511,25 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         state.pool.loaded_count()
     ));
 
-    if let Some(ref cluster) = state.cluster {
+    // v0.8.7: Prometheus cluster gauges read from cluster_state_view so
+    // openraft is the source of truth when active. Without this, on a
+    // healthy openraft cluster, `yantrikdb_cluster_is_leader` shows 0 on
+    // the actual leader (because legacy raft-lite has no quorum).
+    if let Some(view) = cluster_state_view(&state) {
         out.push_str("# HELP yantrikdb_cluster_term Current Raft term\n");
         out.push_str("# TYPE yantrikdb_cluster_term gauge\n");
         out.push_str(&format!(
-            "yantrikdb_cluster_term {{node_id=\"{}\"}} {}\n",
-            cluster.node_id(),
-            cluster.state.current_term()
+            "yantrikdb_cluster_term {{node_id=\"{}\",raft_mode=\"{}\"}} {}\n",
+            view.node_id, view.raft_mode, view.term
         ));
 
         out.push_str("# HELP yantrikdb_cluster_is_leader Whether this node is currently the leader (1) or not (0)\n");
         out.push_str("# TYPE yantrikdb_cluster_is_leader gauge\n");
         out.push_str(&format!(
-            "yantrikdb_cluster_is_leader {{node_id=\"{}\"}} {}\n",
-            cluster.node_id(),
-            if cluster.state.is_leader() { 1 } else { 0 }
+            "yantrikdb_cluster_is_leader {{node_id=\"{}\",raft_mode=\"{}\"}} {}\n",
+            view.node_id,
+            view.raft_mode,
+            if view.accepts_writes { 1 } else { 0 }
         ));
 
         out.push_str(
@@ -1488,20 +1537,29 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         );
         out.push_str("# TYPE yantrikdb_cluster_healthy gauge\n");
         out.push_str(&format!(
-            "yantrikdb_cluster_healthy {{node_id=\"{}\"}} {}\n",
-            cluster.node_id(),
-            if cluster.is_healthy() { 1 } else { 0 }
+            "yantrikdb_cluster_healthy {{node_id=\"{}\",raft_mode=\"{}\"}} {}\n",
+            view.node_id,
+            view.raft_mode,
+            if view.healthy { 1 } else { 0 }
         ));
-
-        out.push_str("# HELP yantrikdb_cluster_peer_reachable Whether each peer is reachable\n");
-        out.push_str("# TYPE yantrikdb_cluster_peer_reachable gauge\n");
-        for peer in cluster.peers.snapshot() {
-            out.push_str(&format!(
-                "yantrikdb_cluster_peer_reachable {{addr=\"{}\",role=\"{:?}\"}} {}\n",
-                peer.addr,
-                peer.configured_role,
-                if peer.reachable { 1 } else { 0 }
-            ));
+    }
+    // Peer reachability is raft-lite-specific (openraft tracks this in
+    // its own metrics scrape via spawn_raft_metrics_recorder). Skip on
+    // openraft mode.
+    if state.raft.is_none() {
+        if let Some(ref cluster) = state.cluster {
+            out.push_str(
+                "# HELP yantrikdb_cluster_peer_reachable Whether each peer is reachable\n",
+            );
+            out.push_str("# TYPE yantrikdb_cluster_peer_reachable gauge\n");
+            for peer in cluster.peers.snapshot() {
+                out.push_str(&format!(
+                    "yantrikdb_cluster_peer_reachable {{addr=\"{}\",role=\"{:?}\"}} {}\n",
+                    peer.addr,
+                    peer.configured_role,
+                    if peer.reachable { 1 } else { 0 }
+                ));
+            }
         }
     }
 

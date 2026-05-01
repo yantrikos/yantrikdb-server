@@ -220,9 +220,17 @@ fn build_reqwest_client_for_cluster(
         builder = builder.danger_accept_invalid_certs(true);
     }
 
-    builder
-        .build()
-        .map_err(|e| AssemblyError::ReqwestBuild(format!("build: {e}")))
+    builder.build().map_err(|e| {
+        // Surface the source chain — the bare reqwest::Error is just
+        // "builder error" with the actual cause buried in the source chain.
+        let mut chain = format!("build: {e}");
+        let mut src = std::error::Error::source(&e);
+        while let Some(s) = src {
+            chain.push_str(&format!(" / {s}"));
+            src = s.source();
+        }
+        AssemblyError::ReqwestBuild(chain)
+    })
 }
 
 /// Wire a Raft cluster from its constituent parts. Enforces the

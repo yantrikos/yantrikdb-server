@@ -5,6 +5,36 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] — 2026-04-30
+
+Patch release. Single critical fix:
+
+### Fixed
+
+- **#26** `cluster.raft_mode = "openraft"` panicked at startup because
+  rustls 0.23+ requires a process-level `CryptoProvider` and neither
+  `aws-lc-rs` nor `ring` features were enabled in `Cargo.toml`, and
+  `install_default()` was never called. Single-node deployments
+  (`raft_mode` unset / `disabled`) were unaffected since they skip
+  rustls initialization entirely.
+
+  Fix: enable `aws-lc-rs` feature on `rustls`, install the default
+  provider at the very start of `fn main()`. Two-line change.
+
+  Discovered 2026-04-30 during attempted cluster reform from
+  raft-lite to openraft on a 2-voter homelab cluster.
+
+### Notes for operators
+
+- All v0.8.x releases prior to v0.8.2 are unsuitable for openraft
+  mode. If you're on `raft_mode = "disabled"` (the default), you
+  can upgrade at your own pace.
+- If you tried to follow `docs/migration/v0.7_to_v0.8.md` Option B
+  (raft-lite → openraft) on v0.8.0/v0.8.1 and hit a panic, this
+  release is what unblocks it.
+
+[0.8.2]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.2
+
 ## [0.8.1] — 2026-04-30
 
 Operational patch. Fixes two bugs reported by `yantrikdb-agi` after

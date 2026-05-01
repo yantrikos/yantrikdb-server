@@ -1526,7 +1526,6 @@ dependencies = [
  "indicatif",
  "libc",
  "log",
- "native-tls",
  "rand 0.9.4",
  "reqwest",
  "serde",
@@ -4159,7 +4158,6 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "log",
- "native-tls",
  "once_cell",
  "rustls",
  "rustls-pki-types",
@@ -4935,7 +4933,7 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb-server"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-server"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 description = "YantrikDB database server — multi-tenant cognitive memory with wire protocol, HTTP gateway, replication, auto-failover, and at-rest encryption"
 license = "AGPL-3.0-only"
@@ -64,13 +64,15 @@ metrics = "0.24"
 # Config
 toml = "0.8"
 
-# TLS
-rustls = "0.23"
+# TLS — `aws-lc-rs` feature is REQUIRED. Without it, rustls 0.23 has no
+# default CryptoProvider and any TLS operation (openraft cluster transport,
+# reqwest HTTPS client, etc.) panics at runtime. Issue #26.
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 
 # Embeddings
-fastembed = { version = "5", default-features = false, features = ["ort-load-dynamic", "hf-hub-native-tls"] }
+fastembed = { version = "5", default-features = false, features = ["ort-load-dynamic", "hf-hub-rustls-tls"] }
 
 # Optional: tokio-console for live runtime inspection.
 # Build with: cargo build --features tokio-console

@@ -5,6 +5,24 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] — 2026-05-01
+
+`cargo fmt` cleanup — no functional change.
+
+### Fixed
+
+- v0.8.5 was tagged on a commit where the cluster CLI subcommand
+  handlers (added in v0.8.3) used one-line struct destructuring;
+  rustfmt wants multi-line. CI flagged this on the v0.8.5 commit
+  with a red badge. v0.8.6 retags on the post-fmt commit so the
+  release page CI is clean.
+
+Functionally identical to v0.8.5 (`/v1/health` reflects openraft
+state when active). Use v0.8.6 instead of v0.8.5 if you care about
+the release-page CI badge; binary behavior is the same.
+
+[0.8.6]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.6
+
 ## [0.8.5] — 2026-05-01
 
 `/v1/health` cleanup. Fixes a misleading status shown to operators

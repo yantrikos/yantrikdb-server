@@ -285,8 +285,23 @@ async fn pull_db_from_leader(
 
 /// After replicated record ops are materialized, the memories rows have
 /// no embedding (the oplog doesn't carry vectors). Re-embed each missing
-/// row using the local embedder and update both the SQLite column and
-/// the in-memory HNSW vector index.
+/// row using the local embedder and populate both the SQLite column and
+/// the in-memory HNSW vector index — piecewise per-row.
+///
+/// v0.8.11 (RFC 022 §2): rewritten to use `db.insert_vector()` and
+/// `db.encrypt_embedding_pub()` (newly-public engine APIs in yantrikdb
+/// 0.6.5) instead of the previous full `db.rebuild_vec_index()` at the
+/// end of every batch. The rebuild was O(N log N) on the entire memories
+/// table per backfill cycle, which produced multi-hour follower-recall
+/// lag on tenants with 1k+ memories. Per-row insert is O(log N) per
+/// memory and means each backfilled row is recallable as soon as its
+/// own insert completes — not at the end of the batch.
+///
+/// Encrypted-cluster follower recall now works for the first time. The
+/// previous implementation skipped encrypted writes entirely (with a
+/// TODO comment) because the engine's `encrypt_embedding` method was
+/// `pub(crate)`. v0.8.11 exposes it as `encrypt_embedding_pub` so the
+/// encryption path is symmetric with what `record()` does on the leader.
 async fn backfill_embeddings(engine: &std::sync::Arc<yantrikdb::YantrikDB>) -> anyhow::Result<()> {
     use rusqlite::params;
 
@@ -316,61 +331,102 @@ async fn backfill_embeddings(engine: &std::sync::Arc<yantrikdb::YantrikDB>) -> a
     }
 
     let count = pending.len();
-    tracing::debug!(count, "backfilling embeddings for replicated memories");
+    tracing::debug!(
+        count,
+        "backfilling embeddings for replicated memories (piecewise)"
+    );
 
-    // Embed + write back, one at a time to keep lock duration short
+    let mut backfilled = 0usize;
+    let mut errors = 0usize;
+
     for (rid, text) in &pending {
+        // 1. Re-embed the text locally. `db.embed()` runs the engine's
+        //    embedder; if no embedder is configured we already returned
+        //    above.
         let embedding = {
             let db = engine.as_ref();
             match db.embed(text) {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!(rid = %rid, error = %e, "embed failed during backfill");
+                    errors += 1;
                     continue;
                 }
             }
         };
 
-        // Use the canonical f32 serialization from the core crate so the
-        // bytes match exactly what record() would write.
+        // 2. Serialise to the canonical f32 blob format `record()` writes.
         let blob = yantrikdb::serde_helpers::serialize_f32(&embedding);
 
-        let db = engine.as_ref();
+        // 3. Encrypt the blob if encryption is enabled. With v0.8.11's
+        //    public `encrypt_embedding_pub`, encrypted-cluster followers
+        //    can finally complete this step. (Pre-v0.8.11 followers
+        //    skipped encrypted writes here entirely.)
+        let stored_blob = {
+            let db = engine.as_ref();
+            match db.encrypt_embedding_pub(&blob) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(rid = %rid, error = %e, "encrypt_embedding failed");
+                    errors += 1;
+                    continue;
+                }
+            }
+        };
 
-        // NOTE: if encryption is enabled, the engine's encrypt_embedding()
-        // method is pub(crate) — we can't call it from here. For encrypted
-        // clusters, the workaround is rebuild_vec_index from the (encrypted)
-        // SQLite table will fail and recall on followers won't work until
-        // encrypt_embedding is exposed in core. TODO: expose it.
-        if db.is_encrypted() {
-            tracing::warn!(
-                rid = %rid,
-                "skipping embedding backfill: encrypted databases need encrypt_embedding exposed in core"
-            );
-            continue;
+        // 4. UPDATE the SQLite memories row with the (possibly-encrypted)
+        //    embedding column. Conn is dropped immediately after to free
+        //    the lock before the HNSW write in step 5.
+        {
+            let db = engine.as_ref();
+            let conn = db.conn();
+            if let Err(e) = conn.execute(
+                "UPDATE memories SET embedding = ?1 WHERE rid = ?2",
+                params![stored_blob, rid],
+            ) {
+                tracing::warn!(rid = %rid, error = %e, "embedding UPDATE failed");
+                errors += 1;
+                continue;
+            }
+            // conn drops here, releasing the SQLite write lock before
+            // we acquire the HNSW write lock — preserves engine lock
+            // ordering: conn → … → vec_index.
         }
 
-        let conn = db.conn();
-        if let Err(e) = conn.execute(
-            "UPDATE memories SET embedding = ?1 WHERE rid = ?2",
-            params![blob, rid],
-        ) {
-            tracing::warn!(rid = %rid, error = %e, "embedding update failed");
-            continue;
+        // 5. Insert into HNSW piecewise. This is the v0.8.11 fix. Pre-v0.8.11
+        //    this was a `db.rebuild_vec_index()` at the END of the loop,
+        //    O(N log N) on the entire memories table, taking minutes-to-
+        //    hours under load. Per-row insert is O(log N) per memory and
+        //    runs as soon as the row is durable in SQLite, so recall on
+        //    the follower sees each backfilled memory immediately rather
+        //    than waiting for the batch to complete.
+        //
+        //    Idempotent on retry: if a previous poll cycle already inserted
+        //    this rid, the HNSW backend dedupes; we re-attempt cheaply.
+        //    The note `embedding IS NULL` guard at the SELECT in step 1
+        //    means we won't re-process rows whose UPDATE in step 4
+        //    succeeded — only failures retry.
+        {
+            let db = engine.as_ref();
+            if let Err(e) = db.insert_vector(rid, &embedding) {
+                tracing::warn!(rid = %rid, error = %e, "HNSW insert_vector failed during backfill");
+                errors += 1;
+                continue;
+            }
         }
-        drop(conn);
+
+        backfilled += 1;
+        // Per-row counter `yantrikdb_follower_backfill_inserted_total`
+        // deferred to v0.8.12 along with the namespace_schema work; the
+        // tracing::info! at end-of-batch below is sufficient operator
+        // visibility for v0.8.11 (it logs both backfilled and errors).
     }
 
-    // Now rebuild the HNSW index from the SQLite table (which has all embeddings now).
-    // This is the only way to get vectors into HNSW since the index API isn't public
-    // for piecewise insertion through YantrikDB.
-    {
-        let db = engine.as_ref();
-        if let Err(e) = db.rebuild_vec_index() {
-            tracing::warn!(error = %e, "rebuild_vec_index failed during backfill");
-        }
-    }
-
-    tracing::info!(count, "backfilled embeddings for replicated memories");
+    tracing::info!(
+        backfilled,
+        errors,
+        total = count,
+        "follower HNSW backfill complete (piecewise insert)"
+    );
     Ok(())
 }

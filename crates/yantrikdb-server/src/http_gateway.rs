@@ -2402,6 +2402,559 @@ fn chrono_ts() -> String {
     format!("{}", secs)
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// RFC 022 §1 — Skill Substrate API (v0.8.11)
+//
+// Five thin endpoints over the existing memory primitives, hardcoded to
+// `namespace=skill_substrate, metadata.record_type=skill, memory_type=
+// procedural`. Schema-validated on define (skill_id format, applies_to
+// entry regex, skill_type enum), no semantic ontology (no validation
+// gates, no outcome rollups). The point is to standardise the shape so
+// every program stops reinventing skill_define / skill_get / skill_recall
+// in agent code with subtle bugs (the cross-lane bug pattern that drove
+// this RFC).
+//
+// In v0.8.11 `skill_get` does scan-then-filter via `engine.list_memories`
+// + client-side filter on `metadata.skill_id`. v0.8.12 replaces this with
+// /v1/lookup (O(log N) via indexed metadata).
+// ─────────────────────────────────────────────────────────────────────────
+
+const SKILL_NAMESPACE: &str = "skill_substrate";
+const OUTCOME_NAMESPACE: &str = "outcome_substrate";
+const VALID_SKILL_TYPES: &[&str] = &["procedure", "reference", "lesson", "pattern", "rule"];
+
+/// Validate a skill_id against `^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$` by hand.
+/// Returns Err with a specific reason if invalid.
+fn validate_skill_id(s: &str) -> Result<(), &'static str> {
+    if s.len() < 4 || s.len() > 200 {
+        return Err("skill_id length must be 4..200 characters");
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_lowercase() {
+        return Err("skill_id must start with a lowercase letter");
+    }
+    let mut has_dot = false;
+    let mut last_was_dot = false;
+    for &b in bytes {
+        let c = b as char;
+        let is_valid = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.';
+        if !is_valid {
+            return Err("skill_id contains invalid character (allowed: lowercase a-z, 0-9, _, .)");
+        }
+        if c == '.' {
+            if last_was_dot {
+                return Err("skill_id contains consecutive dots");
+            }
+            has_dot = true;
+            last_was_dot = true;
+        } else {
+            last_was_dot = false;
+        }
+    }
+    if !has_dot {
+        return Err("skill_id must contain at least one '.' (dotted form, e.g. skill.foo.v1)");
+    }
+    if last_was_dot {
+        return Err("skill_id must not end with '.'");
+    }
+    Ok(())
+}
+
+/// Validate an `applies_to` array entry against `^[a-z][a-z0-9_]*$`.
+/// Critical for catching hyphen-vs-underscore drift bugs (cf. Brainstorm 3
+/// round 2 deepseek's `meta_agent` vs `meta-agent` example).
+fn validate_applies_to_entry(s: &str) -> Result<(), &'static str> {
+    if s.is_empty() {
+        return Err("applies_to entry must be non-empty");
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_lowercase() {
+        return Err("applies_to entry must start with a lowercase letter");
+    }
+    for &b in bytes {
+        let c = b as char;
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            return Err(
+                "applies_to entry contains invalid character (allowed: lowercase a-z, 0-9, _)",
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `POST /v1/skills/define` — write a new skill record. Strict shape
+/// validation, 409 on duplicate skill_id by default. Wraps /v1/remember
+/// internally with namespace=skill_substrate, metadata.record_type=skill,
+/// memory_type=procedural.
+async fn skill_define(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("skill_define");
+    check_writable(&state)?;
+
+    // ── Schema validation ──────────────────────────────────
+    let skill_id = body["skill_id"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'skill_id'"))?;
+    validate_skill_id(skill_id)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, format!("INVALID_SKILL_ID: {}", e)))?;
+
+    let body_text = body["body"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'body'"))?;
+    if body_text.len() < 50 || body_text.len() > 5000 {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_BODY_LENGTH: body must be 50..5000 characters",
+        ));
+    }
+
+    let applies_to = body["applies_to"]
+        .as_array()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing or non-array 'applies_to'"))?;
+    if applies_to.is_empty() {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "EMPTY_APPLIES_TO: applies_to must be a non-empty array",
+        ));
+    }
+    if applies_to.len() > 10 {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "TOO_MANY_APPLIES_TO: applies_to may have at most 10 entries",
+        ));
+    }
+    let mut applies_to_strs = Vec::with_capacity(applies_to.len());
+    for v in applies_to {
+        let s = v.as_str().ok_or_else(|| {
+            app_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_APPLIES_TO_ENTRY: each entry must be a string",
+            )
+        })?;
+        validate_applies_to_entry(s).map_err(|e| {
+            app_error(
+                StatusCode::BAD_REQUEST,
+                format!("INVALID_APPLIES_TO_ENTRY: {}", e),
+            )
+        })?;
+        applies_to_strs.push(s.to_string());
+    }
+
+    let skill_type = body["skill_type"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'skill_type'"))?;
+    if !VALID_SKILL_TYPES.contains(&skill_type) {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "INVALID_SKILL_TYPE: must be one of {:?}, got '{}'",
+                VALID_SKILL_TYPES, skill_type
+            ),
+        ));
+    }
+
+    // ── Resolve engine + check duplicate ────────────────────
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+
+    let on_conflict = body
+        .get("on_conflict")
+        .and_then(|v| v.as_str())
+        .unwrap_or("reject");
+
+    if let Some(existing_rid) = find_skill_rid(&engine, skill_id) {
+        match on_conflict {
+            "reject" => {
+                return Err(app_error(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "SKILL_ID_CONFLICT: '{}' already exists (rid={}); pass on_conflict=update to overwrite or on_conflict=ignore to no-op",
+                        skill_id, existing_rid
+                    ),
+                ));
+            }
+            "ignore" => {
+                return Ok(Json(serde_json::json!({
+                    "rid":         existing_rid,
+                    "skill_id":    skill_id,
+                    "namespace":   SKILL_NAMESPACE,
+                    "memory_type": "procedural",
+                    "on_conflict": "ignore"
+                })));
+            }
+            "update" => {
+                // Tombstone the existing rid; new write below proceeds.
+                let _ = engine.forget(&existing_rid);
+            }
+            other => {
+                return Err(app_error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "INVALID_ON_CONFLICT: '{}' (allowed: reject, update, ignore)",
+                        other
+                    ),
+                ));
+            }
+        }
+    }
+
+    // ── Build metadata + dispatch through Command::Remember ─
+    let user_metadata = body.get("metadata").cloned().unwrap_or(Value::Null);
+    let mut metadata = serde_json::json!({
+        "record_type": "skill",
+        "skill_id":    skill_id,
+        "applies_to":  applies_to_strs,
+        "skill_type":  skill_type,
+    });
+    // Merge user-supplied extra metadata fields without overwriting reserved keys.
+    if let Value::Object(user_map) = user_metadata {
+        if let Value::Object(meta_map) = &mut metadata {
+            for (k, v) in user_map {
+                meta_map.entry(k).or_insert(v);
+            }
+        }
+    }
+
+    execute_cmd(
+        engine,
+        Command::Remember {
+            text: body_text.to_string(),
+            memory_type: "procedural".to_string(),
+            importance: body
+                .get("importance")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.7),
+            valence: 0.0,
+            half_life: 30.0 * 24.0 * 3600.0,
+            metadata,
+            namespace: SKILL_NAMESPACE.to_string(),
+            certainty: 0.9,
+            domain: "skill".to_string(),
+            source: body
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("agent")
+                .to_string(),
+            emotional_state: None,
+            embedding: None,
+        },
+        state.control.clone(),
+        &state.inflight,
+    )
+    .await
+}
+
+/// `GET /v1/skills/{skill_id}` — exact lookup. v0.8.11 implementation:
+/// scan namespace + filter on metadata.skill_id (slow path, O(N)).
+/// v0.8.12 will replace with `/v1/lookup` for O(log N).
+async fn skill_get(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(skill_id): axum::extract::Path<String>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("skill_get");
+    validate_skill_id(&skill_id)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, format!("INVALID_SKILL_ID: {}", e)))?;
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+
+    if let Some(rid) = find_skill_rid(&engine, &skill_id) {
+        if let Ok(Some(mem)) = engine.get(&rid) {
+            return Ok(Json(serde_json::json!({
+                "rid":         mem.rid,
+                "skill_id":    skill_id,
+                "body":        mem.text,
+                "namespace":   mem.namespace,
+                "memory_type": mem.memory_type,
+                "metadata":    mem.metadata,
+                "created_at":  mem.created_at,
+            })));
+        }
+    }
+    Err(app_error(
+        StatusCode::NOT_FOUND,
+        format!("skill_id '{}' not found", skill_id),
+    ))
+}
+
+/// `POST /v1/skills/search` — semantic search over skill_substrate.
+/// Optional `applies_to` and `skill_type` filters are post-fetch in
+/// v0.8.11; v0.8.13 makes them prefilter via the where-clause work.
+async fn skill_search(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("skill_search");
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+
+    let query = body["query"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'query'"))?
+        .to_string();
+    let top_k = body
+        .get("top_k")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .min(50) as usize;
+    let applies_to_filter: Option<String> = body
+        .get("applies_to")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let skill_type_filter: Option<String> = body
+        .get("skill_type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Overfetch to allow post-filter to land top_k after exclusion.
+    let fetch_k = (top_k * 4).max(20);
+    execute_cmd_with_post_filter(
+        engine,
+        Command::Recall {
+            query,
+            top_k: fetch_k,
+            memory_type: Some("procedural".to_string()),
+            include_consolidated: false,
+            expand_entities: false,
+            namespace: Some(SKILL_NAMESPACE.to_string()),
+            domain: Some("skill".to_string()),
+            source: None,
+            query_embedding: None,
+        },
+        state.control.clone(),
+        &state.inflight,
+        applies_to_filter,
+        skill_type_filter,
+        top_k,
+    )
+    .await
+}
+
+/// `POST /v1/skills/{skill_id}/outcome` — append-only outcome log. Engine
+/// NEVER auto-rolls-up success_count on the parent skill (architectural
+/// enforcement of schema-not-semantics).
+async fn skill_record_outcome(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(skill_id): axum::extract::Path<String>,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("skill_record_outcome");
+    check_writable(&state)?;
+    validate_skill_id(&skill_id)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, format!("INVALID_SKILL_ID: {}", e)))?;
+    let success = body["success"]
+        .as_bool()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing or non-bool 'success'"))?;
+    let context = body
+        .get("context")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+
+    // Require the skill to actually exist; otherwise outcome is dangling.
+    if find_skill_rid(&engine, &skill_id).is_none() {
+        return Err(app_error(
+            StatusCode::NOT_FOUND,
+            format!("skill_id '{}' not found", skill_id),
+        ));
+    }
+
+    let metadata = serde_json::json!({
+        "record_type": "skill_outcome",
+        "skill_ref":   skill_id,
+        "success":     success,
+        "context":     context,
+    });
+    execute_cmd(
+        engine,
+        Command::Remember {
+            text: format!(
+                "Outcome for {}: success={} — {}",
+                skill_id, success, context
+            ),
+            memory_type: "episodic".to_string(),
+            importance: 0.5,
+            valence: if success { 0.3 } else { -0.3 },
+            half_life: 90.0 * 24.0 * 3600.0,
+            metadata,
+            namespace: OUTCOME_NAMESPACE.to_string(),
+            certainty: 1.0,
+            domain: "skill_outcome".to_string(),
+            source: "skill_api".to_string(),
+            emotional_state: None,
+            embedding: None,
+        },
+        state.control.clone(),
+        &state.inflight,
+    )
+    .await
+}
+
+/// `POST /v1/skills/{skill_id}/forget` — tombstone the skill. Optional
+/// cascade_outcomes (default false) for explicit hard-delete of outcome
+/// records too.
+async fn skill_forget(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(skill_id): axum::extract::Path<String>,
+    Json(_body): Json<Value>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("skill_forget");
+    check_writable(&state)?;
+    validate_skill_id(&skill_id)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, format!("INVALID_SKILL_ID: {}", e)))?;
+    let (_, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+
+    let rid = find_skill_rid(&engine, &skill_id).ok_or_else(|| {
+        app_error(
+            StatusCode::NOT_FOUND,
+            format!("skill_id '{}' not found", skill_id),
+        )
+    })?;
+
+    execute_cmd(
+        engine,
+        Command::Forget { rid },
+        state.control.clone(),
+        &state.inflight,
+    )
+    .await
+}
+
+/// Helper: scan skill_substrate and find the rid whose
+/// `metadata.skill_id` equals the given id. v0.8.11 stopgap; v0.8.12
+/// replaces with /v1/lookup. Bounded scan limit (10000) so the worst
+/// case is bounded even with thousands of skills.
+fn find_skill_rid(engine: &Arc<yantrikdb::YantrikDB>, skill_id: &str) -> Option<String> {
+    let (memories, _total) = engine
+        .list_memories(
+            10000,
+            0,
+            Some("skill"),
+            Some("procedural"),
+            Some(SKILL_NAMESPACE),
+            "created_at",
+        )
+        .ok()?;
+    for mem in memories {
+        if mem.metadata.get("skill_id").and_then(|v| v.as_str()) == Some(skill_id) {
+            return Some(mem.rid);
+        }
+    }
+    None
+}
+
+/// Variant of execute_cmd that performs post-fetch filtering on Recall
+/// results before returning to the client. Used by /v1/skills/search to
+/// apply applies_to / skill_type filters that are post-fetch in v0.8.11
+/// (v0.8.13 makes them prefilter via the where-clause work).
+async fn execute_cmd_with_post_filter(
+    engine: Arc<yantrikdb::YantrikDB>,
+    cmd: Command,
+    control: Arc<parking_lot::Mutex<crate::control::ControlDb>>,
+    inflight: &std::sync::atomic::AtomicU32,
+    applies_to_filter: Option<String>,
+    skill_type_filter: Option<String>,
+    final_top_k: usize,
+) -> AppResult {
+    use std::sync::atomic::Ordering;
+    struct InflightGuard<'a>(&'a std::sync::atomic::AtomicU32);
+    impl Drop for InflightGuard<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let current = inflight.fetch_add(1, Ordering::Relaxed);
+    if current >= crate::server::MAX_INFLIGHT {
+        inflight.fetch_sub(1, Ordering::Relaxed);
+        return Err(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "server overloaded: {} inflight ops (max {}). Retry later.",
+                current,
+                crate::server::MAX_INFLIGHT,
+            ),
+        ));
+    }
+    let _g = InflightGuard(inflight);
+
+    let inner = tokio::task::spawn_blocking(move || {
+        let db = engine.as_ref();
+        handler::execute_with_guard(db, cmd, Some(control.as_ref()))
+    })
+    .await
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("join error: {e}"),
+        )
+    })?;
+    let result = inner.map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    match result {
+        crate::handler::CommandResult::RecallResults { results, total: _ } => {
+            // Filter by applies_to / skill_type, then truncate to top_k.
+            // RecallResults are Vec<Value> (already JSON-encoded).
+            let filtered: Vec<Value> = results
+                .into_iter()
+                .filter(|r| {
+                    let metadata = r.get("metadata");
+                    if let Some(ref needed) = applies_to_filter {
+                        let ok = metadata
+                            .and_then(|m| m.get("applies_to"))
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().any(|x| x.as_str() == Some(needed.as_str())))
+                            .unwrap_or(false);
+                        if !ok {
+                            return false;
+                        }
+                    }
+                    if let Some(ref needed) = skill_type_filter {
+                        let ok = metadata
+                            .and_then(|m| m.get("skill_type"))
+                            .and_then(|v| v.as_str())
+                            == Some(needed.as_str());
+                        if !ok {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .take(final_top_k)
+                .collect();
+            let total = filtered.len();
+            Ok(Json(serde_json::json!({
+                "results": filtered,
+                "total":   total,
+            })))
+        }
+        other => Err(app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("unexpected command result: {:?}", other),
+        )),
+    }
+}
+
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.admission.cfg.max_request_body_bytes;
@@ -2423,6 +2976,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/remember/batch", post(remember_batch))
         .route("/v1/recall", post(recall))
         .route("/v1/forget", post(forget))
+        // RFC 022 §1 (v0.8.11): first-class skill primitives. Thin wrappers
+        // over /v1/remember + /v1/recall + scan-and-filter (v0.8.11) or
+        // /v1/lookup (v0.8.12+). Schema-validated, no semantic ontology.
+        .route("/v1/skills/define", post(skill_define))
+        .route("/v1/skills/search", post(skill_search))
+        .route("/v1/skills/{skill_id}", get(skill_get))
+        .route("/v1/skills/{skill_id}/outcome", post(skill_record_outcome))
+        .route("/v1/skills/{skill_id}/forget", post(skill_forget))
         .route("/v1/relate", post(relate))
         .route("/v1/claim", post(ingest_claim))
         .route("/v1/claims", get(get_claims))
@@ -2477,4 +3038,123 @@ pub fn router(state: Arc<AppState>) -> Router {
         app = app.merge(raft_router);
     }
     app
+}
+
+#[cfg(test)]
+mod skill_validation_tests {
+    use super::{validate_applies_to_entry, validate_skill_id};
+
+    // ── validate_skill_id ──────────────────────────────────
+
+    #[test]
+    fn skill_id_valid_minimal_form() {
+        // Minimum: starts with lowercase, has one dot, length >= 4.
+        assert!(validate_skill_id("a.b").is_err()); // length < 4
+        assert!(validate_skill_id("ab.c").is_ok()); // length 4 = boundary
+        assert!(validate_skill_id("skill.foo.v1").is_ok());
+        assert!(validate_skill_id("skill.invoice.validation.v3").is_ok());
+    }
+
+    #[test]
+    fn skill_id_rejects_uppercase() {
+        assert!(validate_skill_id("Skill.foo").is_err());
+        assert!(validate_skill_id("skill.Foo").is_err());
+        assert!(validate_skill_id("SKILL.FOO").is_err());
+    }
+
+    #[test]
+    fn skill_id_rejects_no_dot() {
+        // Must contain at least one '.' (dotted form requirement).
+        let err = validate_skill_id("skillfoo").unwrap_err();
+        assert!(err.contains("at least one '.'"));
+    }
+
+    #[test]
+    fn skill_id_rejects_consecutive_dots() {
+        assert!(validate_skill_id("skill..foo").is_err());
+    }
+
+    #[test]
+    fn skill_id_rejects_trailing_dot() {
+        assert!(validate_skill_id("skill.foo.").is_err());
+    }
+
+    #[test]
+    fn skill_id_rejects_starts_with_digit_or_underscore_or_dot() {
+        assert!(validate_skill_id("1skill.foo").is_err());
+        assert!(validate_skill_id("_skill.foo").is_err());
+        assert!(validate_skill_id(".skill.foo").is_err());
+    }
+
+    #[test]
+    fn skill_id_rejects_invalid_chars() {
+        assert!(validate_skill_id("skill-foo.v1").is_err()); // hyphen
+        assert!(validate_skill_id("skill foo.v1").is_err()); // space
+        assert!(validate_skill_id("skill/foo.v1").is_err()); // slash
+        assert!(validate_skill_id("skill@foo.v1").is_err()); // at-sign
+    }
+
+    #[test]
+    fn skill_id_length_bounds() {
+        // Lower bound: 4 chars.
+        assert!(validate_skill_id("a.bc").is_ok());
+        assert!(validate_skill_id("a.b").is_err());
+        // Upper bound: 200 chars.
+        let long_ok = format!("skill.{}", "a".repeat(193)); // 6 + 193 = 199
+        assert!(validate_skill_id(&long_ok).is_ok());
+        let long_err = format!("skill.{}", "a".repeat(195)); // 6 + 195 = 201
+        assert!(validate_skill_id(&long_err).is_err());
+    }
+
+    #[test]
+    fn skill_id_allows_underscores_and_digits_in_segments() {
+        assert!(validate_skill_id("skill_42.foo_bar.v1_2").is_ok());
+        assert!(validate_skill_id("a1.b2").is_ok());
+    }
+
+    // ── validate_applies_to_entry ──────────────────────────
+
+    #[test]
+    fn applies_to_entry_valid() {
+        assert!(validate_applies_to_entry("invoice").is_ok());
+        assert!(validate_applies_to_entry("meta_agent").is_ok());
+        assert!(validate_applies_to_entry("a").is_ok());
+        assert!(validate_applies_to_entry("a1").is_ok());
+        assert!(validate_applies_to_entry("invoice_validation_2026").is_ok());
+    }
+
+    #[test]
+    fn applies_to_entry_rejects_hyphen() {
+        // The whole point of this regex: catch the hyphen-vs-underscore
+        // drift bug Brainstorm 2 named. `meta-agent` (hyphen) and
+        // `meta_agent` (underscore) are both valid Rust strings, but only
+        // the underscore form is accepted as an applies_to entry. This
+        // forces consistency at write time.
+        let err = validate_applies_to_entry("meta-agent").unwrap_err();
+        assert!(err.contains("invalid character"));
+    }
+
+    #[test]
+    fn applies_to_entry_rejects_uppercase() {
+        assert!(validate_applies_to_entry("Invoice").is_err());
+        assert!(validate_applies_to_entry("INVOICE").is_err());
+    }
+
+    #[test]
+    fn applies_to_entry_rejects_dot_or_slash() {
+        // Unlike skill_id, applies_to entries are flat (no dots).
+        assert!(validate_applies_to_entry("invoice.validation").is_err());
+        assert!(validate_applies_to_entry("invoice/validation").is_err());
+    }
+
+    #[test]
+    fn applies_to_entry_rejects_empty() {
+        assert!(validate_applies_to_entry("").is_err());
+    }
+
+    #[test]
+    fn applies_to_entry_rejects_starts_with_digit_or_underscore() {
+        assert!(validate_applies_to_entry("1invoice").is_err());
+        assert!(validate_applies_to_entry("_invoice").is_err());
+    }
 }

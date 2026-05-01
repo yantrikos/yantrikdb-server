@@ -5,6 +5,128 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.11] — 2026-05-01
+
+First-class skill primitives + follower HNSW backfill fix. Closes the
+"wrote a memory, can't recall it for hours" follower lag that yantrikdb-agi
+reported, and gives every consumer a stable substrate-layer skill API
+instead of each program reinventing `skill_define` / `skill_get` /
+`skill_recall` in agent code with subtle bugs.
+
+Designed via three multi-voice brainstorm sessions (gpt-5.5 + deepseek +
+claude) on 2026-05-01. Full RFC at `docs/rfcs/rfc_022_skill_substrate_and_ryw.md`.
+Story of how the design got there at `docs/blog/2026-05-01-how-v0.8.11-got-designed.md`.
+
+### Added — Skill API (RFC 022 §1)
+
+Five new endpoints under `/v1/skills/*`. Thin wrappers over existing
+memory primitives, hardcoded to `namespace=skill_substrate`,
+`metadata.record_type=skill`, `memory_type=procedural`. Strict shape
+validation; **no semantic ontology** (no validation gates, no auto-rollup
+of success_count, no origin immutability).
+
+- `POST /v1/skills/define` — write a new skill record. Validates:
+  - `skill_id` matches `^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`, length 4..200,
+  - `body` length 50..5000,
+  - `applies_to` non-empty array (≤10) of entries matching
+    `^[a-z][a-z0-9_]*$` — catches the hyphen-vs-underscore drift bug
+    Brainstorm 2 named (`["meta_agent"]` vs `["meta-agent"]` — both
+    valid strings, only one matches),
+  - `skill_type` ∈ {procedure, reference, lesson, pattern, rule}.
+  Default `on_conflict=reject` returns 409 Conflict. `?on_conflict=update`
+  for upsert (tombstones existing). `?on_conflict=ignore` returns the
+  existing rid as a no-op.
+- `GET /v1/skills/{skill_id}` — exact lookup. v0.8.11 uses
+  scan-then-filter (O(N), bounded at 10000 records); v0.8.12 will replace
+  with `/v1/lookup` for O(log N) via indexed metadata.
+- `POST /v1/skills/search` — semantic search over `skill_substrate`
+  with optional `applies_to` and `skill_type` filters (post-fetch in
+  v0.8.11; prefilter via where-clause arrives in v0.8.13).
+- `POST /v1/skills/{skill_id}/outcome` — append-only event log written
+  to `outcome_substrate` namespace with `metadata.skill_ref={skill_id}`.
+  **Engine never auto-rolls-up `success_count` on the parent skill**
+  — architectural enforcement of schema-not-semantics. Programs that
+  want rollups query `outcome_substrate` themselves and aggregate.
+- `POST /v1/skills/{skill_id}/forget` — tombstone the skill record.
+
+### Fixed — Follower HNSW backfill (RFC 022 §2)
+
+The architect of yantrikdb-agi reported on 2026-05-01: *"newly-written
+memories via /v1/remember are not findable via /v1/recall for some
+indeterminate window after the write returns."* Initial RFC §2 draft
+proposed an in-engine pending-vector overlay (~300 LOC). A 90-second
+empirical test against the live cluster showed engine `record()` already
+does synchronous HNSW insert — leader-side is RYW-consistent. The
+actual bug lives in **follower** replication backfill at
+`crates/yantrikdb-server/src/cluster/sync_loop.rs:369` which called
+`db.rebuild_vec_index()` (full HNSW rebuild) at the end of every
+backfill batch. With 1k+ memories per tenant the rebuild took seconds;
+with 10k+ minutes; under load the multi-hour lag the architect saw.
+
+Two engine API additions enabled the fix:
+
+- `pub fn YantrikDB::insert_vector(&self, rid: &str, embedding: &[f32]) -> Result<()>`
+- `pub fn YantrikDB::encrypt_embedding_pub(&self, blob: &[u8]) -> Result<Vec<u8>>`
+
+Both promoted from `pub(crate)` to `pub` in the engine library bump
+`yantrikdb` 0.6.4 → 0.6.5. Then `backfill_embeddings()` was rewritten
+to do per-row HNSW insert instead of batch-end full rebuild. Effect:
+
+- **Follower recall lag**: minutes-to-hours → seconds (per-row
+  O(log N) insert instead of O(N log N) rebuild on the entire
+  memories table per cycle).
+- **Encrypted-cluster follower recall**: starts working for the first
+  time. Pre-v0.8.11 the backfill skipped encrypted writes entirely
+  with a TODO comment, because `encrypt_embedding` was `pub(crate)`.
+- **Recall on each backfilled memory**: visible as soon as that memory's
+  insert completes, not at the end of the batch.
+
+### Architecture commitment
+
+**Schema, not semantics.** The substrate stores structured authority data
+(skill_id format, applies_to entry regex, skill_type enum); the agent layer
+decides what to *do* with it. This RFC explicitly refuses validation gates,
+outcome rollups, origin immutability, and any naming that overclaims
+semantic capability (`/v1/skills/learn`, `/v1/skills/master`, etc.).
+
+The pending-vector overlay design that the empirical test killed is
+preserved as RFC 022 §2.7 historical reference. If a future change moves
+HNSW insert to an async/batched path on the leader (e.g., to scale write
+throughput), that overlay is the spec for restoring leader-side RYW.
+
+### Backwards-compat
+
+Fully backwards-compatible. v0.8.10 clients see no behavior change.
+- Existing `/v1/remember`, `/v1/recall`, `/v1/forget`, etc. signatures unchanged.
+- Engine library bump is purely additive (two methods promoted to `pub`).
+- No schema migration.
+
+### Operator notes
+
+- After upgrade, follower nodes start using piecewise insert immediately on
+  their next backfill cycle. No manual reindex needed.
+- A 0.8.10 follower running against a 0.8.11 leader keeps the old (slow)
+  full-rebuild path until upgraded — rolling upgrade is safe but the lag
+  benefit is only realized on upgraded followers.
+- Existing skills written via `/v1/remember` directly with the
+  `namespace=skill_substrate, metadata.record_type=skill, skill_id=...`
+  convention continue to work via `/v1/skills/get` and `/v1/skills/search`
+  (the convention matches what the API expects).
+
+### Coming next
+
+- **v0.8.12**: namespace_schema + `/v1/lookup` makes `/v1/skills/{id}` O(log N).
+- **v0.8.13**: where-clause prefilter on `/v1/recall` + planner explain;
+  yantrikdb-agi migrates 67 skills onto indexed substrate.
+- **v0.8.14+**: RFC 023 epistemic-control primitives one per release
+  (provenance, supersede chain, recall perimeter, action-conditioned veto,
+  scoped negative evidence, memory-of-missing-memory, quarantine, latent
+  contradiction awareness).
+- **v1.0**: category-shift release. *"YantrikDB is not a vector database.
+  It's an epistemic control plane for LLMs."*
+
+[0.8.11]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.11
+
 ## [0.8.10] — 2026-05-01
 
 Critical follow-up to v0.8.9. The admission-control inflight counter

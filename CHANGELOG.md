@@ -5,6 +5,82 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9] — 2026-05-01
+
+Critical fix for concurrent recall. A single client issuing parallel
+recall queries clogged a CPU core and caused admission control to
+shed most requests as 503, even though SQLite WAL mode supports
+concurrent readers natively. The bottleneck was two layers of
+unnecessary serialisation:
+
+1. The engine library held all SQLite work behind a single
+   `Mutex<Connection>`, so all recalls queued head-of-line.
+2. The server wrapped the engine in an outer `Arc<Mutex<YantrikDB>>`
+   that further serialised every handler call, even though
+   `YantrikDB` is already `Send + Sync` with internal locks on
+   each field.
+
+Operator-facing impact (Docker on Windows, .140):
+
+| Test                     | v0.8.8 (pre-fix)       | v0.8.9                |
+|--------------------------|------------------------|------------------------|
+| 10 concurrent recall     | 7×200, 3×503, p99 341ms| 10/10, p99 143 ms     |
+| 50 concurrent recall     | 0×200, 47×503, 3 t/o   | 33×200, 17×503, 0 t/o |
+| Single-AGI sustained CPU | 100% on 1 core (queue) | 100% doing real work  |
+
+LXC-on-bare-metal (.141, 2 vCPU) is similar: 50-conc lands 42×200,
+8×503 admission shed, 0 timeouts.
+
+### Fixed
+
+- **Engine read connection pool (yantrikdb 0.6.4).** `YantrikDB`
+  now opens N additional read-only SQLite connections in WAL mode
+  (default `YANTRIKDB_READ_POOL=4`), each behind its own mutex.
+  Recall paths in `engine::recall` acquire any free connection
+  round-robin via the new `read_conn()` method instead of the
+  single write `conn` mutex. Writes (record/forget/correct) and
+  schema migrations continue to use the write `conn`, so SQLite's
+  single-writer rule is preserved without explicit coordination.
+
+- **Removed `Arc<Mutex<YantrikDB>>` from server.** `TenantPool`
+  now holds `Arc<YantrikDB>` directly. `YantrikDB` is asserted
+  `Send + Sync` in the engine library; all top-level methods take
+  `&self` and use internal locks. The outer mutex was dead
+  serialisation that prevented every form of concurrency.
+
+- **Watchdog probes the engine, not a lock.** The 15 s
+  built-in watchdog used to time `engine.try_lock()` (now
+  meaningless) — it now times `engine.stats(None)` instead, which
+  exercises the read pool and reports a real liveness signal.
+
+### Correctness verified
+
+- `forget`-immediately-hides invariant: 0 stale reads sequentially
+  (5 polls per probe), 0 stale reads under race (5 concurrent
+  recallers per probe × 5 probes after the tombstone commit). The
+  write conn commits the tombstone; pooled read conns begin a new
+  WAL transaction per query and see the latest committed state.
+- 1315 engine tests pass (was 1314 — engine 0.6.3 added one).
+- 326 server tests pass.
+
+### Telemetry added
+
+- `LockHoldTimer` RAII helper in `metrics.rs` — wraps any
+  short-lived engine borrow and emits a `WARN` log if it exceeds
+  500 ms. Background workers in `background.rs` are instrumented;
+  the HTTP layer extracts an op-name in `execute_cmd` for
+  `engine_lock_hold_ms` histograms grouped by command.
+
+### Tuning notes
+
+- `YANTRIKDB_READ_POOL=0` disables the pool; recall falls back to
+  the write conn. Useful only for debugging or tests.
+- For high-fanout workloads (many tenants, many concurrent
+  recallers per tenant), values above 4 may help. Each connection
+  is ~1 MB of resident memory.
+
+[0.8.9]: https://github.com/yantrikos/yantrikdb-server/releases/tag/v0.8.9
+
 ## [0.8.8] — 2026-05-01
 
 Performance fix. Operators reported recall queries timing out

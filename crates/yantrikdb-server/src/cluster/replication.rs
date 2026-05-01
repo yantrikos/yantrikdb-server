@@ -47,10 +47,10 @@ pub fn wire_to_entry(w: OplogEntryWire) -> OplogEntry {
 
 /// Handle an OplogPull request — extract ops since the requested watermark.
 pub fn handle_oplog_pull(
-    engine: &Arc<parking_lot::Mutex<YantrikDB>>,
+    engine: &Arc<YantrikDB>,
     req: OplogPullRequest,
 ) -> anyhow::Result<OplogPullResult> {
-    let db = engine.lock();
+    let db = engine.as_ref();
     let conn = db.conn();
 
     let since_hlc = req.since_hlc.as_deref();
@@ -70,7 +70,7 @@ pub fn handle_oplog_pull(
 
 /// Apply pulled/pushed ops to the local engine.
 pub fn handle_oplog_apply(
-    engine: &Arc<parking_lot::Mutex<YantrikDB>>,
+    engine: &Arc<YantrikDB>,
     ops_wire: Vec<OplogEntryWire>,
 ) -> anyhow::Result<ApplyResult> {
     let ops: Vec<OplogEntry> = ops_wire.into_iter().map(wire_to_entry).collect();
@@ -79,7 +79,7 @@ pub fn handle_oplog_apply(
     let last_op_id = ops.last().map(|o| o.op_id.clone()).unwrap_or_default();
     let count = ops.len();
 
-    let db = engine.lock();
+    let db = engine.as_ref();
     let stats = apply_ops(&db, &ops)?;
 
     Ok(ApplyResult {
@@ -102,22 +102,22 @@ pub struct ApplyResult {
 
 /// Read the local watermark for a peer (where we last synced from them).
 pub fn get_local_watermark(
-    engine: &Arc<parking_lot::Mutex<YantrikDB>>,
+    engine: &Arc<YantrikDB>,
     peer_actor: &str,
 ) -> anyhow::Result<Option<(Vec<u8>, String)>> {
-    let db = engine.lock();
+    let db = engine.as_ref();
     let conn = db.conn();
     Ok(get_peer_watermark(&conn, peer_actor)?)
 }
 
 /// Update the local watermark for a peer after a successful pull.
 pub fn update_local_watermark(
-    engine: &Arc<parking_lot::Mutex<YantrikDB>>,
+    engine: &Arc<YantrikDB>,
     peer_actor: &str,
     hlc: &[u8],
     op_id: &str,
 ) -> anyhow::Result<()> {
-    let db = engine.lock();
+    let db = engine.as_ref();
     let conn = db.conn();
     set_peer_watermark(&conn, peer_actor, hlc, op_id)?;
     Ok(())

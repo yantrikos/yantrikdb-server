@@ -2122,15 +2122,17 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                     };
                     if let Some(rec) = db_record {
                         if let Ok(engine) = pool.get_engine(&rec) {
+                            // v0.8.9: engine is Arc<YantrikDB> with no outer
+                            // mutex — exercise the read pool via stats() and
+                            // record probe latency as the health signal.
                             let start = std::time::Instant::now();
-                            let timeout = std::time::Duration::from_secs(5);
-                            if engine.try_lock_for(timeout).is_some() {
-                                crate::metrics::record_engine_lock_wait(start.elapsed());
-                            } else {
-                                crate::metrics::record_engine_lock_wait(timeout);
+                            let _ = engine.stats(None);
+                            let elapsed = start.elapsed();
+                            crate::metrics::record_engine_lock_wait(elapsed);
+                            if elapsed >= std::time::Duration::from_secs(5) {
                                 tracing::warn!(
-                                    wait_secs = 5,
-                                    "built-in watchdog: engine lock not acquired within 5s"
+                                    elapsed_ms = elapsed.as_millis() as u64,
+                                    "built-in watchdog: engine probe slow (>5s)"
                                 );
                             }
                         }

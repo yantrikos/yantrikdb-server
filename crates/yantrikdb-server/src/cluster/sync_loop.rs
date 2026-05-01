@@ -205,7 +205,7 @@ async fn pull_db_from_leader(
 
     // Find our actor_id (used for exclusion to avoid pulling our own ops)
     let our_actor_id = {
-        let db = engine.lock();
+        let db = engine.as_ref();
         db.actor_id().to_string()
     };
 
@@ -287,14 +287,12 @@ async fn pull_db_from_leader(
 /// no embedding (the oplog doesn't carry vectors). Re-embed each missing
 /// row using the local embedder and update both the SQLite column and
 /// the in-memory HNSW vector index.
-async fn backfill_embeddings(
-    engine: &std::sync::Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>,
-) -> anyhow::Result<()> {
+async fn backfill_embeddings(engine: &std::sync::Arc<yantrikdb::YantrikDB>) -> anyhow::Result<()> {
     use rusqlite::params;
 
     // Collect rids + texts that need embedding
     let pending: Vec<(String, String)> = {
-        let db = engine.lock();
+        let db = engine.as_ref();
         if !db.has_embedder() {
             return Ok(()); // no embedder, nothing we can do
         }
@@ -323,7 +321,7 @@ async fn backfill_embeddings(
     // Embed + write back, one at a time to keep lock duration short
     for (rid, text) in &pending {
         let embedding = {
-            let db = engine.lock();
+            let db = engine.as_ref();
             match db.embed(text) {
                 Ok(v) => v,
                 Err(e) => {
@@ -337,7 +335,7 @@ async fn backfill_embeddings(
         // bytes match exactly what record() would write.
         let blob = yantrikdb::serde_helpers::serialize_f32(&embedding);
 
-        let db = engine.lock();
+        let db = engine.as_ref();
 
         // NOTE: if encryption is enabled, the engine's encrypt_embedding()
         // method is pub(crate) — we can't call it from here. For encrypted
@@ -361,14 +359,13 @@ async fn backfill_embeddings(
             continue;
         }
         drop(conn);
-        drop(db);
     }
 
     // Now rebuild the HNSW index from the SQLite table (which has all embeddings now).
     // This is the only way to get vectors into HNSW since the index API isn't public
     // for piecewise insertion through YantrikDB.
     {
-        let db = engine.lock();
+        let db = engine.as_ref();
         if let Err(e) = db.rebuild_vec_index() {
             tracing::warn!(error = %e, "rebuild_vec_index failed during backfill");
         }

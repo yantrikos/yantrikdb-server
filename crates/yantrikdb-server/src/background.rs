@@ -41,7 +41,7 @@ impl WorkerRegistry {
 
     /// Start background workers for a database engine.
     /// Call this when an engine is first loaded into the pool.
-    pub fn start_for_database(&self, db_id: i64, db_name: String, engine: Arc<Mutex<YantrikDB>>) {
+    pub fn start_for_database(&self, db_id: i64, db_name: String, engine: Arc<YantrikDB>) {
         let mut workers = self.workers.lock();
         if workers.contains_key(&db_id) {
             return; // Already running
@@ -173,7 +173,7 @@ impl WorkerRegistry {
 // ── Worker loops ────────────────────────────────────────────────
 
 async fn consolidation_loop(
-    engine: Arc<Mutex<YantrikDB>>,
+    engine: Arc<YantrikDB>,
     interval: Duration,
     cancel: CancellationToken,
     db_name: String,
@@ -197,7 +197,8 @@ async fn consolidation_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock();
+                let db = engine.as_ref();
+                let _hold_timer = crate::metrics::LockHoldTimer::start("worker_consolidation");
 
                 // Skip if too few memories
                 let stats = db.stats(None);
@@ -242,7 +243,7 @@ async fn consolidation_loop(
 }
 
 async fn decay_loop(
-    engine: Arc<Mutex<YantrikDB>>,
+    engine: Arc<YantrikDB>,
     interval: Duration,
     cancel: CancellationToken,
     db_name: String,
@@ -266,7 +267,8 @@ async fn decay_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock();
+                let db = engine.as_ref();
+                let _hold_timer = crate::metrics::LockHoldTimer::start("worker_decay");
                 match db.decay(0.01) {
                     Ok(decayed) => Some(decayed.len()),
                     Err(e) => {
@@ -287,7 +289,7 @@ async fn decay_loop(
 }
 
 async fn session_cleanup_loop(
-    engine: Arc<Mutex<YantrikDB>>,
+    engine: Arc<YantrikDB>,
     interval: Duration,
     cancel: CancellationToken,
     db_name: String,
@@ -311,7 +313,8 @@ async fn session_cleanup_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock();
+                let db = engine.as_ref();
+                let _hold_timer = crate::metrics::LockHoldTimer::start("worker_session_cleanup");
                 match db.session_abandon_stale(24.0) {
                     Ok(count) => Some(count),
                     Err(e) => {
@@ -336,7 +339,7 @@ async fn session_cleanup_loop(
 /// Keeps the most recent N entries per database (default 100k), only deleting
 /// entries that have been marked applied=1.
 pub async fn run_oplog_gc_loop(
-    engine: Arc<Mutex<YantrikDB>>,
+    engine: Arc<YantrikDB>,
     interval: Duration,
     keep_recent: usize,
     cancel: CancellationToken,
@@ -361,7 +364,8 @@ pub async fn run_oplog_gc_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock();
+                let db = engine.as_ref();
+                let _hold_timer = crate::metrics::LockHoldTimer::start("worker_oplog_gc");
                 let conn = db.conn();
 
                 // Count current oplog
@@ -421,7 +425,7 @@ pub async fn run_oplog_gc_loop(
 /// COUNT(*) becomes expensive, but at typical tenant sizes the scan
 /// is well under 100ms and runs hourly.
 async fn null_embedding_check_loop(
-    engine: Arc<Mutex<YantrikDB>>,
+    engine: Arc<YantrikDB>,
     interval: Duration,
     cancel: CancellationToken,
     db_name: String,
@@ -446,7 +450,9 @@ async fn null_embedding_check_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || -> Option<i64> {
-                let db = engine.lock();
+                let db = engine.as_ref();
+                let _hold_timer =
+                    crate::metrics::LockHoldTimer::start("worker_null_embedding_check");
                 let conn = db.conn();
                 match conn.query_row(
                     "SELECT COUNT(*) FROM memories WHERE embedding IS NULL",
@@ -488,7 +494,7 @@ async fn null_embedding_check_loop(
 /// load the WAL can grow faster than auto-checkpointing reclaims. This
 /// explicit TRUNCATE checkpoint resets the WAL file to zero size.
 async fn wal_checkpoint_loop(
-    engine: Arc<Mutex<YantrikDB>>,
+    engine: Arc<YantrikDB>,
     interval: Duration,
     cancel: CancellationToken,
     db_name: String,
@@ -512,7 +518,8 @@ async fn wal_checkpoint_loop(
             let engine = Arc::clone(&engine);
             let db_name = db_name.clone();
             move || {
-                let db = engine.lock();
+                let db = engine.as_ref();
+                let _hold_timer = crate::metrics::LockHoldTimer::start("worker_wal_checkpoint");
                 let conn = db.conn();
 
                 // Query WAL size before checkpoint for metrics

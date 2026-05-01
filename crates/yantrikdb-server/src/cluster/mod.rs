@@ -81,10 +81,7 @@ impl ClusterContext {
     }
 
     /// Get an engine for a named database. Loads it lazily if needed.
-    pub fn engine_for(
-        &self,
-        db_name: &str,
-    ) -> anyhow::Result<Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>> {
+    pub fn engine_for(&self, db_name: &str) -> anyhow::Result<Arc<yantrikdb::YantrikDB>> {
         let db_record = if let Some(ref ctrl) = self.control {
             ctrl.lock()
                 .get_database(db_name)?
@@ -102,7 +99,7 @@ impl ClusterContext {
     }
 
     /// Get a default-database engine for replication ops.
-    pub fn default_engine(&self) -> anyhow::Result<Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>> {
+    pub fn default_engine(&self) -> anyhow::Result<Arc<yantrikdb::YantrikDB>> {
         self.engine_for("default")
     }
 
@@ -136,7 +133,7 @@ impl ClusterContext {
     /// Get our last HLC position from a specific database's oplog.
     pub fn last_hlc_for(&self, db_name: &str) -> anyhow::Result<Vec<u8>> {
         let engine = self.engine_for(db_name)?;
-        let db = engine.lock();
+        let db = engine.as_ref();
         let conn = db.conn();
         let result: Option<Vec<u8>> = conn
             .query_row(
@@ -155,7 +152,7 @@ impl ClusterContext {
 
     pub fn last_op_id_for(&self, db_name: &str) -> anyhow::Result<String> {
         let engine = self.engine_for(db_name)?;
-        let db = engine.lock();
+        let db = engine.as_ref();
         let conn = db.conn();
         let result: Option<String> = conn
             .query_row(

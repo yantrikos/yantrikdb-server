@@ -681,6 +681,52 @@ pub fn record_engine_lock_wait(duration: std::time::Duration) {
     global().record_lock_wait("engine", duration.as_secs_f64());
 }
 
+/// RAII timer that records engine-lock-hold metric on drop. Use right
+/// after `engine.lock()` to measure how long the lock is held by the
+/// caller's scope. Dropping the timer fires `record_engine_lock_hold`,
+/// which logs a warn-level slow-holder line if hold exceeds threshold.
+pub struct LockHoldTimer {
+    op: &'static str,
+    start: std::time::Instant,
+}
+
+impl LockHoldTimer {
+    pub fn start(op: &'static str) -> Self {
+        Self {
+            op,
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Drop for LockHoldTimer {
+    fn drop(&mut self) {
+        record_engine_lock_hold(self.op, self.start.elapsed());
+    }
+}
+
+/// Record engine lock hold time tagged by operation name. Logs a warning
+/// if the hold exceeds the configured slow-holder threshold (default 50ms),
+/// which is the operator-visible signal that the engine mutex is being
+/// held across expensive work and starving concurrent requests.
+pub fn record_engine_lock_hold(op: &str, duration: std::time::Duration) {
+    let secs = duration.as_secs_f64();
+    global().record_lock_wait(&format!("engine_hold_{op}"), secs);
+    let slow_ms: u128 = std::env::var("YANTRIKDB_SLOW_LOCK_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
+    let elapsed_ms = duration.as_millis();
+    if elapsed_ms > slow_ms {
+        tracing::warn!(
+            op = %op,
+            hold_ms = %elapsed_ms,
+            threshold_ms = %slow_ms,
+            "engine lock held longer than threshold (slow-holder)"
+        );
+    }
+}
+
 /// Record control lock wait time. Not currently instrumented — reserved for
 /// future control-path metrics once resolve_engine is instrumented.
 #[allow(dead_code)]

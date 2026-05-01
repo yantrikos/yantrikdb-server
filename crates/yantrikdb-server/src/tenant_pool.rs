@@ -15,7 +15,7 @@ use crate::control::{ControlDb, DatabaseRecord};
 use crate::embedder::FastEmbedder;
 
 pub struct TenantPool {
-    engines: Mutex<HashMap<i64, Arc<Mutex<YantrikDB>>>>,
+    engines: Mutex<HashMap<i64, Arc<YantrikDB>>>,
     data_dir: PathBuf,
     embedding_dim: usize,
     embedder: Option<FastEmbedder>,
@@ -47,7 +47,7 @@ impl TenantPool {
     }
 
     /// Get or create an engine for the given database.
-    pub fn get_engine(&self, db_record: &DatabaseRecord) -> anyhow::Result<Arc<Mutex<YantrikDB>>> {
+    pub fn get_engine(&self, db_record: &DatabaseRecord) -> anyhow::Result<Arc<YantrikDB>> {
         let mut engines = self.engines.lock();
 
         if let Some(engine) = engines.get(&db_record.id) {
@@ -74,7 +74,13 @@ impl TenantPool {
             engine.set_embedder(emb.boxed());
         }
 
-        let engine = Arc::new(Mutex::new(engine));
+        // v0.8.9: drop the server-side Mutex<YantrikDB>. YantrikDB is
+        // Send+Sync (asserted in engine library); all top-level methods
+        // take &self with internal locks. The outer Mutex was dead
+        // serialization that prevented concurrent recall — a single AGI
+        // could clog a CPU core. Now: Arc<YantrikDB> direct, recalls
+        // parallelize through engine's read connection pool.
+        let engine = Arc::new(engine);
         engines.insert(db_record.id, Arc::clone(&engine));
 
         tracing::info!(db_name = %db_record.name, db_id = db_record.id, "loaded engine");

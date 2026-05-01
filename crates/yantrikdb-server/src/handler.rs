@@ -24,18 +24,18 @@ pub enum CommandResult {
 /// Execute a command against the given engine. Acquires the lock internally.
 /// Used by the wire protocol path.
 pub fn execute(
-    engine: &Arc<Mutex<YantrikDB>>,
+    engine: &Arc<YantrikDB>,
     cmd: Command,
     control: Option<&Mutex<ControlDb>>,
 ) -> anyhow::Result<CommandResult> {
-    let db = engine.lock();
+    let db = engine.as_ref();
     execute_with_guard(db, cmd, control)
 }
 
 /// Execute a command with a pre-acquired engine guard. Used by the HTTP
 /// gateway path which measures lock acquisition time separately.
 pub fn execute_with_guard(
-    db: parking_lot::MutexGuard<'_, YantrikDB>,
+    db: &YantrikDB,
     cmd: Command,
     control: Option<&Mutex<ControlDb>>,
 ) -> anyhow::Result<CommandResult> {

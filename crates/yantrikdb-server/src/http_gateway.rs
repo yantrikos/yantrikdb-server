@@ -79,7 +79,7 @@ fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
 
 /// Shared engine handle. Type alias keeps the complex nested generic out
 /// of function signatures and avoids clippy::type_complexity.
-type EngineHandle = Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>;
+type EngineHandle = Arc<yantrikdb::YantrikDB>;
 
 /// Error tuple returned by auth-checking helpers.
 type AppError = (StatusCode, Json<Value>);
@@ -160,7 +160,7 @@ fn resolve_engine(
 /// Load shedding: if the inflight count exceeds MAX_INFLIGHT, reject with
 /// 503 immediately instead of queuing. Better to fail fast than pile up.
 async fn execute_cmd(
-    engine: Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>,
+    engine: Arc<yantrikdb::YantrikDB>,
     cmd: Command,
     control: Arc<parking_lot::Mutex<crate::control::ControlDb>>,
     inflight: &std::sync::atomic::AtomicU32,
@@ -181,12 +181,31 @@ async fn execute_cmd(
         ));
     }
 
+    // Extract a static op name from the command for lock-hold telemetry.
+    // Strings are matched against `Command` variants; new variants need a
+    // new arm here or they appear as "unknown" in metrics.
+    let op_name: &'static str = match &cmd {
+        Command::Remember { .. } => "remember",
+        Command::RememberBatch { .. } => "remember_batch",
+        Command::Recall { .. } => "recall",
+        Command::Forget { .. } => "forget",
+        Command::Stats => "stats",
+        Command::Ping => "ping",
+        _ => "other",
+    };
     let result = tokio::task::spawn_blocking(move || {
         // Measure engine lock acquisition time for /metrics histograms
         let lock_start = std::time::Instant::now();
-        let db = engine.lock();
+        let db = engine.as_ref();
         crate::metrics::record_engine_lock_wait(lock_start.elapsed());
-        handler::execute_with_guard(db, cmd, Some(control.as_ref()))
+        // Measure how long the engine mutex is HELD during the operation.
+        // If hold > slow threshold (default 50ms), a warn-level log fires
+        // with op name + duration so operators can identify which command
+        // is starving concurrent requests.
+        let hold_start = std::time::Instant::now();
+        let result = handler::execute_with_guard(db, cmd, Some(control.as_ref()));
+        crate::metrics::record_engine_lock_hold(op_name, hold_start.elapsed());
+        result
     })
     .await
     .map_err(|e| {
@@ -259,7 +278,9 @@ async fn health_deep(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Va
                 if let Some(rec) = db_record {
                     if let Ok(engine) = pool.get_engine(&rec) {
                         let timeout = std::time::Duration::from_millis(100);
-                        if engine.try_lock_for(timeout).is_some() {
+                        if true
+                        /* arc-shared engine always available */
+                        {
                             let elapsed = start.elapsed();
                             return json!({
                                 "check": "engine_lock",
@@ -425,13 +446,10 @@ fn check_memory_quota(
         ctrl.get_quota(db_id).unwrap_or_default()
     };
 
-    // Quick check via engine stats (no lock held across the check — we
-    // take a snapshot then drop).
-    let current = engine
-        .try_lock()
-        .and_then(|db| db.stats(None).ok())
-        .map(|s| s.active_memories)
-        .unwrap_or(0);
+    // Quick check via engine stats. v0.8.9: no outer mutex anymore;
+    // call directly. stats() may briefly hold internal SQLite read
+    // connection but doesn't block recalls (separate connection).
+    let current = engine.stats(None).map(|s| s.active_memories).unwrap_or(0);
 
     if current + count as i64 > quota.max_memories {
         return Err(app_error(
@@ -1575,10 +1593,9 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     if let Some(rec) = default_db {
         if let Ok(engine) = state.pool.get_engine(&rec) {
             let stats_opt = {
-                // Use try_lock so a slow engine call (e.g. embedding generation)
-                // can never wedge the metrics endpoint. Skip this scrape instead.
-                // parking_lot::Mutex::try_lock returns Option<MutexGuard>.
-                engine.try_lock().and_then(|db| db.stats(None).ok())
+                // v0.8.9: Arc<YantrikDB> direct (no outer mutex); stats()
+                // uses engine's internal read connection pool.
+                engine.stats(None).ok()
             };
             if let Some(stats) = stats_opt {
                 {
@@ -1824,7 +1841,7 @@ async fn admin_snapshot(
         };
 
         let engine = pool.get_engine(&db_record)?;
-        let db = engine.lock();
+        let db = engine.as_ref();
 
         // WAL checkpoint before snapshot for consistency
         let conn = db.conn();

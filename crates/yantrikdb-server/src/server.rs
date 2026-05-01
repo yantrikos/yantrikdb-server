@@ -530,7 +530,7 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
 
 fn execute_and_respond(
     cmd: Command,
-    engine: &std::sync::Arc<parking_lot::Mutex<yantrikdb::YantrikDB>>,
+    engine: &std::sync::Arc<yantrikdb::YantrikDB>,
     control: &Mutex<ControlDb>,
     stream_id: u32,
 ) -> Vec<Frame> {

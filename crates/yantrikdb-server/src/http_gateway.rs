@@ -88,6 +88,109 @@ fn app_error(status: StatusCode, message: impl Into<String>) -> AppError {
     (status, Json(json!({ "error": message.into() })))
 }
 
+/// Translate a [`crate::commit::CommitError`] into an HTTP response per
+/// RFC 010 PR-6 §9. Centralized so every handler that consumes a
+/// committer surfaces consistent status codes + body shapes.
+///
+/// PR 6.6 ships the translator. PR 6.4 wires handlers to call it as
+/// they migrate from `engine.record()` to `submitter.submit()`.
+///
+/// Status code rationale:
+///
+/// | Variant | Status | Why |
+/// |---|---|---|
+/// | `NotLeader` | **307** Temporary Redirect | Standard HTTP clients follow redirects. The body carries `leader_id`/`leader_addr` for clients that don't. PR 6.4 will populate the `Location` response header at the call site (we can't here without restructuring `AppError`). |
+/// | `OpIdCollision` | **409** Conflict | Client bug: the same op_id was used with a different mutation. Don't retry. |
+/// | `UnexpectedLogIndex` | **409** Conflict | Concurrent write race. Re-read state and retry. |
+/// | `Version` | **426** Upgrade Required | Wire-version mismatch in a rolling upgrade. Operator runbook: bring the rest of the cluster to the new version. |
+/// | `NotYetImplemented` | **501** Not Implemented | Variant exists in the grammar but the apply path isn't ready (e.g. `PurgeMemory` until RFC 011 PR-3). |
+/// | `StorageFailure` | **503** Service Unavailable | Transient SQLite / disk error. Retry. |
+/// | `Shutdown` | **503** Service Unavailable | Don't retry on this node. Hit a peer. |
+/// | `CommitTimeout` | **503** Service Unavailable | Retry — but reuse the op_id (in the body) so the retry is idempotent. |
+fn commit_error_to_app_error(err: crate::commit::CommitError) -> AppError {
+    use crate::commit::CommitError as C;
+    match err {
+        C::NotLeader {
+            leader_id,
+            leader_addr,
+        } => (
+            StatusCode::TEMPORARY_REDIRECT,
+            Json(json!({
+                "error": "not_leader",
+                "leader_id": leader_id,
+                "leader_addr": leader_addr,
+            })),
+        ),
+        C::OpIdCollision {
+            op_id,
+            tenant_id,
+            existing_index,
+        } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "op_id_collision",
+                "op_id": op_id.to_string(),
+                "tenant_id": tenant_id.0,
+                "existing_index": existing_index,
+            })),
+        ),
+        C::UnexpectedLogIndex {
+            tenant_id,
+            expected,
+            actual,
+        } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "unexpected_log_index",
+                "tenant_id": tenant_id.0,
+                "expected": expected,
+                "actual": actual,
+            })),
+        ),
+        C::Version(verr) => (
+            StatusCode::UPGRADE_REQUIRED,
+            Json(json!({
+                "error": "wire_version_mismatch",
+                "detail": verr.to_string(),
+            })),
+        ),
+        C::NotYetImplemented {
+            variant,
+            planned_rfc,
+        } => (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "error": "not_implemented",
+                "variant": variant,
+                "planned_rfc": planned_rfc,
+            })),
+        ),
+        C::StorageFailure { message } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "storage_failure",
+                "detail": message,
+                "retry_after_ms": 1000,
+            })),
+        ),
+        C::Shutdown => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "shutting_down",
+                "retry_after_ms": 5000,
+            })),
+        ),
+        C::CommitTimeout { op_id } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "commit_timeout",
+                "op_id": op_id.to_string(),
+                "retry_after_ms": 1000,
+            })),
+        ),
+    }
+}
+
 /// Extract database engine from Bearer token.
 fn resolve_engine(
     state: &AppState,
@@ -3156,5 +3259,188 @@ mod skill_validation_tests {
     fn applies_to_entry_rejects_starts_with_digit_or_underscore() {
         assert!(validate_applies_to_entry("1invoice").is_err());
         assert!(validate_applies_to_entry("_invoice").is_err());
+    }
+}
+
+/// PR 6.6 — HTTP error-mapping conformance tests.
+///
+/// Pin every `CommitError` variant's status code + body shape so client
+/// SDKs can build retry / redirect / error-classification logic against
+/// a stable contract.
+#[cfg(test)]
+mod commit_error_mapping_tests {
+    use super::commit_error_to_app_error;
+    use crate::commit::{CommitError, OpId, TenantId};
+    use axum::http::StatusCode;
+
+    #[test]
+    fn not_leader_maps_to_307_with_leader_info_in_body() {
+        let (status, body) = commit_error_to_app_error(CommitError::NotLeader {
+            leader_id: Some(4),
+            leader_addr: Some("https://192.168.4.140:7438".into()),
+        });
+        assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+        let v = body.0;
+        assert_eq!(v["error"], "not_leader");
+        assert_eq!(v["leader_id"], 4);
+        assert_eq!(v["leader_addr"], "https://192.168.4.140:7438");
+    }
+
+    #[test]
+    fn not_leader_with_unknown_leader_emits_nulls() {
+        // Mid-election: openraft reports ForwardToLeader with no known
+        // leader. Client SHOULD interpret this as a 503-shape signal
+        // even though the status is 307.
+        let (status, body) = commit_error_to_app_error(CommitError::NotLeader {
+            leader_id: None,
+            leader_addr: None,
+        });
+        assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+        assert!(body.0["leader_id"].is_null());
+        assert!(body.0["leader_addr"].is_null());
+    }
+
+    #[test]
+    fn op_id_collision_maps_to_409_with_existing_index() {
+        let op = OpId::new_random();
+        let (status, body) = commit_error_to_app_error(CommitError::OpIdCollision {
+            op_id: op,
+            tenant_id: TenantId::new(7),
+            existing_index: 42,
+        });
+        assert_eq!(status, StatusCode::CONFLICT);
+        let v = body.0;
+        assert_eq!(v["error"], "op_id_collision");
+        assert_eq!(v["op_id"], op.to_string());
+        assert_eq!(v["tenant_id"], 7);
+        assert_eq!(v["existing_index"], 42);
+    }
+
+    #[test]
+    fn unexpected_log_index_maps_to_409_with_expected_actual() {
+        let (status, body) = commit_error_to_app_error(CommitError::UnexpectedLogIndex {
+            tenant_id: TenantId::new(1),
+            expected: 5,
+            actual: 7,
+        });
+        assert_eq!(status, StatusCode::CONFLICT);
+        let v = body.0;
+        assert_eq!(v["error"], "unexpected_log_index");
+        assert_eq!(v["expected"], 5);
+        assert_eq!(v["actual"], 7);
+    }
+
+    #[test]
+    fn not_yet_implemented_maps_to_501_with_planned_rfc() {
+        let (status, body) = commit_error_to_app_error(CommitError::NotYetImplemented {
+            variant: "PurgeMemory",
+            planned_rfc: "011",
+        });
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        let v = body.0;
+        assert_eq!(v["error"], "not_implemented");
+        assert_eq!(v["variant"], "PurgeMemory");
+        assert_eq!(v["planned_rfc"], "011");
+    }
+
+    #[test]
+    fn storage_failure_maps_to_503_with_retry_after() {
+        let (status, body) = commit_error_to_app_error(CommitError::StorageFailure {
+            message: "disk full".into(),
+        });
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let v = body.0;
+        assert_eq!(v["error"], "storage_failure");
+        assert_eq!(v["detail"], "disk full");
+        assert_eq!(v["retry_after_ms"], 1000);
+    }
+
+    #[test]
+    fn shutdown_maps_to_503_with_longer_retry_after() {
+        // Shutdown means "this node is going down — try a peer." Longer
+        // retry_after_ms hints "don't hammer this address."
+        let (status, body) = commit_error_to_app_error(CommitError::Shutdown);
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.0["error"], "shutting_down");
+        assert_eq!(body.0["retry_after_ms"], 5000);
+    }
+
+    #[test]
+    fn commit_timeout_maps_to_503_with_op_id_for_idempotent_retry() {
+        // The load-bearing PR 6.6 invariant: timeout responses carry
+        // the op_id so client retries are idempotent. Without this,
+        // network-partition recovery duplicates writes.
+        let op = OpId::new_random();
+        let (status, body) = commit_error_to_app_error(CommitError::CommitTimeout { op_id: op });
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let v = body.0;
+        assert_eq!(v["error"], "commit_timeout");
+        assert_eq!(v["op_id"], op.to_string());
+        assert_eq!(v["retry_after_ms"], 1000);
+    }
+
+    #[test]
+    fn version_mismatch_maps_to_426_upgrade_required() {
+        // 426 is the canonical HTTP status for "upgrade required" —
+        // tells the client (or its operator) the cluster is rolling
+        // through a wire-version transition and this peer is behind.
+        let verr = crate::version::VersionError::WireMajorMismatch {
+            node: crate::version::WireVersion::new(1, 0),
+            event: crate::version::WireVersion::new(2, 0),
+        };
+        let (status, body) = commit_error_to_app_error(CommitError::Version(verr));
+        assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(body.0["error"], "wire_version_mismatch");
+    }
+
+    #[test]
+    fn every_variant_produces_a_response() {
+        // Belt-and-suspenders: a future maintainer who adds a new
+        // CommitError variant must update commit_error_to_app_error.
+        // The match is exhaustive at compile time, but we also assert
+        // here that every existing variant produces a valid status code
+        // (not zero, not panic).
+        let cases = vec![
+            CommitError::NotLeader {
+                leader_id: None,
+                leader_addr: None,
+            },
+            CommitError::OpIdCollision {
+                op_id: OpId::new_random(),
+                tenant_id: TenantId::new(1),
+                existing_index: 0,
+            },
+            CommitError::UnexpectedLogIndex {
+                tenant_id: TenantId::new(1),
+                expected: 1,
+                actual: 2,
+            },
+            CommitError::NotYetImplemented {
+                variant: "X",
+                planned_rfc: "Y",
+            },
+            CommitError::StorageFailure {
+                message: "x".into(),
+            },
+            CommitError::Shutdown,
+            CommitError::CommitTimeout {
+                op_id: OpId::new_random(),
+            },
+        ];
+        for err in cases {
+            let label = err.metric_label();
+            let (status, body) = commit_error_to_app_error(err);
+            // 307 (NotLeader redirect) is the only 3xx case; everything
+            // else is 4xx or 5xx. No CommitError should map to 1xx/2xx.
+            let s = status.as_u16();
+            assert!(
+                s == 307 || s >= 400,
+                "{label} unexpected status {s} (want 307 or 4xx/5xx)"
+            );
+            assert!(
+                body.0.get("error").is_some(),
+                "{label} body must include `error` key"
+            );
+        }
     }
 }

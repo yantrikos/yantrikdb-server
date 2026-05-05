@@ -186,6 +186,22 @@ pub enum CommitError {
         leader_id: Option<u64>,
         leader_addr: Option<String>,
     },
+
+    /// Commit + apply round-trip exceeded the configured timeout. The
+    /// op_id is preserved so the client can retry idempotently against
+    /// the leader — if the entry actually committed (timeout was
+    /// spurious), the retry returns the original receipt; if it didn't,
+    /// the retry creates it.
+    ///
+    /// Maps to HTTP 503 with the op_id in the body. Critical for
+    /// network-partition recovery: blind retries without op_id-based
+    /// idempotency would create duplicate writes.
+    ///
+    /// Defined in PR-6.6 alongside the HTTP error mapping. Not produced
+    /// by any committer today; PR-6.4's RaftSubmitter will surface it
+    /// when openraft's client_write round-trip times out.
+    #[error("commit + apply timed out for op_id {op_id}; retry idempotently against leader")]
+    CommitTimeout { op_id: OpId },
 }
 
 impl CommitError {
@@ -199,6 +215,7 @@ impl CommitError {
             CommitError::StorageFailure { .. } => "storage_failure",
             CommitError::Shutdown => "shutdown",
             CommitError::NotLeader { .. } => "not_leader",
+            CommitError::CommitTimeout { .. } => "commit_timeout",
         }
     }
 
@@ -207,12 +224,15 @@ impl CommitError {
     /// transient (retry after backoff); `Shutdown` and
     /// `NotYetImplemented` and `Version` are terminal.
     /// `NotLeader` is retryable AGAINST THE LEADER (not the same node).
+    /// `CommitTimeout` is retryable BUT clients MUST reuse the op_id to
+    /// stay idempotent — blind retries duplicate writes.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
             CommitError::UnexpectedLogIndex { .. }
                 | CommitError::StorageFailure { .. }
                 | CommitError::NotLeader { .. }
+                | CommitError::CommitTimeout { .. }
         )
     }
 }

@@ -5,6 +5,98 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.12] — 2026-05-05
+
+RFC 010 PR-6 substrate-batch (PR 6.1, 6.2, 6.3 of 9). Pure additive
+scaffolding for cluster-mode replication actually working. **Cluster
+behaviour is unchanged at v0.8.12** — handlers still call
+`engine.record()` directly until PR 6.4 (target v0.8.13). Production
+write path bypasses the new traits; they're in place but unwired.
+
+The architectural commitments now in code: Submitter and Applier are
+separate, mutations carry materialized state for byte-deterministic
+follower apply, per-tenant commit-log files are addressable. Depth
+(handler migration, boot invariants, error mapping, snapshot, backfill,
+extended health surface) lands across PR 6.4–6.9 in v0.8.13 + v0.8.14.
+
+Hard blocker for PR 6.4 is filed at yantrikos/yantrikdb#9: engine API
+addition for `record_with_rid` + friends at engine 0.7.0.
+
+Full design at `docs/rfcs/rfc_010_pr6_write_path_migration.md`. Interim
+operator runbook for the cluster ghosting symptom that motivated this
+work at `docs/operations/cluster-routing.md`.
+
+### Added — Submitter / Applier trait split (RFC 010 PR-6.1)
+
+- `commit::Submitter` trait — durable log append. Single-node
+  `LocalSqliteSubmitter` delegates to existing `LocalSqliteCommitter`;
+  cluster `RaftSubmitter` ships in PR 6.4.
+- `commit::Applier` trait — state-machine apply. `LocalApplier` is the
+  only path that mutates engine state, runs on both single-node and
+  cluster nodes for byte-deterministic apply.
+- `ApplyError` with `NotYetWired` (PR 6.1 placeholder for variants
+  awaiting engine wiring), `AlreadyApplied` (idempotent replay
+  detection), `EngineFailure`. `is_idempotent_ok()` classifies which
+  errors callers MAY treat as success.
+- 16 new unit tests (8 applier + 8 submitter) covering trait
+  conformance, op_id idempotency, monotonic per-tenant log_index,
+  watermark tracking, dyn-compatibility compile-time pin.
+
+### Added — Mutation determinism + wire 1.1 (RFC 010 PR-6.2)
+
+- `MemoryMutation::UpsertMemory` grows three materialized-state fields:
+  - `extracted_entities: Vec<String>` — NER output stamped at the leader
+  - `created_at_unix_micros: Option<i64>` — server-assigned timestamp
+  - `embedding_model: Option<String>` — model id for RFC 013 migration
+- All three carry `#[serde(default)]` so v1.0 payloads round-trip
+  cleanly. v1.1 wire output golden-pinned by
+  `upsert_memory_v1_1_wire_format`. v1.0 historical compat preserved
+  by `historical_v1_0_payload_round_trips_into_current_build`.
+- `CURRENT_WIRE_VERSION` bumped to (1, 1).
+- `FEATURE_FLOORS` gains `mutation.UpsertMemory.materialized` at wire
+  1.1 — writers gate emission of populated fields on `cluster_min`
+  observation per RFC 017-A.
+- `commit::materialize` module: `Embedder`, `EntityExtractor`,
+  `Materializer` traits + `LocalMaterializer` impl. Converts a
+  `RememberRequest` into a fully-materialized mutation. Real engine
+  wiring (yantrikdb::YantrikDB::embed + engine NER) lands in PR 6.4.
+
+### Added — TenantCommitConnectionPool (RFC 010 PR-6.3)
+
+- `commit::tenant_pool::TenantCommitConnectionPool`: per-tenant SQLite
+  connection cache for the commit-log table living inside each
+  tenant's `yantrik.db` (Option D layout). LRU eviction at default
+  `max_size=256`; `close_idle(threshold)` for periodic maintenance.
+  WAL mode pragmas matching `LocalSqliteCommitter`.
+- `PathResolver` typedef so callers wire path-resolution to whatever
+  logic they already use.
+- 9 new unit tests covering first-open creates file + runs migrations,
+  cached Arc on repeat open, distinct connections per tenant, idempotent
+  migration across reopens, LRU eviction at max_size, idle-eviction,
+  WAL pragmas set, parent dir auto-created.
+
+### Changed
+
+- ROADMAP.md refreshed: corrects the prior load-bearing "the substrate
+  is correct" claim, sequences PR-6 (v0.8.12 → v0.8.14) ahead of
+  concurrency series (v0.8.15 → v0.8.19) ahead of RFC 023 epistemic
+  control plane (v0.8.20+).
+
+### Test counts
+
+- Unit tests: 770 → 785 (+15 across the three new modules)
+- Integration `commit_replay`: 338 → 344
+- Integration `wire_format_v1_0`: 342 → 348
+- Cumulative: 1450 → 1477 tests green, cargo fmt clean
+
+### Cluster mode caveat
+
+Cluster mode in v0.8.12 is structurally unchanged from v0.8.11:
+writes still bypass the openraft commit log; `last_log_index` only
+moves on cluster bookkeeping (membership, init), not application
+data. Operators running multi-node deployments should follow
+`docs/operations/cluster-routing.md` until PR 6.4 ships.
+
 ## [0.8.11] — 2026-05-01
 
 First-class skill primitives + follower HNSW backfill fix. Closes the

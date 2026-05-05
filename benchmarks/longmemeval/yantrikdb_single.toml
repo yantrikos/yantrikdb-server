@@ -1,0 +1,17 @@
+# Single-node yantrikdb config for the LongMemEval benchmark.
+# Same shape as benchmarks/skill_recall/yantrikdb_single.toml — built-in
+# ONNX embedder so writes are server-side embedded (matches the way
+# competitors deploy in their own benchmark setups).
+
+[server]
+wire_port = 7437
+http_port = 7438
+data_dir = "/var/lib/yantrikdb"
+
+[embedding]
+strategy = "builtin"
+dim = 384
+
+[limits]
+max_databases = 4
+max_connections = 256

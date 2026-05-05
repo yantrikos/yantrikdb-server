@@ -1,0 +1,6 @@
+# Override: use the locally-built image (commit 4fe6f24, embedder cache wiring).
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+services:
+  yantrikdb:
+    image: yantrikdb-phase2-local

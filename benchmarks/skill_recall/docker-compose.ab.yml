@@ -1,0 +1,5 @@
+# A/B baseline override: yantrikdb-ab-baseline image (no cache wiring).
+# Used to isolate cache effect on bench numbers.
+services:
+  yantrikdb:
+    image: yantrikdb-ab-baseline

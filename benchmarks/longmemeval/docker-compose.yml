@@ -1,0 +1,28 @@
+# Single-node yantrikdb for the LongMemEval benchmark.
+# Mirrors the skill_recall compose file's shape; ports remapped to
+# avoid colliding with skill_recall's 17437/17438.
+#
+# Usage:
+#   docker compose up -d
+#   MSYS_NO_PATHCONV=1 docker exec yantrikdb-lme yantrikdb db --data-dir /var/lib/yantrikdb create default
+#   MSYS_NO_PATHCONV=1 docker exec yantrikdb-lme yantrikdb token --data-dir /var/lib/yantrikdb create --db default --label lme
+#   YDB_TOKEN=<token> python fetch.py --variant oracle
+#   YDB_TOKEN=<token> python run.py --variant oracle --port 18438 --limit 5
+
+services:
+  yantrikdb:
+    image: yantrikdb-phase2-local
+    container_name: yantrikdb-lme
+    restart: unless-stopped
+    ports:
+      - "18437:7437"   # wire protocol
+      - "18438:7438"   # HTTP gateway
+    volumes:
+      - lme-data:/var/lib/yantrikdb
+      - ./yantrikdb_single.toml:/etc/yantrikdb/yantrikdb.toml:ro
+    environment:
+      - RUST_LOG=yantrikdb_server=info
+    command: yantrikdb serve --config /etc/yantrikdb/yantrikdb.toml
+
+volumes:
+  lme-data:

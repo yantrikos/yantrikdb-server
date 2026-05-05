@@ -1,0 +1,27 @@
+# Single-node yantrikdb for the skill-recall benchmark.
+#
+# Usage:
+#   docker compose up -d
+#   # mint a token (see README.md for the volumes-from sidecar pattern)
+#   YDB_TOKEN=ydb_... python seed.py --nodes 127.0.0.1 --port 17438
+#   YDB_TOKEN=ydb_... python bench.py --nodes 127.0.0.1 --port 17438
+#   YDB_TOKEN=ydb_... python cache_bench.py --nodes 127.0.0.1 --port 17438
+#   docker compose down -v  # cleanup (drops the volume)
+
+services:
+  yantrikdb:
+    image: ghcr.io/yantrikos/yantrikdb:latest
+    container_name: yantrikdb-skill-bench
+    restart: unless-stopped
+    ports:
+      - "17437:7437"   # wire protocol
+      - "17438:7438"   # HTTP gateway
+    volumes:
+      - bench-data:/var/lib/yantrikdb
+      - ./yantrikdb_single.toml:/etc/yantrikdb/yantrikdb.toml:ro
+    environment:
+      - RUST_LOG=yantrikdb_server=info
+    command: yantrikdb serve --config /etc/yantrikdb/yantrikdb.toml
+
+volumes:
+  bench-data:

@@ -1,0 +1,17 @@
+# Single-node yantrikdb config for skill-store load testing.
+# No [cluster] section -> node_id defaults to 0 = single-node, no Raft, no
+# election thrashing. Built-in ONNX embedder so writes get embedded server-side
+# (matches production cluster behavior).
+
+[server]
+wire_port = 7437
+http_port = 7438
+data_dir = "/var/lib/yantrikdb"
+
+[embedding]
+strategy = "builtin"
+dim = 384
+
+[limits]
+max_databases = 4
+max_connections = 256

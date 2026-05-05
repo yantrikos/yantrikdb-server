@@ -1,0 +1,5 @@
+# Override: published ghcr image (PRE-Phase-2). Used to A/B against
+# locally-built images to isolate code-change vs environment-noise.
+services:
+  yantrikdb:
+    image: ghcr.io/yantrikos/yantrikdb:latest

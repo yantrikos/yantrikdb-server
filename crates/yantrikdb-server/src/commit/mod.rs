@@ -59,6 +59,7 @@ pub mod materialize;
 pub mod mutation;
 pub mod retention;
 pub mod submitter;
+pub mod tenant_pool;
 pub mod trait_def;
 
 pub use applier::{Applier, ApplyError, LocalApplier};
@@ -73,6 +74,7 @@ pub use retention::{
     TombstoneRetentionContributor,
 };
 pub use submitter::{LocalSqliteSubmitter, Submitter};
+pub use tenant_pool::{PathResolver, TenantCommitConnectionPool};
 pub use trait_def::{
     CommitError, CommitObserver, CommitOptions, CommitReceipt, CommittedEntry, MutationCommitter,
 };

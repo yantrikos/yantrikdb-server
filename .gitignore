@@ -41,3 +41,18 @@ brainstorm/
 .claude/
 .vscode/
 yantrikdb_local.toml
+
+# Local LXC end-to-end scaffolding (homelab-only, runs on node1)
+e2e_*.sh
+e2e_*.py
+e2e_*.json
+
+# Benchmark inputs / outputs (regenerated locally, large + machine-specific)
+benchmarks/longmemeval/longmemeval_*.json
+benchmarks/longmemeval/results_*.jsonl
+benchmarks/longmemeval/RESULTS_*.md
+benchmarks/skill_recall/skills_corpus.jsonl
+benchmarks/skill_recall/queries_groundtruth.jsonl
+benchmarks/skill_recall/skill_id_cache.db
+benchmarks/skill_recall/report.md
+benchmarks/skill_recall/cache_report.md

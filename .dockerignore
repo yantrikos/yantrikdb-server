@@ -1,0 +1,36 @@
+# Build artifacts (44 GB target/ would otherwise be shipped to daemon)
+target/
+**/target/
+
+# Git metadata
+.git/
+.github/
+
+# Editor / OS
+.vscode/
+.idea/
+.claude/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local benchmark output / data
+benchmarks/**/*.db
+benchmarks/**/*.jsonl
+benchmarks/longmemeval/longmemeval_*.json
+benchmarks/longmemeval/results_*.jsonl
+benchmarks/skill_recall/skill_id_cache.db
+
+# Local test scaffolding not needed for production image
+tests/data/
+e2e_*.sh
+e2e_*.py
+e2e_*.json
+
+# Documentation source not needed inside the image
+docs/
+node_modules/
+
+# Local test outputs
+*.log
+*.tmp

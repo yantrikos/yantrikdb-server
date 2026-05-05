@@ -53,11 +53,14 @@
 //!   semantics; until then they're accepted into the grammar but rejected
 //!   at apply time with "not yet implemented".
 
+pub mod applier;
 pub mod local;
 pub mod mutation;
 pub mod retention;
+pub mod submitter;
 pub mod trait_def;
 
+pub use applier::{Applier, ApplyError, LocalApplier};
 pub use local::LocalSqliteCommitter;
 pub use mutation::{MemoryMutation, OpId, TenantId};
 pub use retention::{
@@ -65,6 +68,7 @@ pub use retention::{
     RetentionContributor, RetentionError, RetentionPolicy, RetentionRegistry, SafePurgeWatermark,
     TombstoneRetentionContributor,
 };
+pub use submitter::{LocalSqliteSubmitter, Submitter};
 pub use trait_def::{
     CommitError, CommitObserver, CommitOptions, CommitReceipt, CommittedEntry, MutationCommitter,
 };

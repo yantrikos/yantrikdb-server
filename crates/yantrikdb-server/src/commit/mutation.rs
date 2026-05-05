@@ -93,6 +93,19 @@ impl fmt::Display for TenantId {
 #[serde(tag = "kind")]
 pub enum MemoryMutation {
     /// Insert or update a memory by rid. Used by `/v1/remember`.
+    ///
+    /// Wire 1.0 shape: `rid` … `metadata` (12 fields).
+    ///
+    /// Wire 1.1 (RFC 010 PR-6.2) added three materialized-state fields
+    /// — `extracted_entities`, `created_at_unix_micros`, `embedding_model`
+    /// — that let followers apply the mutation deterministically without
+    /// re-running NER, the embedder, or wall-clock reads. All three carry
+    /// `#[serde(default)]` so a v1.0 payload still round-trips through
+    /// v1.1 code (the Applier handles the empty case by computing on the
+    /// fly, exactly like the leader did at v1.0). Conversely, a v1.1
+    /// payload deserialized by v1.0 code drops the unknown fields and
+    /// keeps working — the variant SHAPE didn't change at the wire-major
+    /// boundary, only its information content grew.
     UpsertMemory {
         rid: String,
         text: String,
@@ -107,8 +120,44 @@ pub enum MemoryMutation {
         emotional_state: Option<String>,
         /// Server may compute or accept client-provided. Stored as part
         /// of the mutation so replay re-creates the same vector.
+        ///
+        /// Wire 1.1: when a leader produces a materialized mutation
+        /// destined for the commit log, this MUST be `Some`. PR 6.4
+        /// enforces that at materialization time. v1.0 payloads still
+        /// permit `None` for backwards-compat with the unmigrated
+        /// handler path.
         embedding: Option<Vec<f32>>,
         metadata: serde_json::Value,
+
+        /// Entities extracted by the leader's NER pass at materialization
+        /// time. Stored on the mutation so followers don't re-run NER
+        /// (which would diverge if NER models drift between nodes).
+        ///
+        /// Wire 1.1+. Empty default for v1.0 payloads — the Applier
+        /// treats empty as "compute on the fly" until the leader
+        /// migrates its handlers (PR 6.4).
+        #[serde(default)]
+        extracted_entities: Vec<String>,
+
+        /// Server-assigned creation timestamp, microseconds since UNIX
+        /// epoch. The leader stamps this once at materialization time;
+        /// followers use the stamped value rather than reading their
+        /// own wall clock.
+        ///
+        /// Wire 1.1+. `None` for v1.0 payloads — the Applier falls back
+        /// to its local clock until the leader migrates its handlers.
+        #[serde(default)]
+        created_at_unix_micros: Option<i64>,
+
+        /// Identifier for the embedding model that produced
+        /// [`Self::UpsertMemory::embedding`]. Used by RFC 013 model
+        /// migration to know which embeddings need re-encoding when
+        /// the cluster upgrades its embedder.
+        ///
+        /// Wire 1.1+. `None` for v1.0 payloads — RFC 013 falls back to
+        /// the cluster's default model identifier.
+        #[serde(default)]
+        embedding_model: Option<String>,
     },
 
     /// Patch fields on an existing memory by rid. Used by `/v1/correct`.
@@ -322,6 +371,9 @@ mod tests {
             source: "user".into(),
             emotional_state: None,
             embedding: None,
+            extracted_entities: vec![],
+            created_at_unix_micros: None,
+            embedding_model: None,
             metadata: serde_json::json!({}),
         }
     }

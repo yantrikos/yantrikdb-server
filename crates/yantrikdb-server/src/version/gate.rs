@@ -63,6 +63,13 @@ pub const FEATURE_FLOORS: &[(&str, WireVersion)] = &[
     ("mutation.UpsertEntityEdge", WireVersion::new(1, 0)),
     ("mutation.DeleteEntityEdge", WireVersion::new(1, 0)),
     ("mutation.TenantConfigPatch", WireVersion::new(1, 0)),
+    // RFC 010 PR-6.2: when a leader emits a materialized UpsertMemory
+    // (carrying extracted_entities + created_at_unix_micros +
+    // embedding_model populated), the cluster minimum must be at wire
+    // 1.1+. Older peers still decode the variant — the new fields are
+    // additive — but the leader gates emission to avoid sending
+    // information older peers can't act on.
+    ("mutation.UpsertMemory.materialized", WireVersion::new(1, 1)),
 ];
 
 /// How long a peer can be silent before we drop it from the observation set.

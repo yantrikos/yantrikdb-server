@@ -204,6 +204,9 @@ mod tests {
             source: "user".into(),
             emotional_state: None,
             embedding: None,
+            extracted_entities: vec![],
+            created_at_unix_micros: None,
+            embedding_model: None,
             metadata: serde_json::json!({}),
         }
     }

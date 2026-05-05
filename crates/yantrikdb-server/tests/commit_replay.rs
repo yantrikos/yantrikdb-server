@@ -68,6 +68,9 @@ fn upsert(tag: &str) -> MemoryMutation {
         emotional_state: None,
         embedding: None,
         metadata: serde_json::json!({}),
+        extracted_entities: vec![],
+        created_at_unix_micros: None,
+        embedding_model: None,
     }
 }
 

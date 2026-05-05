@@ -55,6 +55,7 @@
 
 pub mod applier;
 pub mod local;
+pub mod materialize;
 pub mod mutation;
 pub mod retention;
 pub mod submitter;
@@ -62,6 +63,9 @@ pub mod trait_def;
 
 pub use applier::{Applier, ApplyError, LocalApplier};
 pub use local::LocalSqliteCommitter;
+pub use materialize::{
+    Embedder, EntityExtractor, LocalMaterializer, MaterializeError, Materializer, RememberRequest,
+};
 pub use mutation::{MemoryMutation, OpId, TenantId};
 pub use retention::{
     BackupWatermarkContributor, FollowerLagContributor, HnswWatermarkContributor,

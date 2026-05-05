@@ -60,7 +60,16 @@ mod version;
 use commit::MemoryMutation;
 
 #[test]
-fn upsert_memory_v1_0_wire_format() {
+fn upsert_memory_v1_1_wire_format() {
+    // RFC 010 PR-6.2 — UpsertMemory at wire 1.1 carries three additional
+    // materialized-state fields beyond the v1.0 shape: extracted_entities,
+    // created_at_unix_micros, embedding_model. All three are #[serde(default)]
+    // so a v1.0 payload still deserializes cleanly (covered by
+    // historical_v1_0_payload_round_trips_into_current_build).
+    //
+    // This test pins the v1.1 wire output. If you add another field, this
+    // golden string must change AND the wire minor must bump (1.1 → 1.2).
+    // If you change a field's name or type, you must bump the wire major.
     let m = MemoryMutation::UpsertMemory {
         rid: "mem_test_1".into(),
         text: "the cat sat on the mat".into(),
@@ -75,14 +84,19 @@ fn upsert_memory_v1_0_wire_format() {
         emotional_state: None,
         embedding: None,
         metadata: serde_json::json!({}),
+        extracted_entities: vec![],
+        created_at_unix_micros: None,
+        embedding_model: None,
     };
     let actual = serde_json::to_string(&m).expect("serialize");
-    let expected = r#"{"kind":"UpsertMemory","rid":"mem_test_1","text":"the cat sat on the mat","memory_type":"semantic","importance":0.5,"valence":0.0,"half_life":168.0,"namespace":"default","certainty":1.0,"domain":"general","source":"user","emotional_state":null,"embedding":null,"metadata":{}}"#;
+    let expected = r#"{"kind":"UpsertMemory","rid":"mem_test_1","text":"the cat sat on the mat","memory_type":"semantic","importance":0.5,"valence":0.0,"half_life":168.0,"namespace":"default","certainty":1.0,"domain":"general","source":"user","emotional_state":null,"embedding":null,"metadata":{},"extracted_entities":[],"created_at_unix_micros":null,"embedding_model":null}"#;
     assert_eq!(
         actual, expected,
-        "WIRE FORMAT DRIFT — UpsertMemory v1.0 has changed. \
-         Bumping wire major (to 2.x) required, OR revert the change. \
-         Existing v1.0 commit logs in the field will fail to deserialize."
+        "WIRE FORMAT DRIFT — UpsertMemory v1.1 has changed. \
+         Bumping wire minor (to 1.2) required if adding a new field, \
+         OR bumping wire major (to 2.x) required for a field rename or \
+         type change. Existing commit logs in the field will fail to \
+         deserialize otherwise."
     );
 }
 
@@ -193,12 +207,21 @@ fn historical_v1_0_payload_round_trips_into_current_build() {
             importance,
             emotional_state,
             embedding,
+            extracted_entities,
+            created_at_unix_micros,
+            embedding_model,
             ..
         } => {
             assert_eq!(rid, "historical_payload_test");
             assert!((importance - 0.42).abs() < 1e-9);
             assert_eq!(emotional_state.as_deref(), Some("concerned"));
             assert_eq!(embedding.as_ref().map(|v| v.len()), Some(3));
+            // v1.1 fields default-empty when deserializing a v1.0 payload —
+            // the cross-version compat property that lets old commit logs
+            // replay through a v1.1 binary.
+            assert!(extracted_entities.is_empty());
+            assert!(created_at_unix_micros.is_none());
+            assert!(embedding_model.is_none());
         }
         other => panic!("wrong variant after round-trip: {other:?}"),
     }
@@ -229,6 +252,9 @@ fn variant_feature_flags_match_registry() {
             emotional_state: None,
             embedding: None,
             metadata: serde_json::Value::Null,
+            extracted_entities: vec![],
+            created_at_unix_micros: None,
+            embedding_model: None,
         },
         MemoryMutation::UpdateMemoryPatch {
             rid: "x".into(),
@@ -303,6 +329,9 @@ fn all_initial_variants_introduced_at_1_0() {
                 emotional_state: None,
                 embedding: None,
                 metadata: serde_json::Value::Null,
+                extracted_entities: vec![],
+                created_at_unix_micros: None,
+                embedding_model: None,
             },
         ),
         (

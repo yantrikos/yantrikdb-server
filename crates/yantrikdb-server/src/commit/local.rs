@@ -557,6 +557,9 @@ mod tests {
             emotional_state: None,
             embedding: None,
             metadata: serde_json::json!({}),
+            extracted_entities: vec![],
+            created_at_unix_micros: None,
+            embedding_model: None,
         }
     }
 
@@ -866,6 +869,9 @@ mod tests {
             emotional_state: Some("focused".into()),
             embedding: Some(vec![0.1, 0.2, 0.3, 0.4]),
             metadata: serde_json::json!({"tag": "test", "score": 42}),
+            extracted_entities: vec![],
+            created_at_unix_micros: None,
+            embedding_model: None,
         };
         c.commit(t, m.clone(), CommitOptions::new()).await.unwrap();
         let entries = c.read_range(t, 0, 10).await.unwrap();

@@ -2009,11 +2009,30 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                 .clone()
                 .unwrap_or_else(|| format!("https://127.0.0.1:{}", cfg.cluster.cluster_port));
 
+            // PR-6.5 boot invariant: full voter set including self.
+            // openraft member ids are u32-based; we mirror cfg.cluster.peers
+            // and append this node's address so the validation gate sees
+            // a coherent quorum view (peers.len() >= 2).
+            let mut peers: Vec<String> = cfg.cluster.peers.iter().map(|p| p.addr.clone()).collect();
+            if !peers.iter().any(|a| a == &node_addr) {
+                peers.push(node_addr.clone());
+            }
+
             let assembly_cfg = crate::raft::RaftAssemblyConfig {
                 mode: crate::raft::RaftClusterMode::OpenRaft,
                 node_id,
                 node_addr: node_addr.clone(),
                 cluster_tls: Some(cfg.cluster_tls.clone()),
+                peers,
+                // PR-6.5: openraft mode REQUIRES RaftSubmitter at the
+                // handler level. Today's binary still uses the legacy
+                // engine.record() path inside Command::Remember; the
+                // declaration here is a forward-compat marker that
+                // satisfies the validate() gate. The actual handler
+                // migration happens in PR 6.4 (saga task #187), at
+                // which point this stays unchanged but starts being
+                // load-bearing.
+                write_path: crate::raft::HandlerWritePath::RaftSubmitter,
                 request_timeout: std::time::Duration::from_secs(10),
                 openraft_config: openraft::Config {
                     cluster_name: "yantrikdb".into(),

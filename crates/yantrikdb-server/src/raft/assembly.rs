@@ -64,6 +64,29 @@ impl Default for RaftClusterMode {
     }
 }
 
+/// What backs the HTTP handler write path. RFC 010 PR-6.5 boot invariant
+/// gate: `OpenRaft` cluster mode REQUIRES `RaftSubmitter` here. Any
+/// other combination is rejected at assembly time so the cluster cannot
+/// regress to "cosmetic openraft" mode (writes land locally, replication
+/// reports healthy but moves zero application bytes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandlerWritePath {
+    /// Handlers call into a `LocalSqliteSubmitter` (or directly into
+    /// `engine.record()` on the legacy unmigrated path). Single-node
+    /// only — pairs exclusively with `RaftClusterMode::Disabled`.
+    LocalSqlite,
+    /// Handlers call into a `RaftSubmitter` that routes through openraft
+    /// consensus. Pairs exclusively with `RaftClusterMode::OpenRaft`.
+    RaftSubmitter,
+}
+
+impl Default for HandlerWritePath {
+    fn default() -> Self {
+        HandlerWritePath::LocalSqlite
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum AssemblyError {
     /// `cluster.mode = "openraft"` was requested but `cluster_tls`
@@ -96,6 +119,33 @@ pub enum AssemblyError {
         #[source]
         source: std::io::Error,
     },
+
+    /// `cluster.mode = "openraft"` was requested but the handler write
+    /// path is configured as something other than `RaftSubmitter`. This
+    /// is the cosmetic-openraft regression gate: openraft can be assembled
+    /// with a non-Raft handler path, but if the binary boots in that
+    /// state it lies in `/v1/health` (reports `healthy: true`) while
+    /// every write bypasses replication. Refuse at boot.
+    #[error(
+        "openraft mode requires handler_write_path = \"raft_submitter\"; got {actual:?}. \
+         Configure cluster.handler_write_path = \"raft_submitter\", or set \
+         cluster.raft_mode = \"disabled\" for single-node deployments."
+    )]
+    WritePathMismatch {
+        actual: HandlerWritePath,
+        expected: HandlerWritePath,
+    },
+
+    /// `cluster.mode = "openraft"` was requested but the cluster has
+    /// fewer than 2 declared peers. A 1-peer "cluster" can't form a
+    /// quorum, can't survive a single-node failure, and is almost
+    /// certainly a misconfiguration. Refuse at boot.
+    #[error(
+        "openraft mode requires at least 2 peers (got {have}). \
+         A 1-peer cluster has no quorum semantics; configure additional \
+         peers in cluster.peers or set cluster.raft_mode = \"disabled\"."
+    )]
+    InsufficientPeers { have: usize, need: usize },
 }
 
 /// Inputs to [`build_raft_cluster`].
@@ -109,6 +159,14 @@ pub struct RaftAssemblyConfig {
     /// Cluster TLS config — required when `mode == OpenRaft`. Ignored
     /// when `mode == Disabled`.
     pub cluster_tls: Option<ClusterTlsConfig>,
+    /// Full cluster voter set (typically including this node's address).
+    /// PR-6.5 boot invariant: `OpenRaft` mode requires `peers.len() >= 2`.
+    /// Empty / 1-element peer lists are misconfiguration and rejected
+    /// at boot.
+    pub peers: Vec<String>,
+    /// What backs the HTTP handler write path. PR-6.5 boot invariant:
+    /// `OpenRaft` mode requires `RaftSubmitter` here.
+    pub write_path: HandlerWritePath,
     /// Per-RPC timeout for the reqwest client.
     pub request_timeout: Duration,
     /// openraft heartbeat / election tuning.
@@ -123,7 +181,9 @@ impl RaftAssemblyConfig {
             mode: RaftClusterMode::OpenRaft,
             node_id,
             node_addr,
-            cluster_tls: None, // operator MUST supply
+            cluster_tls: None,                           // operator MUST supply
+            peers: Vec::new(),                           // operator MUST supply (PR-6.5 gate)
+            write_path: HandlerWritePath::RaftSubmitter, // openraft requires it
             request_timeout: Duration::from_secs(10),
             openraft_config: Config {
                 cluster_name: "yantrikdb".into(),
@@ -133,6 +193,34 @@ impl RaftAssemblyConfig {
                 ..Default::default()
             },
         }
+    }
+
+    /// Validate the assembly config against the PR-6.5 boot invariants.
+    /// Called from [`build_raft_cluster`] before any sockets are opened.
+    /// Exposed pub(crate) so tests can hit the gate without spinning up
+    /// the full Raft + reqwest stack.
+    ///
+    /// Invariants enforced (in order):
+    /// 1. `OpenRaft` mode requires `RaftSubmitter` handler write path.
+    /// 2. `OpenRaft` mode requires `peers.len() >= 2` for real quorum.
+    /// 3. `cluster_tls` checks happen later inside [`build_raft_cluster`]
+    ///    via [`validate_cluster_tls_for_openraft`].
+    pub(crate) fn validate(&self) -> Result<(), AssemblyError> {
+        if self.mode == RaftClusterMode::OpenRaft {
+            if self.write_path != HandlerWritePath::RaftSubmitter {
+                return Err(AssemblyError::WritePathMismatch {
+                    actual: self.write_path,
+                    expected: HandlerWritePath::RaftSubmitter,
+                });
+            }
+            if self.peers.len() < 2 {
+                return Err(AssemblyError::InsufficientPeers {
+                    have: self.peers.len(),
+                    need: 2,
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -245,6 +333,10 @@ pub async fn build_raft_cluster(
     log_storage: SqliteRaftLogStorage,
     local: Arc<dyn MutationCommitter>,
 ) -> Result<RaftAssembly, AssemblyError> {
+    // PR-6.5 boot invariants: write-path coupling + peer count. Run
+    // BEFORE the cluster_tls / cert IO checks so a misconfigured
+    // handler path fails fast even if certs are missing.
+    cfg.validate()?;
     let cluster_tls = validate_cluster_tls_for_openraft(cfg.cluster_tls.as_ref())?;
     let client = build_reqwest_client_for_cluster(cluster_tls, cfg.request_timeout)?;
     let network_factory = HttpRaftNetworkFactory::new(client, cfg.request_timeout);
@@ -380,6 +472,11 @@ mod tests {
             node_id: YantrikNodeId::new(1),
             node_addr: "https://127.0.0.1:7100".into(),
             cluster_tls: None,
+            peers: vec![
+                "https://127.0.0.1:7100".into(),
+                "https://127.0.0.1:7101".into(),
+            ],
+            write_path: HandlerWritePath::RaftSubmitter,
             request_timeout: Duration::from_secs(1),
             openraft_config: Config::default(),
         };
@@ -408,6 +505,11 @@ mod tests {
             node_id: YantrikNodeId::new(1),
             node_addr: "https://127.0.0.1:7100".into(),
             cluster_tls: Some(cluster_tls),
+            peers: vec![
+                "https://127.0.0.1:7100".into(),
+                "https://127.0.0.1:7101".into(),
+            ],
+            write_path: HandlerWritePath::RaftSubmitter,
             request_timeout: Duration::from_secs(1),
             openraft_config: Config::default(),
         };
@@ -441,5 +543,176 @@ mod tests {
             d.cluster_tls.is_none(),
             "production_defaults must NOT bake in any cluster_tls — operator supplies it"
         );
+    }
+
+    // ── PR-6.5 boot invariant tests ─────────────────────────────────
+
+    fn cfg_for(
+        mode: RaftClusterMode,
+        write_path: HandlerWritePath,
+        peers: Vec<String>,
+    ) -> RaftAssemblyConfig {
+        RaftAssemblyConfig {
+            mode,
+            node_id: YantrikNodeId::new(1),
+            node_addr: "https://10.0.0.1:7100".into(),
+            cluster_tls: Some(tls_with(
+                Some("/tmp/cert.pem"),
+                Some("/tmp/key.pem"),
+                Some("/tmp/ca.pem"),
+            )),
+            peers,
+            write_path,
+            request_timeout: Duration::from_secs(1),
+            openraft_config: Config::default(),
+        }
+    }
+
+    fn three_peer_set() -> Vec<String> {
+        vec![
+            "https://10.0.0.1:7100".into(),
+            "https://10.0.0.2:7100".into(),
+            "https://10.0.0.3:7100".into(),
+        ]
+    }
+
+    #[test]
+    fn pr_6_5_openraft_with_localsqlite_write_path_is_rejected() {
+        // The cosmetic-openraft regression gate. If this test ever
+        // accepts the misconfiguration, the whole point of PR 6.5 is
+        // gone — refuse the boot, not eventually surface a 503 in
+        // /v1/health.
+        let cfg = cfg_for(
+            RaftClusterMode::OpenRaft,
+            HandlerWritePath::LocalSqlite,
+            three_peer_set(),
+        );
+        match cfg.validate() {
+            Err(AssemblyError::WritePathMismatch { actual, expected }) => {
+                assert_eq!(actual, HandlerWritePath::LocalSqlite);
+                assert_eq!(expected, HandlerWritePath::RaftSubmitter);
+            }
+            other => panic!("expected WritePathMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pr_6_5_openraft_with_empty_peers_is_rejected() {
+        let cfg = cfg_for(
+            RaftClusterMode::OpenRaft,
+            HandlerWritePath::RaftSubmitter,
+            vec![],
+        );
+        match cfg.validate() {
+            Err(AssemblyError::InsufficientPeers { have, need }) => {
+                assert_eq!(have, 0);
+                assert_eq!(need, 2);
+            }
+            other => panic!("expected InsufficientPeers, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pr_6_5_openraft_with_one_peer_is_rejected() {
+        // 1-peer "cluster" has no quorum semantics — almost certainly a
+        // misconfiguration where the operator forgot to add the others.
+        let cfg = cfg_for(
+            RaftClusterMode::OpenRaft,
+            HandlerWritePath::RaftSubmitter,
+            vec!["https://10.0.0.1:7100".into()],
+        );
+        assert!(matches!(
+            cfg.validate(),
+            Err(AssemblyError::InsufficientPeers { have: 1, need: 2 })
+        ));
+    }
+
+    #[test]
+    fn pr_6_5_openraft_with_two_peers_passes() {
+        // Two-voter cluster (e.g. .140 + .141 in the homelab) is
+        // intentionally permitted as the minimum viable cluster.
+        let cfg = cfg_for(
+            RaftClusterMode::OpenRaft,
+            HandlerWritePath::RaftSubmitter,
+            vec![
+                "https://10.0.0.1:7100".into(),
+                "https://10.0.0.2:7100".into(),
+            ],
+        );
+        cfg.validate()
+            .expect("two-peer openraft cluster must validate");
+    }
+
+    #[test]
+    fn pr_6_5_disabled_mode_does_not_demand_peers() {
+        // Single-node mode is plaintext-OK, peers-OK, write-path-OK in
+        // any combination. The gate only fires when openraft is on.
+        let cfg = cfg_for(
+            RaftClusterMode::Disabled,
+            HandlerWritePath::LocalSqlite,
+            vec![],
+        );
+        cfg.validate()
+            .expect("single-node mode must validate without peers");
+    }
+
+    #[test]
+    fn pr_6_5_disabled_mode_with_raft_submitter_is_currently_permitted() {
+        // Operator declared cluster.write_path = "raft_submitter" but
+        // mode = "disabled" — this is a no-op declaration in single-node
+        // mode (RaftSubmitter has no Raft to submit through). PR 6.5
+        // doesn't reject it because nothing's broken on disk; future
+        // PRs may surface a warning log if the combination becomes
+        // ambiguous in practice.
+        let cfg = cfg_for(
+            RaftClusterMode::Disabled,
+            HandlerWritePath::RaftSubmitter,
+            vec![],
+        );
+        cfg.validate()
+            .expect("Disabled+RaftSubmitter is permitted (no-op declaration)");
+    }
+
+    #[tokio::test]
+    async fn pr_6_5_build_raft_cluster_runs_validate_first() {
+        // The load-bearing wiring assertion: build_raft_cluster MUST
+        // run validate() before reading TLS files. Otherwise a misconfigured
+        // write_path could surface as a confusing PEM read error instead
+        // of the actionable WritePathMismatch.
+        let local = Arc::new(crate::commit::LocalSqliteCommitter::open_in_memory().unwrap())
+            as Arc<dyn MutationCommitter>;
+        let log_storage = SqliteRaftLogStorage::open_in_memory();
+        let cfg = cfg_for(
+            RaftClusterMode::OpenRaft,
+            HandlerWritePath::LocalSqlite, // mismatched
+            three_peer_set(),
+        );
+        match build_raft_cluster(cfg, log_storage, local).await {
+            Err(AssemblyError::WritePathMismatch { .. }) => {}
+            Err(other) => panic!("expected WritePathMismatch, got {other:?}"),
+            Ok(_) => panic!("expected WritePathMismatch, assembly succeeded"),
+        }
+    }
+
+    #[test]
+    fn handler_write_path_default_is_local_sqlite() {
+        // Backwards-compat: any existing config that doesn't specify
+        // write_path keeps its single-node behavior. Operators must
+        // explicitly opt INTO RaftSubmitter when enabling openraft.
+        assert_eq!(HandlerWritePath::default(), HandlerWritePath::LocalSqlite);
+    }
+
+    #[test]
+    fn production_defaults_pair_openraft_with_raft_submitter() {
+        // production_defaults() pairs OpenRaft mode with RaftSubmitter
+        // write path so the template is internally consistent.
+        // Operator still needs to fill cluster_tls + peers before
+        // validation passes.
+        let d = RaftAssemblyConfig::production_defaults(
+            YantrikNodeId::new(1),
+            "https://10.0.0.1:7100".into(),
+        );
+        assert_eq!(d.write_path, HandlerWritePath::RaftSubmitter);
+        assert!(d.peers.is_empty(), "operator MUST supply peers");
     }
 }

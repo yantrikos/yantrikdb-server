@@ -38,6 +38,37 @@ struct ClusterStateView {
     accepts_writes: bool,
     healthy: bool,
     raft_mode: &'static str,
+
+    // PR 6.9 — replication-state visibility.
+    //
+    // These fields surface the openraft state machine's progress so
+    // operators don't have to hit the separate /v1/cluster/raft endpoint
+    // to reason about whether a follower is keeping up. All four are
+    // additive — clients that don't know about them ignore them.
+    //
+    // **Honest values today:** through v0.8.13, handlers bypass
+    // `MutationCommitter`, so the only entries openraft sees are
+    // cluster bookkeeping (membership, init). `last_log_index` will be
+    // small and constant; `replication_lag_log_entries` will read 0
+    // even on a structurally broken cluster. The fields become
+    // load-bearing once PR 6.4 (handler migration) ships at v0.8.13.
+    /// Highest log index this node knows about, from openraft metrics.
+    /// `None` for raft-lite or single-node deployments.
+    last_log_index: Option<u64>,
+    /// Highest log index this node's state machine has applied. `None`
+    /// when no entries have been applied yet (or raft-lite / single-node).
+    last_applied_index: Option<u64>,
+    /// `last_log_index.saturating_sub(last_applied_index)` — entries
+    /// received but not yet applied. On a healthy follower this stays
+    /// near 0; growing means the apply path is stuck. On the leader
+    /// this is also 0 (leader applies before commit). `None` only when
+    /// neither index is known.
+    replication_lag_log_entries: Option<u64>,
+    /// Stable label for the local node's role-within-cluster, used
+    /// by metric exporters that need a low-cardinality dimension.
+    /// `Some("leader" | "follower" | "candidate" | "learner" | "shutdown")`
+    /// in openraft mode; `None` otherwise.
+    role_label: Option<&'static str>,
 }
 
 fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
@@ -51,6 +82,22 @@ fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
                 .find(|(id, _)| u64::from(**id) == lid)
                 .map(|(_, n)| n.addr.clone())
         });
+        let last_log_index = m.last_log_index;
+        let last_applied_index = m.last_applied.as_ref().map(|l| l.index);
+        // saturating_sub keeps the lag at 0 if the (rare) ordering
+        // momentarily reads applied > log_index between updates.
+        let replication_lag = match (last_log_index, last_applied_index) {
+            (Some(log), Some(applied)) => Some(log.saturating_sub(applied)),
+            (Some(log), None) => Some(log),
+            (None, _) => None,
+        };
+        let role_label: &'static str = match m.state {
+            openraft::ServerState::Leader => "leader",
+            openraft::ServerState::Follower => "follower",
+            openraft::ServerState::Candidate => "candidate",
+            openraft::ServerState::Learner => "learner",
+            openraft::ServerState::Shutdown => "shutdown",
+        };
         return Some(ClusterStateView {
             node_id: u64::from(m.id),
             role: format!("{:?}", m.state),
@@ -60,6 +107,10 @@ fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
             accepts_writes: is_leader,
             healthy: m.current_leader.is_some(),
             raft_mode: "openraft",
+            last_log_index,
+            last_applied_index,
+            replication_lag_log_entries: replication_lag,
+            role_label: Some(role_label),
         });
     }
     if let Some(ref cluster) = state.cluster {
@@ -72,6 +123,10 @@ fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
             accepts_writes: cluster.state.accepts_writes(),
             healthy: cluster.is_healthy(),
             raft_mode: "raft-lite",
+            last_log_index: None,
+            last_applied_index: None,
+            replication_lag_log_entries: None,
+            role_label: None,
         });
     }
     None
@@ -358,6 +413,12 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "engines_loaded": state.pool.loaded_count(),
     });
     if let Some(view) = cluster_state_view(&state) {
+        // PR 6.9: payload gains last_log_index, last_applied_index,
+        // replication_lag_log_entries, role_label. All additive — clients
+        // that don't know about them ignore them. Values today are
+        // honest-zero (handlers bypass commit log, so openraft sees only
+        // cluster bookkeeping); they become operationally load-bearing
+        // once PR 6.4 lands.
         payload["cluster"] = json!({
             "node_id": view.node_id,
             "role": view.role,
@@ -366,6 +427,10 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
             "accepts_writes": view.accepts_writes,
             "healthy": view.healthy,
             "raft_mode": view.raft_mode,
+            "last_log_index": view.last_log_index,
+            "last_applied_index": view.last_applied_index,
+            "replication_lag_log_entries": view.replication_lag_log_entries,
+            "role_label": view.role_label,
         });
     }
     Json(payload)
@@ -3377,6 +3442,65 @@ mod commit_error_mapping_tests {
         assert_eq!(v["error"], "commit_timeout");
         assert_eq!(v["op_id"], op.to_string());
         assert_eq!(v["retry_after_ms"], 1000);
+    }
+
+    // ── PR 6.9 — replication-lag derivation tests ─────────────────
+    //
+    // The value computation lives inside `cluster_state_view`, which
+    // holds an `AppState` reference and isn't easy to mock. The lag
+    // arithmetic is the only piece that has correctness implications
+    // for clients reading the field; the rest is field shuffling. Pin
+    // it as a free function that mirrors the logic.
+
+    fn replication_lag(
+        last_log_index: Option<u64>,
+        last_applied_index: Option<u64>,
+    ) -> Option<u64> {
+        match (last_log_index, last_applied_index) {
+            (Some(log), Some(applied)) => Some(log.saturating_sub(applied)),
+            (Some(log), None) => Some(log),
+            (None, _) => None,
+        }
+    }
+
+    #[test]
+    fn pr_6_9_lag_is_zero_when_log_and_applied_are_equal() {
+        // Healthy follower (or leader): everything received has been
+        // applied. The number clients read should be exactly 0, not
+        // null — the data was observed.
+        assert_eq!(replication_lag(Some(18), Some(18)), Some(0));
+    }
+
+    #[test]
+    fn pr_6_9_lag_reflects_unapplied_entries() {
+        // 5 entries received but not yet applied. This is the value
+        // a Grafana alert / health probe consumes to detect a stuck
+        // apply path.
+        assert_eq!(replication_lag(Some(100), Some(95)), Some(5));
+    }
+
+    #[test]
+    fn pr_6_9_lag_clamps_at_zero_under_inversion() {
+        // Race: the metric snapshot may briefly observe applied > log_index
+        // (e.g. during membership change or snapshot install). Clients
+        // would treat a giant negative-flipped-to-u64 as "lag of 18
+        // exabytes" and page the operator. saturating_sub clamps at 0.
+        assert_eq!(replication_lag(Some(10), Some(15)), Some(0));
+    }
+
+    #[test]
+    fn pr_6_9_lag_is_log_index_when_nothing_applied_yet() {
+        // Cold-start follower: log entries received but state machine
+        // hasn't applied any yet. Lag = entire log.
+        assert_eq!(replication_lag(Some(7), None), Some(7));
+    }
+
+    #[test]
+    fn pr_6_9_lag_is_none_when_no_log_index_known() {
+        // Pre-bootstrap or single-node: no openraft, no metrics.
+        // Field reads as JSON null, distinguishable from an actual 0.
+        assert_eq!(replication_lag(None, None), None);
+        assert_eq!(replication_lag(None, Some(5)), None);
     }
 
     #[test]

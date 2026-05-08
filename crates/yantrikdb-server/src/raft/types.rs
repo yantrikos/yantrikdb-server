@@ -314,6 +314,7 @@ mod tests {
                 rid: "mem_a".into(),
                 reason: Some("test".into()),
                 requested_at_unix_micros: 1_700_000_000_000_000,
+                namespace: String::new(),
             },
         );
         let json = serde_json::to_string(&entry).unwrap();

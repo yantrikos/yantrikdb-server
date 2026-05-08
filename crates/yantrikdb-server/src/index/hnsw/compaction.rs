@@ -426,6 +426,7 @@ mod tests {
                     rid: "doomed".into(),
                     reason: Some("e2e".into()),
                     requested_at_unix_micros: 0,
+                    namespace: String::new(),
                 },
                 CommitOptions::default(),
             )

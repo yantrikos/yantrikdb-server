@@ -116,15 +116,28 @@ fn update_memory_patch_v1_0_wire_format() {
 }
 
 #[test]
-fn tombstone_memory_v1_0_wire_format() {
+fn tombstone_memory_v1_2_wire_format() {
+    // RFC 010 PR-6.4 — TombstoneMemory at wire 1.2 carries a `namespace`
+    // field that engine `tombstone_with_rid` requires for snapshot-lag
+    // determinism (followers bump the right per-namespace visible_seq
+    // counter even when the local rid is missing). The field carries
+    // `#[serde(default)]` so a v1.0 / v1.1 payload still deserializes
+    // cleanly with namespace defaulting to empty string.
     let m = MemoryMutation::TombstoneMemory {
         rid: "mem_test_3".into(),
         reason: Some("user requested".into()),
         requested_at_unix_micros: 1_700_000_000_000_000,
+        namespace: "tenant_a".into(),
     };
     let actual = serde_json::to_string(&m).expect("serialize");
-    let expected = r#"{"kind":"TombstoneMemory","rid":"mem_test_3","reason":"user requested","requested_at_unix_micros":1700000000000000}"#;
-    assert_eq!(actual, expected, "TombstoneMemory v1.0 wire drift");
+    let expected = r#"{"kind":"TombstoneMemory","rid":"mem_test_3","reason":"user requested","requested_at_unix_micros":1700000000000000,"namespace":"tenant_a"}"#;
+    assert_eq!(
+        actual, expected,
+        "WIRE FORMAT DRIFT — TombstoneMemory v1.2 has changed. \
+         Bumping wire minor (to 1.3) required if adding a new field, \
+         OR bumping wire major (to 2.x) required for a field rename or \
+         type change."
+    );
 }
 
 #[test]
@@ -154,13 +167,72 @@ fn upsert_entity_edge_v1_0_wire_format() {
 }
 
 #[test]
-fn delete_entity_edge_v1_0_wire_format() {
+fn delete_entity_edge_v1_2_wire_format() {
+    // RFC 010 PR-6.4 — DeleteEntityEdge at wire 1.2 carries `namespace`
+    // and `requested_at_unix_micros` to match
+    // `engine::delete_entity_edge_with_id` semantics. Same snapshot-lag
+    // rationale as TombstoneMemory.
     let m = MemoryMutation::DeleteEntityEdge {
         edge_id: "edge_test_1".into(),
+        namespace: "tenant_a".into(),
+        requested_at_unix_micros: 1_700_000_000_000_000,
     };
     let actual = serde_json::to_string(&m).expect("serialize");
-    let expected = r#"{"kind":"DeleteEntityEdge","edge_id":"edge_test_1"}"#;
-    assert_eq!(actual, expected, "DeleteEntityEdge v1.0 wire drift");
+    let expected = r#"{"kind":"DeleteEntityEdge","edge_id":"edge_test_1","namespace":"tenant_a","requested_at_unix_micros":1700000000000000}"#;
+    assert_eq!(
+        actual, expected,
+        "WIRE FORMAT DRIFT — DeleteEntityEdge v1.2 has changed."
+    );
+}
+
+#[test]
+fn tombstone_memory_v1_0_payload_round_trips() {
+    // Backwards-compat: a v1.0 TombstoneMemory payload (no namespace
+    // field) MUST still deserialize cleanly into a v1.2-aware build.
+    // This is the inverse pin of `tombstone_memory_v1_2_wire_format`:
+    // serde(default) on `namespace` is what makes legacy commit logs
+    // replay-safe.
+    let v1_0_payload = r#"{
+        "kind": "TombstoneMemory",
+        "rid": "legacy_mem_42",
+        "reason": "operator requested",
+        "requested_at_unix_micros": 1700000000000000
+    }"#;
+    let m: MemoryMutation =
+        serde_json::from_str(v1_0_payload).expect("v1.0 tombstone must deserialize forever");
+    match m {
+        MemoryMutation::TombstoneMemory { rid, namespace, .. } => {
+            assert_eq!(rid, "legacy_mem_42");
+            assert_eq!(
+                namespace, "",
+                "v1.0 payload defaults namespace to empty string — Applier handles via lookup fallback"
+            );
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+}
+
+#[test]
+fn delete_entity_edge_v1_0_payload_round_trips() {
+    // Same backwards-compat property for DeleteEntityEdge.
+    let v1_0_payload = r#"{
+        "kind": "DeleteEntityEdge",
+        "edge_id": "legacy_edge_7"
+    }"#;
+    let m: MemoryMutation =
+        serde_json::from_str(v1_0_payload).expect("v1.0 delete-edge must deserialize forever");
+    match m {
+        MemoryMutation::DeleteEntityEdge {
+            edge_id,
+            namespace,
+            requested_at_unix_micros,
+        } => {
+            assert_eq!(edge_id, "legacy_edge_7");
+            assert_eq!(namespace, "");
+            assert_eq!(requested_at_unix_micros, 0);
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
 }
 
 #[test]
@@ -268,6 +340,7 @@ fn variant_feature_flags_match_registry() {
             rid: "x".into(),
             reason: None,
             requested_at_unix_micros: 0,
+            namespace: String::new(),
         },
         MemoryMutation::PurgeMemory {
             rid: "x".into(),
@@ -283,6 +356,8 @@ fn variant_feature_flags_match_registry() {
         },
         MemoryMutation::DeleteEntityEdge {
             edge_id: "x".into(),
+            namespace: String::new(),
+            requested_at_unix_micros: 0,
         },
         MemoryMutation::TenantConfigPatch {
             key: "x".into(),
@@ -340,6 +415,7 @@ fn all_initial_variants_introduced_at_1_0() {
                 rid: "x".into(),
                 reason: None,
                 requested_at_unix_micros: 0,
+                namespace: String::new(),
             },
         ),
         (

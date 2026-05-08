@@ -99,7 +99,7 @@ impl fmt::Display for WireVersion {
 ///   serialization. Major bumps require a documented migration path:
 ///   nodes upgrade through an intermediate "bridge" version that knows
 ///   both formats, until the cluster-min reaches the new major.
-pub const CURRENT_WIRE_VERSION: WireVersion = WireVersion::new(1, 1);
+pub const CURRENT_WIRE_VERSION: WireVersion = WireVersion::new(1, 2);
 
 /// Oldest wire version this binary can replay.
 ///

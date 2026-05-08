@@ -174,10 +174,23 @@ pub enum MemoryMutation {
     /// Mark a memory as forgotten. Logically not-recallable; physical
     /// purge happens via [`Self::PurgeMemory`] later (RFC 011 PR-3).
     /// Tombstones must propagate to all replicas + caches before purge.
+    ///
+    /// Wire 1.2 (RFC 010 PR-6.4) added `namespace`. Engine
+    /// `tombstone_with_rid` requires the namespace explicitly because
+    /// followers must bump `visible_seq[namespace]` even when the local
+    /// rid is missing (snapshot-lag case) — without the namespace
+    /// stamped on the mutation, a snapshot-lagging follower can't
+    /// route the visible_seq bump to the right per-namespace counter.
     TombstoneMemory {
         rid: String,
         reason: Option<String>,
         requested_at_unix_micros: i64,
+        /// Wire 1.2+. Empty string for v1.0 / v1.1 payloads — Applier
+        /// emits a trace-level info log when this happens (legacy log
+        /// bleed-through during snapshot install) and falls back to
+        /// looking up the namespace from the existing memories row.
+        #[serde(default)]
+        namespace: String,
     },
 
     /// Physically remove a memory and its derived state (HNSW node,
@@ -198,7 +211,22 @@ pub enum MemoryMutation {
     },
 
     /// Remove an entity edge.
-    DeleteEntityEdge { edge_id: String },
+    ///
+    /// Wire 1.2 (RFC 010 PR-6.4) added `namespace` and
+    /// `requested_at_unix_micros` to match
+    /// `engine::delete_entity_edge_with_id` semantics. Same snapshot-lag
+    /// rationale as [`Self::TombstoneMemory`] — followers need the
+    /// namespace to bump the right visible_seq counter.
+    DeleteEntityEdge {
+        edge_id: String,
+        /// Wire 1.2+. Empty string for v1.0 / v1.1 payloads.
+        #[serde(default)]
+        namespace: String,
+        /// Wire 1.2+. Defaults to 0 for legacy payloads — engine treats
+        /// 0 as "use current wall clock" during apply.
+        #[serde(default)]
+        requested_at_unix_micros: i64,
+    },
 
     /// Patch tenant-level config (e.g. RFC 021 per-tenant overrides).
     /// Variant exists from day one so RFC 021 doesn't need a wire bump.
@@ -421,6 +449,7 @@ mod tests {
                 rid: "x".into(),
                 reason: None,
                 requested_at_unix_micros: 0,
+                namespace: String::new(),
             },
             MemoryMutation::PurgeMemory {
                 rid: "x".into(),
@@ -436,6 +465,8 @@ mod tests {
             },
             MemoryMutation::DeleteEntityEdge {
                 edge_id: "e".into(),
+                namespace: String::new(),
+                requested_at_unix_micros: 0,
             },
             MemoryMutation::TenantConfigPatch {
                 key: "k".into(),
@@ -459,13 +490,16 @@ mod tests {
         // UpsertEdge/DeleteEdge/TombstoneMemory.
         assert!(upsert_example().is_implemented());
         assert!(MemoryMutation::DeleteEntityEdge {
-            edge_id: "e".into()
+            edge_id: "e".into(),
+            namespace: String::new(),
+            requested_at_unix_micros: 0
         }
         .is_implemented());
         assert!(MemoryMutation::TombstoneMemory {
             rid: "x".into(),
             reason: None,
             requested_at_unix_micros: 0,
+            namespace: String::new(),
         }
         .is_implemented());
 
@@ -488,6 +522,7 @@ mod tests {
             rid: "mem_a".into(),
             reason: None,
             requested_at_unix_micros: 0,
+            namespace: String::new(),
         };
         assert_eq!(t.tombstoned_rid(), Some("mem_a"));
         assert_eq!(t.purged_rid(), None);
@@ -511,6 +546,7 @@ mod tests {
                 rid: "x".into(),
                 reason: None,
                 requested_at_unix_micros: 0,
+                namespace: String::new(),
             }
             .planned_rfc(),
             "011"
@@ -565,6 +601,7 @@ mod tests {
                 rid: "mem_42".into(),
                 reason: Some("user requested".into()),
                 requested_at_unix_micros: 1_700_000_000_000_000,
+                namespace: String::new(),
             },
             MemoryMutation::UpsertEntityEdge {
                 edge_id: "edge_7".into(),
@@ -588,6 +625,7 @@ mod tests {
             rid: "x".into(),
             reason: None,
             requested_at_unix_micros: 0,
+            namespace: String::new(),
         };
         let json = serde_json::to_string(&m).unwrap();
         // tag = "kind" means the wire format is self-describing.

@@ -70,6 +70,20 @@ pub const FEATURE_FLOORS: &[(&str, WireVersion)] = &[
     // additive — but the leader gates emission to avoid sending
     // information older peers can't act on.
     ("mutation.UpsertMemory.materialized", WireVersion::new(1, 1)),
+    // RFC 010 PR-6.4: namespace-stamped TombstoneMemory + DeleteEntityEdge
+    // (engine 0.6.7+ requires `namespace` so followers can bump the
+    // right per-namespace visible_seq counter under snapshot-lag).
+    // Older peers still decode the variants — `namespace` is additive
+    // and defaults to empty — but the leader gates emission of populated
+    // fields on cluster_min observation.
+    (
+        "mutation.TombstoneMemory.namespaced",
+        WireVersion::new(1, 2),
+    ),
+    (
+        "mutation.DeleteEntityEdge.namespaced",
+        WireVersion::new(1, 2),
+    ),
 ];
 
 /// How long a peer can be silent before we drop it from the observation set.

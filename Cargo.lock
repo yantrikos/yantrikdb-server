@@ -167,6 +167,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -923,6 +932,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "derive_builder"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1428,6 +1451,12 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 dependencies = [
  "ahash 0.7.8",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
@@ -4889,12 +4918,14 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb"
-version = "0.6.5"
-source = "git+https://github.com/yantrikos/yantrikdb.git?branch=main#36ba7dae241a80b5780c7cf10f94bb0065f3f326"
+version = "0.6.7"
+source = "git+https://github.com/yantrikos/yantrikdb.git?branch=main#bcf1c7882d60e0b765f667d99b8bf598bb2212d4"
 dependencies = [
  "aes-gcm",
+ "arc-swap",
  "base64 0.22.1",
  "blake3",
+ "dashmap",
  "hex",
  "js-sys",
  "parking_lot",
@@ -4970,7 +5001,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid7",
- "yantrikdb 0.6.5",
+ "yantrikdb 0.6.7",
  "yantrikdb-protocol",
 ]
 

@@ -233,6 +233,7 @@ mod tests {
             rid: rid.into(),
             reason: reason.map(|s| s.to_string()),
             requested_at_unix_micros: 0,
+            namespace: String::new(),
         }
     }
 

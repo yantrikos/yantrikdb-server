@@ -226,6 +226,7 @@ mod tests {
             rid: rid.to_string(),
             reason: None,
             requested_at_unix_micros: 0,
+            namespace: String::new(),
         }
     }
 

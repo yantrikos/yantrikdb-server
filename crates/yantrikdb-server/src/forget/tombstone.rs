@@ -183,6 +183,7 @@ mod tests {
             rid: rid.into(),
             reason: Some("test".into()),
             requested_at_unix_micros: 0,
+            namespace: String::new(),
         }
     }
 

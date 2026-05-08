@@ -353,7 +353,10 @@ mod tests {
     async fn spawn_single_node_raft() -> (Arc<Raft<YantrikRaftTypeConfig>>, String) {
         let local = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
         let log_store = SqliteRaftLogStorage::open_in_memory();
-        let state_machine = YantrikStateMachine::new(local);
+        let state_machine = YantrikStateMachine::new(
+            local,
+            std::sync::Arc::new(crate::commit::LocalApplier::new()),
+        );
         // Use the stub network for outbound — these tests only exercise
         // the receive side. (HttpRaftNetworkFactory requires a real
         // reqwest client and we don't need outbound for receive tests.)

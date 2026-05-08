@@ -196,7 +196,10 @@ mod tests {
     async fn build_single_node_committer() -> (RaftCommitter, Arc<LocalSqliteCommitter>) {
         let local = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
         let log_store = SqliteRaftLogStorage::open_in_memory();
-        let state_machine = YantrikStateMachine::new(local.clone());
+        let state_machine = YantrikStateMachine::new(
+            local.clone(),
+            std::sync::Arc::new(crate::commit::LocalApplier::new()),
+        );
         let network = StubRaftNetworkFactory;
 
         let config = Arc::new(

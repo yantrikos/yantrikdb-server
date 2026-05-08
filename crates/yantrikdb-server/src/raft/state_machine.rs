@@ -81,13 +81,28 @@ pub struct StateMachineState {
 #[derive(Clone)]
 pub struct YantrikStateMachine {
     committer: Arc<dyn MutationCommitter>,
+    /// RFC 010 PR-6.4: every committed entry on every node is also
+    /// applied to engine state via this Applier. Without it,
+    /// `apply_normal` would write the commit log but never touch the
+    /// `memories` table or HNSW index — the cosmetic-openraft signature
+    /// the architect surfaced on 2026-05-02.
+    ///
+    /// Constructed with [`crate::commit::EngineApplier`] in production
+    /// (resolves tenant_id → engine via [`crate::tenant_pool::TenantPool`]).
+    /// Tests can pass `Arc::new(LocalApplier::new())` for trait-shape
+    /// coverage without spinning up real engines.
+    applier: Arc<dyn crate::commit::Applier>,
     state: Arc<Mutex<StateMachineState>>,
 }
 
 impl YantrikStateMachine {
-    pub fn new(committer: Arc<dyn MutationCommitter>) -> Self {
+    pub fn new(
+        committer: Arc<dyn MutationCommitter>,
+        applier: Arc<dyn crate::commit::Applier>,
+    ) -> Self {
         Self {
             committer,
+            applier,
             state: Arc::new(Mutex::new(StateMachineState::default())),
         }
     }
@@ -354,8 +369,27 @@ impl YantrikStateMachine {
         mutation: MemoryMutation,
         log_id: &LogId<YantrikNodeId>,
     ) -> Result<YantrikRaftResponse, StorageError<YantrikNodeId>> {
-        // Forward to the committer with the op_id preserved so retries
-        // are idempotent across leader failover.
+        // RFC 010 PR-6.4 — dual-call to fix cosmetic-openraft mode:
+        //
+        // Step 1: persist the mutation to the per-tenant commit log via
+        //         the committer. Same behaviour as before this PR. This
+        //         alone makes /v1/debug/history etc. correct, but the
+        //         engine `memories` table never gets touched on
+        //         followers — the production wedge the architect
+        //         surfaced on 2026-05-02.
+        //
+        // Step 2: apply the mutation to engine state via the Applier.
+        //         On the leader, this happens before the HTTP handler
+        //         returns (apply_to_state_machine fires synchronously
+        //         on commit). On followers, this happens when the
+        //         entry arrives via append-entries. Both paths land in
+        //         the same Applier code → byte-deterministic apply.
+        //
+        // op_id preserved so retries are idempotent across leader
+        // failover. log_index from openraft (log_id.index) is the seq
+        // EngineApplier passes through to engine.record_with_rid +
+        // friends.
+        let mutation_for_apply = mutation.clone();
         let receipt = self
             .committer
             .commit(
@@ -370,6 +404,52 @@ impl YantrikStateMachine {
                     AnyError::error(format!("apply commit: {e}")),
                 )
             })?;
+
+        // Engine apply. AlreadyApplied / NotYetWired are non-fatal:
+        //   - AlreadyApplied: snapshot install + log replay overlap.
+        //     Idempotent re-apply is the whole point of the contract.
+        //   - NotYetWired: Applier impl doesn't yet handle this variant
+        //     (e.g. PurgeMemory until RFC 011 PR-3). The commit log
+        //     entry is durable and a future binary will replay it.
+        // Anything else surfaces as StorageError so openraft halts
+        // this node's apply path — the state machine has diverged or
+        // is about to.
+        match self
+            .applier
+            .apply(tenant_id, log_id.index, &mutation_for_apply)
+            .await
+        {
+            Ok(()) => {}
+            Err(e) if e.is_idempotent_ok() => {
+                tracing::debug!(
+                    tenant_id = %tenant_id,
+                    log_index = log_id.index,
+                    error = %e,
+                    "apply: idempotent skip"
+                );
+            }
+            Err(crate::commit::ApplyError::NotYetWired {
+                variant,
+                planned_pr,
+            }) => {
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    log_index = log_id.index,
+                    variant,
+                    planned_pr,
+                    "apply: variant not yet wired — engine state will lag the commit log \
+                     until the planned PR ships"
+                );
+            }
+            Err(e) => {
+                return Err(StorageIOError::apply(
+                    log_id.clone(),
+                    AnyError::error(format!("apply engine: {e}")),
+                )
+                .into());
+            }
+        }
+
         Ok(YantrikRaftResponse::new(
             log_id.leader_id.term,
             receipt.log_index,
@@ -445,7 +525,10 @@ mod tests {
 
     fn make_sm() -> YantrikStateMachine {
         let committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
-        YantrikStateMachine::new(committer)
+        YantrikStateMachine::new(
+            committer,
+            std::sync::Arc::new(crate::commit::LocalApplier::new()),
+        )
     }
 
     #[tokio::test]
@@ -488,7 +571,10 @@ mod tests {
     #[tokio::test]
     async fn apply_membership_stores_config_and_does_not_call_committer() {
         let committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
-        let mut sm = YantrikStateMachine::new(committer.clone());
+        let mut sm = YantrikStateMachine::new(
+            committer.clone(),
+            std::sync::Arc::new(crate::commit::LocalApplier::new()),
+        );
         let entries = vec![entry_membership(1, 1)];
         let _ = sm.apply(entries).await.unwrap();
 
@@ -506,7 +592,10 @@ mod tests {
     async fn apply_preserves_op_id_for_idempotent_replay() {
         // Same op_id twice → second call is idempotent at committer.
         let committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
-        let mut sm = YantrikStateMachine::new(committer.clone());
+        let mut sm = YantrikStateMachine::new(
+            committer.clone(),
+            std::sync::Arc::new(crate::commit::LocalApplier::new()),
+        );
         let app = upsert_app(1, "a");
         let op_id = app.op_id;
         let mutation = app.mutation.clone();
@@ -541,7 +630,10 @@ mod tests {
 
         // Fresh state machine — bring it up via install_snapshot.
         let dest_committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
-        let mut dest = YantrikStateMachine::new(dest_committer.clone());
+        let mut dest = YantrikStateMachine::new(
+            dest_committer.clone(),
+            std::sync::Arc::new(crate::commit::LocalApplier::new()),
+        );
         let cursor = snap.snapshot;
         dest.install_snapshot(&snap.meta, cursor).await.unwrap();
 
@@ -575,7 +667,10 @@ mod tests {
         let snap = builder.build_snapshot().await.unwrap();
 
         let dest_committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
-        let mut dest = YantrikStateMachine::new(dest_committer);
+        let mut dest = YantrikStateMachine::new(
+            dest_committer,
+            std::sync::Arc::new(crate::commit::LocalApplier::new()),
+        );
         dest.install_snapshot(&snap.meta, snap.snapshot)
             .await
             .unwrap();
@@ -624,7 +719,10 @@ mod tests {
         let snap = builder.build_snapshot().await.unwrap();
 
         let dest_committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
-        let mut dest = YantrikStateMachine::new(dest_committer.clone());
+        let mut dest = YantrikStateMachine::new(
+            dest_committer.clone(),
+            std::sync::Arc::new(crate::commit::LocalApplier::new()),
+        );
         dest.install_snapshot(&snap.meta, snap.snapshot)
             .await
             .unwrap();

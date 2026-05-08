@@ -92,7 +92,10 @@ impl ClusterNode {
 async fn spawn_node(id: u64) -> ClusterNode {
     let local = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
     let log_store = SqliteRaftLogStorage::open_in_memory();
-    let state_machine = YantrikStateMachine::new(local.clone());
+    let state_machine = YantrikStateMachine::new(
+        local.clone(),
+        std::sync::Arc::new(commit::LocalApplier::new()),
+    );
     let network = HttpRaftNetworkFactory::new_plaintext(Duration::from_secs(2));
 
     let config = Arc::new(

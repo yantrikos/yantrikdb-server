@@ -347,7 +347,16 @@ pub async fn build_raft_cluster(
             .map_err(|e| AssemblyError::RaftNew(format!("openraft Config::validate: {e}")))?,
     );
 
-    let state_machine = YantrikStateMachine::new(local.clone());
+    // RFC 010 PR-6.4 — state machine apply path needs an Applier so
+    // every commit also writes engine state, not just the commit log.
+    // For now build_raft_cluster constructs a `LocalApplier` placeholder
+    // that returns NotYetWired for engine-mutating variants; the
+    // production wiring (EngineApplier with TenantPool-backed resolver)
+    // is plumbed from main.rs in a follow-up commit. The state machine
+    // tolerates NotYetWired and logs a warning so this transitional
+    // state is operator-visible.
+    let applier: Arc<dyn crate::commit::Applier> = Arc::new(crate::commit::LocalApplier::new());
+    let state_machine = YantrikStateMachine::new(local.clone(), applier);
     let raft = Raft::<YantrikRaftTypeConfig>::new(
         cfg.node_id,
         validated_config,

@@ -40,6 +40,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use thiserror::Error;
+use yantrikdb::YantrikDB;
 
 use super::mutation::{MemoryMutation, TenantId};
 
@@ -191,6 +192,272 @@ impl Applier for LocalApplier {
             .map(|(_, idx)| *idx)
             .max()
             .unwrap_or(0))
+    }
+}
+
+/// Map a `TenantId` to the engine that owns its data.
+///
+/// Decoupled from `EngineApplier` (rather than holding `Arc<TenantPool>`
+/// directly) so tests can inject mocks. Production wiring uses an impl
+/// over the existing [`crate::tenant_pool::TenantPool`].
+pub trait EngineResolver: Send + Sync {
+    /// Return the engine handle for `tenant_id`, or
+    /// [`ApplyError::EngineFailure`] if resolution fails. Engine
+    /// resolution failure during apply is catastrophic — the entry is
+    /// already durable in the log but the state machine has nowhere to
+    /// apply it. Caller raises a node-level health alarm.
+    fn resolve(&self, tenant_id: TenantId) -> Result<Arc<YantrikDB>, ApplyError>;
+}
+
+/// Real-engine [`Applier`] for RFC 010 PR-6.4.
+///
+/// Resolves `tenant_id` → `Arc<YantrikDB>` via the injected
+/// [`EngineResolver`], then dispatches each [`MemoryMutation`] variant
+/// to the corresponding deterministic engine primitive
+/// (`record_with_rid`, `tombstone_with_rid`, `upsert_entity_edge_with_id`,
+/// `delete_entity_edge_with_id`) — all of which take `Some(log_index)`
+/// as the seq, satisfying the engine v0.6.7 contract.
+///
+/// Idempotency: same `(tenant_id, log_index)` returns
+/// [`ApplyError::AlreadyApplied`] without invoking the engine. Snapshot
+/// install + log replay overlap is the normal trigger.
+///
+/// Engine API is synchronous; `apply` wraps the dispatch in
+/// `tokio::task::spawn_blocking` so the tokio runtime worker isn't held
+/// across HNSW or SQLite work.
+pub struct EngineApplier {
+    resolver: Arc<dyn EngineResolver>,
+    seen: Arc<Mutex<HashSet<(TenantId, u64)>>>,
+}
+
+impl EngineApplier {
+    pub fn new(resolver: Arc<dyn EngineResolver>) -> Self {
+        Self {
+            resolver,
+            seen: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl Applier for EngineApplier {
+    async fn apply(
+        &self,
+        tenant_id: TenantId,
+        log_index: u64,
+        mutation: &MemoryMutation,
+    ) -> Result<(), ApplyError> {
+        // Replay detection FIRST — duplicate apply (snapshot install,
+        // log replay) must be a fast no-op before we even touch the
+        // engine.
+        {
+            let mut seen = self.seen.lock();
+            if !seen.insert((tenant_id, log_index)) {
+                return Err(ApplyError::AlreadyApplied {
+                    tenant_id,
+                    log_index,
+                });
+            }
+        }
+
+        let engine = self.resolver.resolve(tenant_id)?;
+        let mutation = mutation.clone();
+
+        // Engine API is sync (parking_lot internal). Don't hold a tokio
+        // worker across SQLite + HNSW work.
+        let result = tokio::task::spawn_blocking(move || -> Result<(), ApplyError> {
+            apply_to_engine(&engine, log_index, &mutation)
+        })
+        .await
+        .map_err(|e| ApplyError::EngineFailure {
+            message: format!("spawn_blocking join: {e}"),
+        })?;
+
+        result
+    }
+
+    async fn applied_high_watermark(&self, tenant_id: TenantId) -> Result<u64, ApplyError> {
+        let seen = self.seen.lock();
+        Ok(seen
+            .iter()
+            .filter(|(t, _)| *t == tenant_id)
+            .map(|(_, idx)| *idx)
+            .max()
+            .unwrap_or(0))
+    }
+}
+
+/// Dispatch a single mutation against the engine. Pulled out as a free
+/// function so test mocks can call it without spinning up a tokio
+/// runtime, and so the dispatch logic is testable in isolation.
+fn apply_to_engine(
+    engine: &YantrikDB,
+    log_index: u64,
+    mutation: &MemoryMutation,
+) -> Result<(), ApplyError> {
+    match mutation {
+        MemoryMutation::UpsertMemory {
+            rid,
+            text,
+            memory_type,
+            importance,
+            valence,
+            half_life,
+            namespace,
+            certainty,
+            domain,
+            source,
+            emotional_state,
+            embedding,
+            metadata,
+            extracted_entities,
+            created_at_unix_micros,
+            embedding_model,
+        } => {
+            let emb = embedding
+                .as_deref()
+                .ok_or_else(|| ApplyError::EngineFailure {
+                    message: format!(
+                        "UpsertMemory rid={} missing embedding — leader did not materialize \
+                     before commit (PR 6.2 contract violation)",
+                        rid
+                    ),
+                })?;
+            let entities_ref: Vec<&str> = extracted_entities.iter().map(String::as_str).collect();
+            let created_at = created_at_unix_micros.unwrap_or(0);
+            let model = embedding_model.as_deref().unwrap_or("default");
+
+            // engine.record_with_rid signature (engine 0.6.7):
+            //   (rid, text, memory_type, importance, valence, half_life,
+            //    metadata, embedding, namespace, certainty, domain,
+            //    source, emotional_state, created_at_unix_micros,
+            //    extracted_entities, embedding_model, seq: Option<u64>)
+            engine
+                .record_with_rid(
+                    rid,
+                    text,
+                    memory_type,
+                    *importance,
+                    *valence,
+                    *half_life,
+                    metadata,
+                    emb,
+                    namespace,
+                    *certainty,
+                    domain,
+                    source,
+                    emotional_state.as_deref(),
+                    created_at,
+                    &entities_ref,
+                    model,
+                    Some(log_index),
+                )
+                .map_err(|e| ApplyError::EngineFailure {
+                    message: format!("record_with_rid({rid}): {e}"),
+                })?;
+            Ok(())
+        }
+        MemoryMutation::TombstoneMemory {
+            rid,
+            reason,
+            requested_at_unix_micros,
+            namespace,
+        } => {
+            // namespace defaults to "" on legacy v1.0/v1.1 payloads.
+            // Engine 0.6.7 tolerates empty namespace by falling back to
+            // a memory-row lookup; emit a trace-level info log so
+            // operators can see legacy bleed-through during snapshot
+            // install per yantrikdb-core's note in msg 15489f0a.
+            let ns = if namespace.is_empty() {
+                tracing::info!(
+                    rid,
+                    log_index,
+                    "TombstoneMemory legacy v1.0/v1.1 payload — namespace empty, engine will resolve from row"
+                );
+                ""
+            } else {
+                namespace.as_str()
+            };
+            engine
+                .tombstone_with_rid(
+                    rid,
+                    ns,
+                    reason.as_deref(),
+                    *requested_at_unix_micros,
+                    Some(log_index),
+                )
+                .map_err(|e| ApplyError::EngineFailure {
+                    message: format!("tombstone_with_rid({rid}): {e}"),
+                })?;
+            Ok(())
+        }
+        MemoryMutation::UpsertEntityEdge {
+            edge_id,
+            src,
+            dst,
+            rel_type,
+            weight,
+            namespace,
+        } => {
+            // engine.upsert_entity_edge_with_id (engine 0.6.7) requires
+            // a created_at_unix_micros: i64 between namespace and seq.
+            // UpsertEntityEdge mutation grammar doesn't carry one today;
+            // pass 0 (engine treats as "use current wall clock"). This
+            // is a determinism gap the cluster recovers from since edge
+            // timestamps don't feed HNSW. Future wire 1.3 adds the
+            // field for stricter byte-determinism on edges.
+            engine
+                .upsert_entity_edge_with_id(
+                    edge_id,
+                    src,
+                    dst,
+                    rel_type,
+                    *weight,
+                    namespace,
+                    0,
+                    Some(log_index),
+                )
+                .map_err(|e| ApplyError::EngineFailure {
+                    message: format!("upsert_entity_edge_with_id({edge_id}): {e}"),
+                })?;
+            Ok(())
+        }
+        MemoryMutation::DeleteEntityEdge {
+            edge_id,
+            namespace,
+            requested_at_unix_micros,
+        } => {
+            let ns = if namespace.is_empty() {
+                tracing::info!(
+                    edge_id,
+                    log_index,
+                    "DeleteEntityEdge legacy v1.0/v1.1 payload — namespace empty"
+                );
+                ""
+            } else {
+                namespace.as_str()
+            };
+            engine
+                .delete_entity_edge_with_id(edge_id, ns, *requested_at_unix_micros, Some(log_index))
+                .map_err(|e| ApplyError::EngineFailure {
+                    message: format!("delete_entity_edge_with_id({edge_id}): {e}"),
+                })?;
+            Ok(())
+        }
+        // Variants whose RFCs haven't shipped — rejected at apply time
+        // exactly as before.
+        MemoryMutation::UpdateMemoryPatch { .. } => Err(ApplyError::NotYetWired {
+            variant: "UpdateMemoryPatch",
+            planned_pr: "RFC 011-A correct semantics",
+        }),
+        MemoryMutation::PurgeMemory { .. } => Err(ApplyError::NotYetWired {
+            variant: "PurgeMemory",
+            planned_pr: "RFC 011 PR-3",
+        }),
+        MemoryMutation::TenantConfigPatch { .. } => Err(ApplyError::NotYetWired {
+            variant: "TenantConfigPatch",
+            planned_pr: "RFC 021 PR-2",
+        }),
     }
 }
 

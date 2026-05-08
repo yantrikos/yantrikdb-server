@@ -62,7 +62,7 @@ pub mod submitter;
 pub mod tenant_pool;
 pub mod trait_def;
 
-pub use applier::{Applier, ApplyError, LocalApplier};
+pub use applier::{Applier, ApplyError, EngineApplier, EngineResolver, LocalApplier};
 pub use local::LocalSqliteCommitter;
 pub use materialize::{
     Embedder, EntityExtractor, LocalMaterializer, MaterializeError, Materializer, RememberRequest,

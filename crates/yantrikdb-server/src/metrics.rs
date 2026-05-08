@@ -16,6 +16,7 @@ use parking_lot::Mutex;
 
 /// A simple histogram bucket collector. Not a full Prometheus client —
 /// just enough to emit meaningful percentile data in text format.
+#[derive(Clone)]
 struct HistogramData {
     /// Sum of all observed values.
     sum: f64,
@@ -145,6 +146,21 @@ pub struct MetricsStore {
     /// side). Hourly background healthcheck updates this. Non-zero
     /// values indicate pre-v0.8.1 stale data or a regression.
     null_embedding_counts: Mutex<HashMap<i64, i64>>,
+
+    /// RFC 010 PR-6.4 — counter: enrichment ticks paused due to engine
+    /// pressure (`count_pending_ops > threshold`). Keyed by db name so
+    /// per-tenant pressure is visible. Without this, operators can't
+    /// tell if the rule fires too often or too rarely.
+    enrichment_paused: Mutex<HashMap<String, u64>>,
+    /// Counter: enrichment ticks that ran (engine pressure under
+    /// threshold). Sibling to `enrichment_paused` so the operator can
+    /// read "we paused N times, we resumed N times" as a sanity check.
+    enrichment_resumed: Mutex<HashMap<String, u64>>,
+    /// Histogram: pending-op count observed at pause time. Buckets per
+    /// yantrikdb-core's spec: 100, 250, 500, 1000, 2500. Diagnostic
+    /// "is the threshold tuned right" — without this the operator is
+    /// guessing.
+    enrichment_pending_at_pause: Mutex<HistogramData>,
 }
 
 impl MetricsStore {
@@ -174,6 +190,9 @@ impl MetricsStore {
             recall_request_top_k: Mutex::new(HashMap::new()),
             embedder_failures: Mutex::new(HashMap::new()),
             null_embedding_counts: Mutex::new(HashMap::new()),
+            enrichment_paused: Mutex::new(HashMap::new()),
+            enrichment_resumed: Mutex::new(HashMap::new()),
+            enrichment_pending_at_pause: Mutex::new(HistogramData::new()),
         }
     }
 
@@ -477,6 +496,50 @@ pub fn set_null_embedding_count(tenant_id: i64, count: i64) {
 pub fn null_embedding_counts_snapshot() -> Vec<(i64, i64)> {
     let map = global().null_embedding_counts.lock();
     map.iter().map(|(k, v)| (*k, *v)).collect()
+}
+
+/// RFC 010 PR-6.4: record an enrichment-tick pause due to engine pressure.
+/// `db_name` is the per-database label so operators see which tenants
+/// are under pressure. `pending` is observed `count_pending_ops()` for
+/// the histogram dimension that tells the operator if the threshold
+/// is tuned right.
+pub fn record_enrichment_paused(db_name: &str, pending: u64) {
+    {
+        let mut map = global().enrichment_paused.lock();
+        *map.entry(db_name.to_string()).or_insert(0) += 1;
+    }
+    global()
+        .enrichment_pending_at_pause
+        .lock()
+        .observe(pending as f64);
+}
+
+/// RFC 010 PR-6.4: record an enrichment-tick that ran (engine pressure
+/// under threshold). Sibling counter to [`record_enrichment_paused`] so
+/// the operator can read paused/resumed ratio as a sanity check.
+pub fn record_enrichment_resumed(db_name: &str) {
+    let mut map = global().enrichment_resumed.lock();
+    *map.entry(db_name.to_string()).or_insert(0) += 1;
+}
+
+/// Snapshot of enrichment pause counts per db. For `/metrics` rendering.
+pub fn enrichment_paused_snapshot() -> Vec<(String, u64)> {
+    let map = global().enrichment_paused.lock();
+    map.iter().map(|(k, v)| (k.clone(), *v)).collect()
+}
+
+/// Snapshot of enrichment resume counts per db. For `/metrics` rendering.
+pub fn enrichment_resumed_snapshot() -> Vec<(String, u64)> {
+    let map = global().enrichment_resumed.lock();
+    map.iter().map(|(k, v)| (k.clone(), *v)).collect()
+}
+
+/// Snapshot of pending-at-pause histogram totals (count + sum). For
+/// `/metrics` rendering. Returning `(count, sum)` rather than the full
+/// `HistogramData` keeps the type private to this module.
+pub fn enrichment_pending_at_pause_totals() -> (u64, f64) {
+    let h = global().enrichment_pending_at_pause.lock();
+    (h.count, h.sum)
 }
 
 /// Set the in-flight recall gauge.

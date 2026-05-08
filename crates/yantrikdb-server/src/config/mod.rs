@@ -181,6 +181,16 @@ pub enum EmbeddingStrategy {
 pub struct BackgroundSection {
     pub consolidation_interval_minutes: u64,
     pub decay_sweep_interval_minutes: u64,
+    /// RFC 010 PR-6.4: pause consolidation/conflict-scan/pattern-mining
+    /// enrichment work when the engine reports `count_pending_ops()`
+    /// above this threshold. `None` = auto-scale from engine.delta_max()
+    /// at `(delta_max * 75 / 100).max(ENRICHMENT_PAUSE_THRESHOLD_FLOOR)`.
+    ///
+    /// Decay loop, snapshot scheduler, WAL checkpoint, and health probes
+    /// are NOT paused — those are correctness-adjacent (memory aging is
+    /// a function of wall-clock time, not engine load).
+    #[serde(default)]
+    pub enrichment_pause_threshold: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -345,6 +355,7 @@ impl Default for BackgroundSection {
         Self {
             consolidation_interval_minutes: 30,
             decay_sweep_interval_minutes: 60,
+            enrichment_pause_threshold: None, // auto-scale from engine.delta_max()
         }
     }
 }

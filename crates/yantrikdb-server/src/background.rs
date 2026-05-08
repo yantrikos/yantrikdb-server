@@ -56,8 +56,9 @@ impl WorkerRegistry {
             let engine = Arc::clone(&engine);
             let token = cancel.clone();
             let name = db_name.clone();
+            let pause_threshold = self.config.enrichment_pause_threshold;
             handles.push(tokio::spawn(async move {
-                consolidation_loop(engine, interval, token, name).await;
+                consolidation_loop(engine, interval, token, name, pause_threshold).await;
             }));
         }
 
@@ -172,11 +173,40 @@ impl WorkerRegistry {
 
 // ── Worker loops ────────────────────────────────────────────────
 
+/// Floor for the auto-scaled enrichment-pressure threshold. Cap of 50
+/// is "we're definitely not in healthy load territory" — any meaningful
+/// production deployment has more capacity than this. Named so debug
+/// logs reading "threshold=50" are immediately self-explanatory.
+pub const ENRICHMENT_PAUSE_THRESHOLD_FLOOR: u64 = 50;
+
+/// Pure-arithmetic helper: compute the effective threshold from
+/// `delta_max` + `config_override`. Extracted from
+/// [`effective_enrichment_threshold`] so tests can hit the math
+/// without spinning up a `YantrikDB`.
+fn enrichment_threshold_from(delta_max: u64, config_override: Option<u64>) -> u64 {
+    if let Some(t) = config_override {
+        return t;
+    }
+    (delta_max * 75 / 100).max(ENRICHMENT_PAUSE_THRESHOLD_FLOOR)
+}
+
+/// Compute the effective enrichment-pause threshold for a given engine.
+///
+/// Returns `config_override` if the operator pinned a value in
+/// `[background] enrichment_pause_threshold`. Otherwise auto-scales:
+/// 75% of `engine.delta_max()`, floored at
+/// [`ENRICHMENT_PAUSE_THRESHOLD_FLOOR`]. The 75% mark catches "the
+/// compactor is clearly behind" without firing under healthy load.
+pub fn effective_enrichment_threshold(engine: &YantrikDB, config_override: Option<u64>) -> u64 {
+    enrichment_threshold_from(engine.delta_max() as u64, config_override)
+}
+
 async fn consolidation_loop(
     engine: Arc<YantrikDB>,
     interval: Duration,
     cancel: CancellationToken,
     db_name: String,
+    pause_threshold: Option<u64>,
 ) {
     // Initial delay — don't run immediately on startup
     tokio::select! {
@@ -199,6 +229,28 @@ async fn consolidation_loop(
             move || {
                 let db = engine.as_ref();
                 let _hold_timer = crate::metrics::LockHoldTimer::start("worker_consolidation");
+
+                // RFC 010 PR-6.4 enrichment-pressure rule: under
+                // sustained ingest load, enrichment work compounds the
+                // pressure (extra SQL, extra recall, extra compactor
+                // invalidation). yantrikdb-core's audit (commits 84318c0+,
+                // CONCURRENCY.md) recommends pausing enrichment when
+                // `count_pending_ops > 75% of delta_max`. Decay loop
+                // does NOT participate — memory aging is wall-clock-
+                // bound, not load-bound.
+                let pending = db.count_pending_ops().unwrap_or(0).max(0) as u64;
+                let threshold = effective_enrichment_threshold(db, pause_threshold);
+                if pending > threshold {
+                    crate::metrics::record_enrichment_paused(&db_name, pending);
+                    tracing::debug!(
+                        db = %db_name,
+                        pending,
+                        threshold,
+                        "engine pressure: skipping consolidation tick"
+                    );
+                    return None;
+                }
+                crate::metrics::record_enrichment_resumed(&db_name);
 
                 // Skip if too few memories
                 let stats = db.stats(None);
@@ -548,5 +600,59 @@ async fn wal_checkpoint_loop(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pr_6_4_threshold_uses_config_override_when_set() {
+        // Operator pin wins over auto-scale. Default delta_max=256 would
+        // auto-scale to 192 (256*75/100); the override 50 wins.
+        assert_eq!(enrichment_threshold_from(256, Some(50)), 50);
+        assert_eq!(enrichment_threshold_from(1024, Some(2000)), 2000);
+        assert_eq!(enrichment_threshold_from(0, Some(1)), 1);
+    }
+
+    #[test]
+    fn pr_6_4_threshold_auto_scales_to_75_percent_of_delta_max() {
+        // delta_max=256 -> 192. delta_max=1024 -> 768.
+        assert_eq!(enrichment_threshold_from(256, None), 192);
+        assert_eq!(enrichment_threshold_from(1024, None), 768);
+        assert_eq!(enrichment_threshold_from(2048, None), 1536);
+    }
+
+    #[test]
+    fn pr_6_4_threshold_floors_at_minimum_for_tiny_delta_max() {
+        // delta_max=10 would auto-scale to 7, which is meaningless under
+        // any real load. Floor at ENRICHMENT_PAUSE_THRESHOLD_FLOOR (50)
+        // so the rule never fires under healthy small-deployment shape.
+        assert_eq!(
+            enrichment_threshold_from(10, None),
+            ENRICHMENT_PAUSE_THRESHOLD_FLOOR
+        );
+        // Boundary: delta_max=66 -> 49 -> floored to 50.
+        assert_eq!(enrichment_threshold_from(66, None), 50);
+        // delta_max=68 -> 51 -> not floored.
+        assert_eq!(enrichment_threshold_from(68, None), 51);
+    }
+
+    #[test]
+    fn pr_6_4_threshold_zero_delta_max_floors() {
+        // Defensive: delta_max=0 (hypothetical, before engine init)
+        // shouldn't produce 0-threshold which would mean "pause always".
+        assert_eq!(
+            enrichment_threshold_from(0, None),
+            ENRICHMENT_PAUSE_THRESHOLD_FLOOR
+        );
+    }
+
+    #[test]
+    fn pr_6_4_threshold_floor_constant_is_50() {
+        // Pin the constant. Future-debugging readers benefit from
+        // the explicit value showing up in test output.
+        assert_eq!(ENRICHMENT_PAUSE_THRESHOLD_FLOOR, 50);
     }
 }

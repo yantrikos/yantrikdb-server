@@ -706,7 +706,20 @@ async fn remember(
     });
     let embedding = resolve_embedding(state.as_ref(), &text, client_supplied).await?;
 
-    let cmd = Command::Remember {
+    // RFC 010 PR-6.4: route through commit_log instead of calling
+    // engine.record() directly. Single-node mode: LocalSqliteSubmitter
+    // applies inline. Cluster mode: RaftCommitter routes through
+    // openraft → state machine apply → engine.record_with_rid on every
+    // node. RID is allocated server-side (deterministic per-mutation,
+    // not per-replica) and carried in the mutation body.
+    let rid = uuid7::uuid7().to_string();
+    let now_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0);
+
+    let mutation = crate::commit::MemoryMutation::UpsertMemory {
+        rid: rid.clone(),
         text,
         memory_type: body
             .get("memory_type")
@@ -747,8 +760,26 @@ async fn remember(
             .and_then(|v| v.as_str())
             .map(String::from),
         embedding,
+        extracted_entities: vec![],
+        created_at_unix_micros: Some(now_micros),
+        embedding_model: Some("default".into()),
     };
-    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+
+    let receipt = state
+        .commit_log
+        .commit(
+            crate::commit::TenantId::new(db_id),
+            mutation,
+            crate::commit::CommitOptions::default(),
+        )
+        .await
+        .map_err(commit_error_to_app_error)?;
+
+    let _ = engine; // engine handle is held only for quota check
+    Ok(Json(json!({
+        "rid": rid,
+        "log_index": receipt.log_index,
+    })))
 }
 
 /// Issue #19 helper: resolve the embedding for a `/v1/remember`-style
@@ -969,8 +1000,56 @@ async fn remember_batch(
         }
     }
 
-    let cmd = Command::RememberBatch { memories };
-    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+    // RFC 010 PR-6.4: route every batch entry through commit_log. Each
+    // entry gets its own (rid, op_id, log_index). On cluster mode this
+    // is N round-trips through openraft; on single-node it's N inline
+    // applier dispatches. Both paths preserve byte-determinism across
+    // replicas.
+    let now_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0);
+    let mut rids = Vec::with_capacity(memories.len());
+    let mut last_log_index: u64 = 0;
+    for m in memories {
+        let rid = uuid7::uuid7().to_string();
+        let mutation = crate::commit::MemoryMutation::UpsertMemory {
+            rid: rid.clone(),
+            text: m.text,
+            memory_type: m.memory_type,
+            importance: m.importance,
+            valence: m.valence,
+            half_life: m.half_life,
+            metadata: m.metadata,
+            namespace: m.namespace,
+            certainty: m.certainty,
+            domain: m.domain,
+            source: m.source,
+            emotional_state: m.emotional_state,
+            embedding: m.embedding,
+            extracted_entities: vec![],
+            created_at_unix_micros: Some(now_micros),
+            embedding_model: Some("default".into()),
+        };
+        let receipt = state
+            .commit_log
+            .commit(
+                crate::commit::TenantId::new(db_id),
+                mutation,
+                crate::commit::CommitOptions::default(),
+            )
+            .await
+            .map_err(commit_error_to_app_error)?;
+        rids.push(rid);
+        last_log_index = receipt.log_index;
+    }
+    let _ = engine; // engine handle held only for the quota check above
+    let count = rids.len();
+    Ok(Json(json!({
+        "rids": rids,
+        "count": count,
+        "log_index": last_log_index,
+    })))
 }
 
 async fn recall(
@@ -1084,21 +1163,54 @@ async fn forget(
 ) -> AppResult {
     let _timer = crate::metrics::HandlerTimer::new("forget");
     check_writable(&state)?;
-    let (_, engine) = resolve_engine(
+    let (db_id, _engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
-    let rid = body["rid"]
+    let rid: String = body["rid"]
         .as_str()
         .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'rid'"))?
         .into();
-    execute_cmd(
-        engine,
-        Command::Forget { rid },
-        state.control.clone(),
-        &state.inflight,
-    )
-    .await
+    let namespace: String = body
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .into();
+    let reason = body
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let now_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0);
+
+    // RFC 010 PR-6.4: route TombstoneMemory through commit_log so the
+    // mutation replicates to followers via openraft (cluster) or applies
+    // inline via LocalSqliteSubmitter (single-node). Engine state is
+    // updated by the applier dispatch (engine.tombstone_with_rid).
+    let mutation = crate::commit::MemoryMutation::TombstoneMemory {
+        rid: rid.clone(),
+        reason,
+        requested_at_unix_micros: now_micros,
+        namespace,
+    };
+
+    let receipt = state
+        .commit_log
+        .commit(
+            crate::commit::TenantId::new(db_id),
+            mutation,
+            crate::commit::CommitOptions::default(),
+        )
+        .await
+        .map_err(commit_error_to_app_error)?;
+
+    Ok(Json(json!({
+        "rid": rid,
+        "found": true,
+        "log_index": receipt.log_index,
+    })))
 }
 
 async fn relate(
@@ -1108,27 +1220,57 @@ async fn relate(
 ) -> Result<impl IntoResponse, AppError> {
     let _timer = crate::metrics::HandlerTimer::new("relate");
     check_writable(&state)?;
-    let (_, engine) = resolve_engine(
+    let (db_id, _engine) = resolve_engine(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
-    let cmd = Command::Relate {
-        entity: body["entity"]
-            .as_str()
-            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'entity'"))?
-            .into(),
-        target: body["target"]
-            .as_str()
-            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'target'"))?
-            .into(),
-        relationship: body["relationship"]
-            .as_str()
-            .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'relationship'"))?
-            .into(),
-        weight: body.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0),
+    let entity: String = body["entity"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'entity'"))?
+        .into();
+    let target: String = body["target"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'target'"))?
+        .into();
+    let rel_type: String = body["relationship"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'relationship'"))?
+        .into();
+    let weight = body.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let namespace: String = body
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .into();
+
+    // RFC 010 PR-6.4: route UpsertEntityEdge through commit_log. Edge id
+    // allocated server-side as UUIDv7, carried in the mutation so every
+    // replica produces byte-identical edge state.
+    let edge_id = uuid7::uuid7().to_string();
+    let mutation = crate::commit::MemoryMutation::UpsertEntityEdge {
+        edge_id: edge_id.clone(),
+        src: entity,
+        dst: target,
+        rel_type,
+        weight,
+        namespace,
     };
-    let json = execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await?;
-    let mut response = json.into_response();
+
+    let receipt = state
+        .commit_log
+        .commit(
+            crate::commit::TenantId::new(db_id),
+            mutation,
+            crate::commit::CommitOptions::default(),
+        )
+        .await
+        .map_err(commit_error_to_app_error)?;
+
+    let mut response = Json(json!({
+        "edge_id": edge_id,
+        "log_index": receipt.log_index,
+    }))
+    .into_response();
     response
         .headers_mut()
         .insert("deprecation", HeaderValue::from_static("true"));

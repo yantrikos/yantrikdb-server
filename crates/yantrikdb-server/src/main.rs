@@ -1984,10 +1984,28 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         Arc<dyn crate::commit::MutationCommitter>,
         Option<Arc<crate::raft::RaftAssembly>>,
     ) = match cfg.cluster.raft_mode {
-        crate::raft::RaftClusterMode::Disabled => (
-            local_committer.clone() as Arc<dyn crate::commit::MutationCommitter>,
-            None,
-        ),
+        crate::raft::RaftClusterMode::Disabled => {
+            // RFC 010 PR-6.4 — single-node also needs an Applier so
+            // committed mutations actually land in engine state. Without
+            // this wrapping, `commit_log.commit(...)` would write to the
+            // commit log but the engine `memories` table would never see
+            // the row — RYW broken on single-node too. Wrap
+            // `LocalSqliteCommitter` in `LocalSqliteSubmitter` (which
+            // composes committer + applier) and expose it as
+            // `Arc<dyn MutationCommitter>` via the impl in
+            // `commit/submitter.rs`.
+            let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
+                pool.clone(),
+                control.clone(),
+            )) as Arc<dyn crate::commit::EngineResolver>;
+            let applier: Arc<dyn crate::commit::Applier> =
+                Arc::new(crate::commit::EngineApplier::new(engine_resolver));
+            let submitter = Arc::new(crate::commit::LocalSqliteSubmitter::new(
+                local_committer.clone(),
+                applier,
+            ));
+            (submitter as Arc<dyn crate::commit::MutationCommitter>, None)
+        }
         crate::raft::RaftClusterMode::OpenRaft => {
             let raft_log_path = cfg.server.data_dir.join("raft_log.sqlite");
             let raft_log_conn = rusqlite::Connection::open(&raft_log_path)
@@ -2018,6 +2036,20 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                 peers.push(node_addr.clone());
             }
 
+            // RFC 010 PR-6.4 — engine apply path. Wire `EngineApplier`
+            // over a `TenantPool`-backed resolver so every committed
+            // mutation (leader + followers) flows into engine state via
+            // the deterministic `record_with_rid` family. Without this,
+            // openraft replicates the commit log but engine state stays
+            // empty on followers — the cosmetic-openraft regression the
+            // architect surfaced on 2026-05-02.
+            let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
+                pool.clone(),
+                control.clone(),
+            )) as Arc<dyn crate::commit::EngineResolver>;
+            let applier: Arc<dyn crate::commit::Applier> =
+                Arc::new(crate::commit::EngineApplier::new(engine_resolver));
+
             let assembly_cfg = crate::raft::RaftAssemblyConfig {
                 mode: crate::raft::RaftClusterMode::OpenRaft,
                 node_id,
@@ -2033,6 +2065,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                 // which point this stays unchanged but starts being
                 // load-bearing.
                 write_path: crate::raft::HandlerWritePath::RaftSubmitter,
+                applier,
                 request_timeout: std::time::Duration::from_secs(10),
                 openraft_config: openraft::Config {
                     cluster_name: "yantrikdb".into(),

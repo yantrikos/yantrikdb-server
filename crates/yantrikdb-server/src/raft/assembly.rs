@@ -41,7 +41,7 @@ use super::http_network::HttpRaftNetworkFactory;
 use super::log_storage::SqliteRaftLogStorage;
 use super::state_machine::YantrikStateMachine;
 use super::types::{YantrikNode, YantrikNodeId, YantrikRaftTypeConfig};
-use crate::commit::MutationCommitter;
+use crate::commit::{Applier, MutationCommitter};
 use crate::security::cluster_tls::{ClusterTlsConfig, ClusterTlsError};
 
 /// Whether this server runs in cluster mode. `Disabled` means
@@ -167,6 +167,14 @@ pub struct RaftAssemblyConfig {
     /// What backs the HTTP handler write path. PR-6.5 boot invariant:
     /// `OpenRaft` mode requires `RaftSubmitter` here.
     pub write_path: HandlerWritePath,
+    /// RFC 010 PR-6.4 — engine apply path. Every committed mutation on
+    /// every node (leader + followers) flows through this Applier so
+    /// engine state stays in lock-step with the commit log.
+    /// Production wiring uses
+    /// [`crate::commit::EngineApplier`] over a
+    /// [`crate::tenant_pool::TenantPoolEngineResolver`]; tests pass
+    /// [`crate::commit::LocalApplier`] for trait-shape coverage.
+    pub applier: Arc<dyn Applier>,
     /// Per-RPC timeout for the reqwest client.
     pub request_timeout: Duration,
     /// openraft heartbeat / election tuning.
@@ -184,6 +192,13 @@ impl RaftAssemblyConfig {
             cluster_tls: None,                           // operator MUST supply
             peers: Vec::new(),                           // operator MUST supply (PR-6.5 gate)
             write_path: HandlerWritePath::RaftSubmitter, // openraft requires it
+            // Defaults to LocalApplier (placeholder). Production callers
+            // OVERRIDE this with EngineApplier wired through TenantPool —
+            // leaving the default in place yields a cluster that commits
+            // log entries but never applies them to engine state. Tests
+            // use the placeholder intentionally to exercise the trait
+            // shape without spinning up real engines.
+            applier: Arc::new(crate::commit::LocalApplier::new()),
             request_timeout: Duration::from_secs(10),
             openraft_config: Config {
                 cluster_name: "yantrikdb".into(),
@@ -347,16 +362,13 @@ pub async fn build_raft_cluster(
             .map_err(|e| AssemblyError::RaftNew(format!("openraft Config::validate: {e}")))?,
     );
 
-    // RFC 010 PR-6.4 — state machine apply path needs an Applier so
-    // every commit also writes engine state, not just the commit log.
-    // For now build_raft_cluster constructs a `LocalApplier` placeholder
-    // that returns NotYetWired for engine-mutating variants; the
-    // production wiring (EngineApplier with TenantPool-backed resolver)
-    // is plumbed from main.rs in a follow-up commit. The state machine
-    // tolerates NotYetWired and logs a warning so this transitional
-    // state is operator-visible.
-    let applier: Arc<dyn crate::commit::Applier> = Arc::new(crate::commit::LocalApplier::new());
-    let state_machine = YantrikStateMachine::new(local.clone(), applier);
+    // RFC 010 PR-6.4 — state machine apply path is driven by the Applier
+    // supplied in `cfg.applier`. Production wires `EngineApplier` over a
+    // `TenantPool`-backed resolver from main.rs so every committed
+    // mutation on every node (leader + followers) writes engine state.
+    // Tests pass `LocalApplier` to exercise the trait shape without
+    // spinning up real engines.
+    let state_machine = YantrikStateMachine::new(local.clone(), cfg.applier);
     let raft = Raft::<YantrikRaftTypeConfig>::new(
         cfg.node_id,
         validated_config,
@@ -486,6 +498,7 @@ mod tests {
                 "https://127.0.0.1:7101".into(),
             ],
             write_path: HandlerWritePath::RaftSubmitter,
+            applier: Arc::new(crate::commit::LocalApplier::new()),
             request_timeout: Duration::from_secs(1),
             openraft_config: Config::default(),
         };
@@ -519,6 +532,7 @@ mod tests {
                 "https://127.0.0.1:7101".into(),
             ],
             write_path: HandlerWritePath::RaftSubmitter,
+            applier: Arc::new(crate::commit::LocalApplier::new()),
             request_timeout: Duration::from_secs(1),
             openraft_config: Config::default(),
         };
@@ -572,6 +586,7 @@ mod tests {
             )),
             peers,
             write_path,
+            applier: Arc::new(crate::commit::LocalApplier::new()),
             request_timeout: Duration::from_secs(1),
             openraft_config: Config::default(),
         }

@@ -173,6 +173,49 @@ impl Submitter for LocalSqliteSubmitter {
     }
 }
 
+/// `LocalSqliteSubmitter` ALSO impls `MutationCommitter` so it can drop
+/// straight into `AppState.commit_log: Arc<dyn MutationCommitter>` in
+/// single-node mode without the handler hot path needing two trait
+/// objects. `Submitter::submit` is the same shape as
+/// `MutationCommitter::commit` modulo the name; this impl forwards.
+///
+/// PR 6.4 wiring uses this so single-node `commit_log.commit(...)` runs
+/// the durable log append AND the engine apply in one trait dispatch —
+/// matching cluster mode's `RaftCommitter` (which does the same via the
+/// state machine's `apply_to_state_machine` callback).
+#[async_trait]
+impl MutationCommitter for LocalSqliteSubmitter {
+    async fn commit(
+        &self,
+        tenant_id: TenantId,
+        mutation: MemoryMutation,
+        opts: CommitOptions,
+    ) -> Result<CommitReceipt, CommitError> {
+        self.submit(tenant_id, mutation, opts).await
+    }
+
+    async fn read_range(
+        &self,
+        tenant_id: TenantId,
+        from_index: u64,
+        limit: usize,
+    ) -> Result<Vec<CommittedEntry>, CommitError> {
+        Submitter::read_range(self, tenant_id, from_index, limit).await
+    }
+
+    async fn high_watermark(&self, tenant_id: TenantId) -> Result<u64, CommitError> {
+        Submitter::high_watermark(self, tenant_id).await
+    }
+
+    async fn list_active_tenants(&self) -> Result<Vec<TenantId>, CommitError> {
+        Submitter::list_active_tenants(self).await
+    }
+
+    async fn ensure_linearizable(&self) -> Result<(), CommitError> {
+        Submitter::ensure_linearizable(self).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,7 +265,9 @@ mod tests {
             .unwrap();
         assert_eq!(r.log_index, 1);
         assert_eq!(r.tenant_id, TenantId::new(1));
-        let entries = s.read_range(TenantId::new(1), 1, 10).await.unwrap();
+        let entries = Submitter::read_range(&s, TenantId::new(1), 1, 10)
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].log_index, 1);
     }
@@ -282,14 +327,21 @@ mod tests {
         assert_eq!(r1.committed_at, r2.committed_at);
 
         // Only one log entry exists — duplicates dedupe.
-        let entries = s.read_range(TenantId::new(1), 1, 10).await.unwrap();
+        let entries = Submitter::read_range(&s, TenantId::new(1), 1, 10)
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 1);
     }
 
     #[tokio::test]
     async fn high_watermark_tracks_per_tenant() {
         let s = build_submitter();
-        assert_eq!(s.high_watermark(TenantId::new(1)).await.unwrap(), 0);
+        assert_eq!(
+            Submitter::high_watermark(&s, TenantId::new(1))
+                .await
+                .unwrap(),
+            0
+        );
         let _ = s
             .submit(
                 TenantId::new(1),
@@ -306,8 +358,18 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(s.high_watermark(TenantId::new(1)).await.unwrap(), 2);
-        assert_eq!(s.high_watermark(TenantId::new(2)).await.unwrap(), 0);
+        assert_eq!(
+            Submitter::high_watermark(&s, TenantId::new(1))
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            Submitter::high_watermark(&s, TenantId::new(2))
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -337,7 +399,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let mut tenants = s.list_active_tenants().await.unwrap();
+        let mut tenants = Submitter::list_active_tenants(&s).await.unwrap();
         tenants.sort();
         assert_eq!(tenants, vec![TenantId::new(1), TenantId::new(7)]);
     }
@@ -347,7 +409,7 @@ mod tests {
         // Single-node: every read is trivially linearizable. PR 6.4's
         // RaftSubmitter overrides this to call openraft's quorum check.
         let s = build_submitter();
-        s.ensure_linearizable().await.unwrap();
+        Submitter::ensure_linearizable(&s).await.unwrap();
     }
 
     #[tokio::test]

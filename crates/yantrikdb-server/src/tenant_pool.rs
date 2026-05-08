@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use yantrikdb::YantrikDB;
 
+use crate::commit::{ApplyError, EngineResolver, TenantId};
 use crate::config::ServerConfig;
 use crate::control::{ControlDb, DatabaseRecord};
 use crate::embedder::FastEmbedder;
@@ -116,6 +117,56 @@ impl TenantPool {
     /// Get the data directory path.
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+}
+
+/// RFC 010 PR-6.4 — Resolves `TenantId` to `Arc<YantrikDB>` for
+/// [`crate::commit::EngineApplier`].
+///
+/// The Raft state machine carries `TenantId` (i64 = control-DB primary
+/// key) alongside every committed mutation; the applier needs the engine
+/// for that tenant to write the mutation into engine state. This adapter
+/// looks the tenant up in the control DB on cache miss, then hands off
+/// to [`TenantPool::get_engine`] which lazy-loads the engine if needed.
+///
+/// Resolution failures (control-DB lookup error, tenant not found,
+/// engine open failure) surface as [`ApplyError::EngineFailure`] —
+/// catastrophic at apply time because the entry is already durable in
+/// the log. The state machine treats these as divergence risk.
+pub struct TenantPoolEngineResolver {
+    pool: Arc<TenantPool>,
+    control: Arc<Mutex<ControlDb>>,
+}
+
+impl TenantPoolEngineResolver {
+    pub fn new(pool: Arc<TenantPool>, control: Arc<Mutex<ControlDb>>) -> Self {
+        Self { pool, control }
+    }
+}
+
+impl EngineResolver for TenantPoolEngineResolver {
+    fn resolve(&self, tenant_id: TenantId) -> Result<Arc<YantrikDB>, ApplyError> {
+        let id = tenant_id.0;
+        let db_record = {
+            let control = self.control.lock();
+            control
+                .get_database_by_id(id)
+                .map_err(|e| ApplyError::EngineFailure {
+                    message: format!("control DB lookup tenant_id={id}: {e}"),
+                })?
+                .ok_or_else(|| ApplyError::EngineFailure {
+                    message: format!(
+                        "tenant_id={id} not found in control DB — followers must \
+                         replicate the database row before applying mutations against \
+                         it (RFC 010 PR-6 control-plane replication contract)"
+                    ),
+                })?
+        };
+        self.pool
+            .get_engine(&db_record)
+            .map_err(|e| ApplyError::EngineFailure {
+                message: format!("tenant_pool.get_engine(tenant_id={id}): {e}"),
+            })
     }
 }
 

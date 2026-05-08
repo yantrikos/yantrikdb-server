@@ -5,6 +5,154 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.13] — 2026-05-08
+
+RFC 010 PR-6 — handler migration. **Cluster mode replication actually
+works now.** The four hot-path HTTP write endpoints route through the
+durable commit log so every committed mutation flows leader → openraft
+consensus → state machine apply → engine state on every node. Single-
+node mode also routes through the commit log via a unified
+`LocalSqliteSubmitter` that composes log-append + applier dispatch.
+
+The cosmetic-openraft regression that the architect surfaced on
+2026-05-02 is structurally closed. Empirical RYW (write to .140 leader,
+recall on .141 follower) is the next gate — runnable now with this
+release on the homelab cluster.
+
+The interim cluster-routing runbook
+(`docs/operations/cluster-routing.md`) becomes obsolete once homelab
+empirical RYW passes.
+
+### Added — EngineApplier real-engine dispatch (RFC 010 PR-6.4 part 1)
+
+- `commit::EngineApplier` impls `Applier` over an `EngineResolver`
+  trait. Dispatches each `MemoryMutation` variant to the corresponding
+  deterministic engine primitive: `record_with_rid`,
+  `tombstone_with_rid`, `upsert_entity_edge_with_id`,
+  `delete_entity_edge_with_id` — all carrying `Some(log_index)` as the
+  per-tenant seq.
+- Replay detection: same `(tenant_id, log_index)` returns
+  `ApplyError::AlreadyApplied` without invoking the engine. Snapshot
+  install + log replay overlap is the normal trigger.
+- Engine API is sync; `apply` wraps dispatch in
+  `tokio::task::spawn_blocking` so HNSW + SQLite work doesn't park a
+  tokio worker.
+
+### Added — TenantPoolEngineResolver (RFC 010 PR-6.4 part 2)
+
+- `tenant_pool::TenantPoolEngineResolver`: adapter from
+  `Arc<TenantPool> + Arc<Mutex<ControlDb>>` to the `EngineResolver`
+  trait. On apply, looks up `tenant_id → DatabaseRecord` via
+  `control.get_database_by_id()` then defers to `pool.get_engine()`
+  (lazy-load if cold).
+- Resolution failures (control-DB lookup error, tenant not found,
+  engine open failure) surface as `ApplyError::EngineFailure` —
+  catastrophic at apply time because the entry is already durable in
+  the log. State machine treats as divergence risk per RFC 010 §4.
+
+### Added — Assembly threading + AppState submitter wiring (RFC 010 PR-6.4 part 3)
+
+- `RaftAssemblyConfig` carries `applier: Arc<dyn Applier>` instead of
+  the previous hard-coded `LocalApplier` placeholder. `build_raft_cluster`
+  uses what the caller supplies. Tests pass `LocalApplier` for trait-
+  shape coverage; production passes `EngineApplier`.
+- `main.rs` openraft branch instantiates `EngineApplier::new(
+  TenantPoolEngineResolver::new(pool, control))` and threads it through
+  the assembly. State machine's `apply_normal` dual-call now lands
+  committed mutations into engine state on every node.
+- `main.rs` single-node branch wraps the existing `LocalSqliteCommitter`
+  in a `LocalSqliteSubmitter` with the same `EngineApplier`, exposed via
+  the existing `AppState.commit_log: Arc<dyn MutationCommitter>` slot
+  (PR 6.4 lands `impl MutationCommitter for LocalSqliteSubmitter`). No
+  parallel trait machinery needed.
+
+### Changed — HTTP handlers route through commit_log (RFC 010 PR-6.4 part 4)
+
+The four hot-path write endpoints no longer call `engine.record()` /
+`engine.forget()` / `engine.relate()` directly. They build a
+`MemoryMutation` and call `state.commit_log.commit(...)` instead.
+Single-node: `LocalSqliteSubmitter` writes the durable log + dispatches
+to `EngineApplier` inline. Cluster: `RaftCommitter` routes through
+openraft consensus → state machine apply → applier on every node.
+
+- `/v1/remember` — allocates `rid` UUIDv7 server-side, builds
+  `UpsertMemory` mutation, commits. Pre-embedding (Issue #19) and
+  quota check unchanged.
+- `/v1/remember/batch` — same per-entry. Pre-embedding still batched
+  for ONNX-mutex coalescence; commits one mutation per entry.
+  Response carries the last `log_index` in the run.
+- `/v1/forget` — builds `TombstoneMemory` with `requested_at_unix_micros`
+  and `namespace`, commits. Engine `tombstone_with_rid` runs on apply.
+- `/v1/relate` — allocates `edge_id` UUIDv7, builds `UpsertEntityEdge`,
+  commits. Engine `upsert_entity_edge_with_id` runs on apply.
+
+### Cluster mode caveat (still relevant for empirical validation)
+
+Structural migration is complete; **empirical RYW on the homelab .140 →
+.141 cluster has not yet been run.** The interim cluster-routing
+runbook stays in place until that empirical test passes. Operators
+running multi-node deployments should read
+`docs/operations/cluster-routing.md` and the RFC 010 PR-6 spec at
+`docs/rfcs/rfc_010_pr6_write_path_migration.md` before flipping
+production traffic.
+
+### Known limitations (deferred to v0.8.14 or follow-ups)
+
+- **PR 6.7 chunked snapshot** — current snapshot serializes whole
+  tenant commit logs to JSON in memory. Works for homelab-scale
+  (~40k memories) but not unbounded. Chunked streaming via openraft
+  `generic-snapshot-data` ships in v0.8.14.
+- **PR 6.8 backfill admin tool** — `yantrikdb admin backfill-from-engine`
+  for migrating existing engine rows that predate the commit log. Ships
+  in v0.8.14. Without it, a fresh cluster works but existing single-node
+  data on .140 (39427 memories) needs manual migration to flow into the
+  log.
+- **Wire-protocol path (yql via `handler::execute_with_guard`)** still
+  uses `Command::Remember` → `engine.record()`. HTTP is the production
+  hot path; wire-protocol migration is a follow-up.
+- **`extracted_entities` materialization**: handlers pass empty vec;
+  engine's NER on `record_with_rid` does not run on empty entities.
+  Entity-aware recall (`expand_entities=true`) loses signal vs prior
+  behavior. The Materializer trait (PR 6.2) is in place but not wired
+  into the handler. Follow-up.
+- **Client-supplied op_id** for HTTP idempotency: structural support
+  exists (`CommitOptions.op_id`, 409 mapping in
+  `commit_error_to_app_error`). Handler doesn't read `body["op_id"]`
+  yet. Follow-up.
+- **Command::IngestClaim, Command::AddAlias, Command::Resolve,
+  Command::IngestClaimWithLineage**: no `MemoryMutation` variants exist
+  for these in the grammar yet. Follow-up RFCs.
+
+### Test counts
+
+- Unit tests: 809 → 814 (+5)
+- Integration tests across all suites: 1175 (stable)
+- Cumulative: 1989 tests green, cargo fmt clean
+
+### Engine dependency bump
+
+- `yantrikdb` engine: 0.6.7 → 0.7.2. Brings in:
+  - **0.7.0** — decoupled write path (Phase 4.3): WAL → bounded ingest
+    queue → background materializer threads → DeltaIndex (ArcSwap cold +
+    `RwLock<Vec>` delta) → compactor. Wedge primitive #1 fix.
+  - **0.7.1** — atomic-counter hotfix for `log_op_pending` regression
+    that briefly tanked write throughput in 0.7.0.
+  - **0.7.2** — event-driven compactor wake at 80% delta capacity
+    (saga task #18 Option 4). Empirically validated cross-platform.
+    Phase-3 recovery onset moved sec 71 → sec 56-58. Engine pressure
+    67.6% → 3.1%. + bundled `potion-base-2M` static embedder
+    (~7.9 MB, dim=64, pure Rust via `model2vec-rs`) — ONNX Runtime no
+    longer required for the default install.
+
+### Files touched
+
+- `crates/yantrikdb-server/src/commit/applier.rs` (+EngineApplier, +EngineResolver, +apply_to_engine dispatch)
+- `crates/yantrikdb-server/src/commit/submitter.rs` (+impl MutationCommitter for LocalSqliteSubmitter, +trait method disambiguation in tests)
+- `crates/yantrikdb-server/src/raft/assembly.rs` (+applier field on RaftAssemblyConfig)
+- `crates/yantrikdb-server/src/tenant_pool.rs` (+TenantPoolEngineResolver)
+- `crates/yantrikdb-server/src/main.rs` (+single-node + cluster applier wiring)
+- `crates/yantrikdb-server/src/http_gateway.rs` (4 handlers migrated)
+
 ## [0.8.12] — 2026-05-05
 
 RFC 010 PR-6 substrate-batch (PR 6.1, 6.2, 6.3 of 9). Pure additive

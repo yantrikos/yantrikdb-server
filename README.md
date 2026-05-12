@@ -21,7 +21,10 @@ YantrikDB is different. It's a **cognitive memory engine** — embed it, run it 
 [![Crates.io](https://img.shields.io/crates/v/yantrikdb-server)](https://crates.io/crates/yantrikdb-server)
 [![PyPI](https://img.shields.io/pypi/v/yantrikdb)](https://pypi.org/project/yantrikdb/)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fyantrikos%2Fyantrikdb-blue)](https://github.com/yantrikos/yantrikdb-server/pkgs/container/yantrikdb)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20128887.svg)](https://doi.org/10.5281/zenodo.20128887)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+
+> 📄 **New paper (May 2026):** [*Skill as Memory, Not Document*](https://doi.org/10.5281/zenodo.20128887) — measuring three failure modes when agent skill catalogs scale to 5,000 skills. Code + raw CSVs reproducible in [`benchmarks/skill_recall/`](benchmarks/skill_recall/).
 
 ![YantrikDB demo: storing three facts, recalling them, then think() flagging a contradiction between two memories](docs/images/demo.gif)
 
@@ -410,8 +413,26 @@ db.upcoming(days=7)  # memories with approaching deadlines
 
 ## Research & Publications
 
+### 📄 Skill as Memory, Not Document (May 2026)
+
+**[Sarkar, P. (2026). *Skill as Memory, Not Document: A Database-Native Substrate for Agent Skill Catalogs*. Zenodo.](https://doi.org/10.5281/zenodo.20128887)**
+
+![Per-query top-K=5 prompt-token cost vs catalog size (log-log). Full-catalog and full-metadata disclosure grow linearly past production context windows; YantrikDB top-K stays constant at ~369 tokens.](docs/papers/zenodo-bundle/figure-token-cost.png)
+
+A measurement paper on what happens when LLM agent skill catalogs scale. On a 5,000-skill corpus:
+
+- **Token cost:** full-catalog disclosure consumes 919,200 tokens (exceeds Claude 3.7's 200K window). YantrikDB's indexed top-K disclosure: 369 tokens, constant in catalog size. The honest ratio against an indexed filesystem baseline is 1.49× — an ablation pinpoints the entire gap as YAML frontmatter overhead.
+- **Latency:** p50 = 87.3 ms, p95 = 106.3 ms at 5,000-skill scale, single-node.
+- **Invalid-skill admission:** YantrikDB rejects 70/70 adversarially-malformed skills (0%) at write time; a document-only baseline admits 68/70 (97%).
+
+Three failure modes for filesystem-shaped skill catalogs (token burn, slowdown, invalid-skill admission). One unifying framing: skill catalogs for autonomous learning aren't documents; they're memory.
+
+Code + scripts + raw CSVs are reproducible at [`benchmarks/skill_recall/`](benchmarks/skill_recall/). Full deposit (PDF + source + data + scripts) on Zenodo. Companion blog post: [yantrikdb.com/papers/skill-substrate](https://yantrikdb.com/papers/skill-substrate/).
+
+### Earlier work
+
 - **U.S. Patent Application 19/573,392** (March 2026): "Cognitive Memory Database System with Relevance-Conditioned Scoring and Autonomous Knowledge Management"
-- **Zenodo:** [YantrikDB: A Cognitive Memory Engine for Persistent AI Systems](https://zenodo.org/records/14933693)
+- **Zenodo (software):** [YantrikDB: A Cognitive Memory Engine for Persistent AI Systems](https://doi.org/10.5281/zenodo.18793952)
 
 ## Author
 

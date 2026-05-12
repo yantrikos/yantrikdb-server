@@ -1,0 +1,3 @@
+tokenizer,yantrikdb_mean,yantrikdb_p95,skill_md_mean,skill_md_p95,ratio_mean
+cl100k_base,368.6,634.8,549.0,948.8,1.5
+o200k_base,366.1,635.0,547.4,944.0,1.5

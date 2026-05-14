@@ -685,7 +685,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -2811,7 +2811,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2848,9 +2848,9 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5038,8 +5038,8 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb"
-version = "0.7.2"
-source = "git+https://github.com/yantrikos/yantrikdb.git?branch=main#3825f3d2304a9726da5da0813c0d00ea805250a1"
+version = "0.7.15"
+source = "git+https://github.com/yantrikos/yantrikdb.git?branch=main#9747c609fe57891e94248deac63e1c867bb5f174"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -5122,7 +5122,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid7",
- "yantrikdb 0.7.2",
+ "yantrikdb 0.7.15",
  "yantrikdb-protocol",
 ]
 

@@ -5,6 +5,53 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.14] — 2026-05-14
+
+Engine dependency bump. No yantrikdb-server source changes.
+
+Picks up 13 yantrikdb engine patch releases (v0.7.3 → v0.7.15) since
+the v0.8.13 pin. The bulk are pyo3-binding-only improvements that the
+server transitively gets for free; the operationally relevant deltas
+are listed below.
+
+### Changed — engine pin v0.7.2 → v0.7.15
+
+- **Idempotent migration runner** (engine v0.7.3 + v0.7.8). The engine
+  now splits migration batches per-statement and swallows safe replay
+  errors (duplicate column on additive migration replay, ALTER-on-view
+  after table-to-view conversion, RENAME-TO collisions, no-such-column
+  on renamed-away artifacts). `meta.schema_version` is MAX-stamped on
+  every open so an accidental old-binary-against-new-DB run can no
+  longer rewind the version stamp. Defensive against the homelab
+  cluster v0.8.13 upgrade incident where a brief rollback to an older
+  engine binary against a v24-schema DB tripped on
+  `duplicate column name: embedding` on the next forward upgrade.
+- **`potion-multilingual-128M` embedder** (engine v0.7.9). New tier in
+  the engine's embedder-download registry: 101 languages, dim=256,
+  BGE-M3 tokenizer, ~460 MB tarball, SHA-256 pinned. dim matches
+  `potion-base-8M` so swapping is no-DB-reopen on the engine side.
+  Accessible via the embedded engine's `set_embedder_named` API; the
+  server can advertise it on the HTTP path in a follow-up if useful.
+- **Embedder tarball extractor handles both archive layouts** (engine
+  v0.7.13 + v0.7.15). Closes engine issue #15 + restoring a missing
+  extract call.
+- **SLSA build provenance attestation** on engine release artifacts
+  (engine v0.7.12). Engine release pipeline now emits SLSA attestations
+  consumable by downstream verifiers.
+- **sdist LICENSE path fix** in engine wheels (engine v0.7.14 + v0.7.15).
+
+The engine pin moves to git commit `9747c609` (= engine main =
+yantrikdb v0.7.15).
+
+### Verification
+
+- `cargo check -p yantrikdb-server`: clean, 21.44s, 433 pre-existing
+  warnings, zero new ones.
+- `cargo test --workspace --exclude yantrikdb-python --exclude yantrikdb-wasm`:
+  **2000 tests pass / 0 fail / 2 ignored** across 14 buckets.
+- Full CI matrix on the merge PR (#30) green: clippy / format /
+  supply-chain / build-and-test on ubuntu / macos / windows.
+
 ## [0.8.13] — 2026-05-08
 
 RFC 010 PR-6 — handler migration. **Cluster mode replication actually

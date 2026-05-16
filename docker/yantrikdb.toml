@@ -1,0 +1,25 @@
+# Default yantrikdb-server configuration for the Docker image.
+#
+# Tuned for the air-gapped / no-first-run-network case (issue #35).
+# Users who want different defaults can mount their own config:
+#
+#     docker run \
+#       -v ./my-config.toml:/etc/yantrikdb/yantrikdb.toml:ro \
+#       -v ./data:/var/lib/yantrikdb \
+#       yantrikos/yantrikdb
+
+[server]
+data_dir = "/var/lib/yantrikdb"
+
+[embedding]
+# `bundled` uses the engine's potion-base-2M static embedder
+# (~7 MB baked into the binary, dim=64, zero-network on first run).
+# Quality is ~89% of MiniLM at the recall@5 cost.
+#
+# To use the original fastembed/MiniLM behavior instead — requires
+# HuggingFace reachable on first start — set:
+#
+#     strategy = "builtin"
+#     dim = 384
+strategy = "bundled"
+dim = 64

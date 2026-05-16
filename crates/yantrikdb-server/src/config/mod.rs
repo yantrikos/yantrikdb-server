@@ -172,7 +172,22 @@ impl EncryptionSection {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingStrategy {
+    /// Use [`crate::embedder::FastEmbedder`] (fastembed + ONNX Runtime +
+    /// `Qdrant/all-MiniLM-L6-v2-onnx` downloaded from HuggingFace on
+    /// first run). Output dim = 384. Requires network at first start
+    /// and an ONNX Runtime shared library at runtime.
     Builtin,
+    /// Use [`yantrikdb::embedder::BundledEmbedder`] — the engine's
+    /// `potion-base-2M` static embedder. Output dim = 64. Zero network,
+    /// zero ONNX dependency, ~7 MB baked into the binary via
+    /// `include_bytes!`. Designed for air-gapped Docker, edge deploys,
+    /// and any context where the first-run HuggingFace fetch is
+    /// undesirable. Quality is ~89% of MiniLM at the recall@5 cost.
+    /// Default for the Docker image since `yantrikdb-server v0.8.16`
+    /// (issue #35).
+    Bundled,
+    /// No server-side embedder; clients must compute embeddings and
+    /// supply them on every `record` / `recall` call.
     ClientOnly,
 }
 
@@ -436,5 +451,52 @@ mod tests {
         );
 
         std::env::remove_var(VAR);
+    }
+
+    /// v0.8.16 issue #35: the `bundled` strategy must parse from TOML so
+    /// the docker default config (`docker/yantrikdb.toml`) works on the
+    /// no-network startup path. Also pins that `builtin` stays the
+    /// default when no `[embedding]` section is present — backwards
+    /// compat for existing single-binary deployments that already have
+    /// dim=384 MiniLM embeddings on disk.
+    #[test]
+    fn embedding_strategy_variants_parse() {
+        // `builtin` (existing, default).
+        let toml = r#"[embedding]
+strategy = "builtin"
+dim = 384
+"#;
+        let cfg: EmbeddingSection = toml::from_str(toml)
+            .and_then(|v: toml::Value| v["embedding"].clone().try_into())
+            .unwrap();
+        assert!(matches!(cfg.strategy, EmbeddingStrategy::Builtin));
+        assert_eq!(cfg.dim, 384);
+
+        // `bundled` (new in v0.8.16) — pins serde `rename_all = "snake_case"`.
+        let toml = r#"[embedding]
+strategy = "bundled"
+dim = 64
+"#;
+        let cfg: EmbeddingSection = toml::from_str(toml)
+            .and_then(|v: toml::Value| v["embedding"].clone().try_into())
+            .unwrap();
+        assert!(matches!(cfg.strategy, EmbeddingStrategy::Bundled));
+        assert_eq!(cfg.dim, 64);
+
+        // `client_only` (existing).
+        let toml = r#"[embedding]
+strategy = "client_only"
+dim = 384
+"#;
+        let cfg: EmbeddingSection = toml::from_str(toml)
+            .and_then(|v: toml::Value| v["embedding"].clone().try_into())
+            .unwrap();
+        assert!(matches!(cfg.strategy, EmbeddingStrategy::ClientOnly));
+
+        // Default = builtin + dim=384 (backwards compat for configs with
+        // no [embedding] section).
+        let default = EmbeddingSection::default();
+        assert!(matches!(default.strategy, EmbeddingStrategy::Builtin));
+        assert_eq!(default.dim, 384);
     }
 }

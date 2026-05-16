@@ -250,6 +250,65 @@ impl yantrikdb::types::Embedder for FastEmbedder {
     }
 }
 
+/// Server-side embedder enum spanning both the [`FastEmbedder`] (fastembed
+/// + ONNX + HuggingFace) and the engine-bundled
+/// [`yantrikdb::embedder::BundledEmbedder`] (potion-base-2M, zero-network,
+/// dim=64). One pool, one enum value, distinct first-run cost profiles.
+///
+/// Added in v0.8.16 (issue #35) so Docker users can opt out of the
+/// first-run HuggingFace download. See `[embedding] strategy = "bundled"`.
+///
+/// Trait-object dispatch is one indirection per `embed()` call, dwarfed by
+/// the actual embedding cost (model forward pass for `Fast`, lazy load +
+/// tokenize for `Bundled`). The enum keeps the storage type concrete so
+/// `TenantPool` doesn't have to thread `Box<dyn Embedder>` through its
+/// `Send + Sync + Clone` constraints.
+#[derive(Clone)]
+pub enum ServerEmbedder {
+    Fast(FastEmbedder),
+    Bundled(yantrikdb::embedder::BundledEmbedder),
+}
+
+impl ServerEmbedder {
+    /// Box-clone for `YantrikDB::set_embedder()`. Mirrors
+    /// `FastEmbedder::boxed()` so the call site doesn't have to match.
+    pub fn boxed(&self) -> Box<dyn yantrikdb::types::Embedder + Send + Sync> {
+        match self {
+            ServerEmbedder::Fast(f) => f.boxed(),
+            ServerEmbedder::Bundled(b) => Box::new(b.clone()),
+        }
+    }
+}
+
+impl yantrikdb::types::Embedder for ServerEmbedder {
+    fn embed(
+        &self,
+        text: &str,
+    ) -> std::result::Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            ServerEmbedder::Fast(f) => f.embed(text),
+            ServerEmbedder::Bundled(b) => b.embed(text),
+        }
+    }
+
+    fn embed_batch(
+        &self,
+        texts: &[&str],
+    ) -> std::result::Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            ServerEmbedder::Fast(f) => f.embed_batch(texts),
+            ServerEmbedder::Bundled(b) => b.embed_batch(texts),
+        }
+    }
+
+    fn dim(&self) -> usize {
+        match self {
+            ServerEmbedder::Fast(f) => f.dim(),
+            ServerEmbedder::Bundled(_) => yantrikdb::embedder::BUNDLED_EMBEDDER_DIM,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the cache layering logic. These do NOT invoke

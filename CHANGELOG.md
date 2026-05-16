@@ -5,6 +5,114 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.16] — 2026-05-16
+
+Docker bug fixes from [@renothing](https://github.com/renothing)'s
+[issue #35](https://github.com/yantrikos/yantrikdb-server/issues/35),
+plus the engine bump to v0.7.16. Both deployment failure modes
+`renothing` reported now have proper fixes baked into the official
+image.
+
+### Fixed — air-gapped Docker first-run failure (#35 part 1)
+
+`docker run --network=none yantrikos/yantrikdb` previously failed with:
+
+```
+Error: Failed to retrieve model.onnx
+  https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/model.onnx:
+  Dns Failed
+```
+
+…because the default `EmbeddingStrategy::Builtin` fetched the MiniLM
+ONNX model from HuggingFace at first run. The Docker image now ships
+`/etc/yantrikdb/yantrikdb.toml` configured with `strategy = "bundled"`,
+which uses the engine's `potion-base-2M` static embedder (~7 MB baked
+into the binary via `include_bytes!`, dim=64, zero network, ~89% of
+MiniLM recall@5 quality).
+
+Users who want the original MiniLM behavior can mount their own
+config:
+
+```bash
+docker run -v ./my.toml:/etc/yantrikdb/yantrikdb.toml:ro yantrikos/yantrikdb
+```
+
+The in-process default (when no config file is present) is unchanged
+at `Builtin` + `dim=384` — backwards compat for existing single-binary
+deployments that already have dim=384 vector stores.
+
+### Fixed — volume mount permission denied (#35 part 2)
+
+`docker run -v ./data:/var/lib/yantrikdb yantrikos/yantrikdb`
+previously failed with:
+
+```
+Error: unable to open database file: /var/lib/yantrikdb/control.db
+  Caused by: Error code 14: Unable to open the database file
+```
+
+…because the in-container `yantrikdb` user (UID assigned by
+`useradd -r`, typically 100-999) couldn't open SQLite files inside a
+host-mounted directory owned by a different UID. A new
+`docker/entrypoint.sh` chowns `/var/lib/yantrikdb` to the `yantrikdb`
+user on container start, then `exec gosu` drops privileges. Standard
+Postgres/Redis Docker convention. Skips the chown if the container
+was started with `-u <uid>` explicitly — that user took responsibility
+for ownership themselves.
+
+### Added — `EmbeddingStrategy::Bundled` variant
+
+```toml
+[embedding]
+strategy = "bundled"
+dim = 64
+```
+
+Uses `yantrikdb::embedder::BundledEmbedder` directly. dim=64. Zero
+HuggingFace dependency. Logged on startup as
+`embedding strategy: bundled (engine BundledEmbedder, potion-base-2M,
+dim=64, zero-network)`.
+
+### Changed — engine pin v0.7.15 → v0.7.16
+
+Picks up the v26 schema migration foundation
+([engine PR #38](https://github.com/yantrikos/yantrikdb/pull/38),
+closes engine #29):
+
+- 4 additive columns on `memories` for conflict-aware-write provenance
+  (`prior_rid`, `resolution_kind`, `dismissal_reason`,
+  `confidence_at_write`)
+- 2 partial indexes for the resolution/supersession query patterns
+- source-enum normalization
+
+Pure foundation — columns are NULL on every existing row, not yet
+populated by any write path. Replay-safe per the v0.7.3 idempotent
+migration runner contract. Byte-equivalent runtime surface to v0.7.15
+from the agent caller's perspective.
+
+### Refactored — `TenantPool` holds `ServerEmbedder` enum
+
+`ServerEmbedder { Fast(FastEmbedder), Bundled(BundledEmbedder) }`
+implements `yantrikdb::types::Embedder` so call sites don't need to
+match on the variant.
+
+### Verification
+
+- `cargo fmt --check`: clean.
+- `cargo test --workspace --exclude yantrikdb-python --exclude yantrikdb-wasm`:
+  **2005 tests pass / 0 fail / 2 ignored**.
+- Full CI matrix on the merge PR (#36) green: format / supply-chain /
+  clippy / build-and-test ubuntu+macos+windows.
+
+### Known follow-up gaps
+
+The Docker workflow only builds + pushes images — it does NOT run
+them. The bundled-embedder default and the entrypoint script are
+exercised only when downstream users pull the image. A
+`docker run --rm --network=none ghcr.io/yantrikos/yantrikdb --version`
+smoke step in `docker.yml` would close this gap; queued as a
+post-v0.8.16 follow-up PR.
+
 ## [0.8.15] — 2026-05-16
 
 **Critical fix for silent data-loss regression introduced in v0.8.13.**

@@ -194,6 +194,29 @@ impl Drop for TestServer {
 }
 
 /// Minimal server for testing — no embedder (client_only mode), no TLS.
+///
+/// **Issue #37 retrospective — known gap.** This test runs against a
+/// **mock** handler set (`handle_remember`, `handle_recall`, etc. defined
+/// below), NOT against the production handlers in
+/// `crates/yantrikdb-server/src/http_gateway.rs`. The mock and production
+/// handlers can drift, and on 2026-05-16 this gap shipped the silent
+/// data-loss regression reported externally as yantrikos/yantrikdb#37:
+/// production handlers called `CommitOptions::default()` while
+/// `Default::default()` returned `wait_for_apply: false` (a
+/// derive-vs-doc contradiction), so writes appended to the commit log
+/// but the applier was never invoked. The mock handlers in this file
+/// did not exercise that code path.
+///
+/// Type-level pin (`trait_def::tests::commit_options_default_is_safe`)
+/// and submitter-level pin
+/// (`submitter::tests::issue_37_default_options_dispatches_applier`)
+/// now lock the invariant where the bug actually lived. The structural
+/// fix — making the production AppState + handlers importable from
+/// `tests/` by promoting them out of the bin-only crate into a sibling
+/// `lib.rs` — is filed as a follow-up: see the issue tracker tag
+/// `test-coverage-gap-http-integration`. Until then, treat this file
+/// as wire-protocol coverage only; correctness of the handler logic
+/// itself is locked by unit tests at the submitter / committer layer.
 async fn run_test_server(
     listener: tokio::net::TcpListener,
     data_dir: PathBuf,

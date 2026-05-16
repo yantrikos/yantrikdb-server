@@ -53,7 +53,22 @@ pub trait CommitObserver: Send + Sync {
 }
 
 /// Per-call options for `commit`.
-#[derive(Debug, Clone, Default)]
+///
+/// **Default invariant** (issue #37): `Default::default()` MUST equal
+/// `Self::new()`. Earlier versions derived `Default`, which gave
+/// `wait_for_apply: false` (the `bool` zero value) — contradicting the
+/// documented default of `true` on the field below. The production
+/// handlers in `http_gateway.rs` all called `CommitOptions::default()`,
+/// so single-node deployments durably appended to the commit log but
+/// skipped the applier dispatch, leaving the engine state empty. Symptoms
+/// were exactly as reported in yantrikos/yantrikdb#37: `/v1/remember`
+/// returned `status: recorded` with a valid `log_index`, but the row
+/// never appeared in `/v1/recall` and the memory count never grew.
+///
+/// The fix is the explicit `impl Default` below — `Self::new()` is the
+/// authoritative constructor and the documented contract; `derive(Default)`
+/// was the silent contradiction.
+#[derive(Debug, Clone)]
 pub struct CommitOptions {
     /// If `Some(n)`, fail the commit unless the next assigned `log_index`
     /// would be exactly `n`. Used for compare-and-swap semantics by the
@@ -81,6 +96,18 @@ pub struct CommitOptions {
     /// `None` for server-internal commits where retry-deduplication
     /// isn't needed.
     pub op_id: Option<super::mutation::OpId>,
+}
+
+impl Default for CommitOptions {
+    /// Matches `Self::new()` per the issue #37 fix. **Do not** revert to
+    /// `derive(Default)` — `bool::default()` is `false`, which produces
+    /// a silent doc-vs-code contradiction with `wait_for_apply`'s
+    /// documented `true` default and silently breaks every
+    /// production caller of `CommitOptions::default()` (regression test
+    /// in `http_integration.rs` locks this for the production handlers).
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CommitOptions {
@@ -314,11 +341,33 @@ mod tests {
 
     #[test]
     fn commit_options_default_is_safe() {
-        // Default MUST wait_for_apply=true. Anything else is a footgun
+        // **Default MUST wait_for_apply=true.** Anything else is a footgun
         // that causes "I committed but recall doesn't see it" reports.
-        let opts = CommitOptions::new();
-        assert!(opts.wait_for_apply);
-        assert_eq!(opts.expected_log_index, None);
+        //
+        // **Issue #37 retrospective**: this test pre-existed the regression
+        // but only asserted on `CommitOptions::new()`. The shipped bug was
+        // that `#[derive(Default)]` produced `wait_for_apply: false` (the
+        // bool zero), and every production handler in `http_gateway.rs`
+        // called `CommitOptions::default()` — not `::new()`. The test name
+        // ("commit_options_default_is_safe") promised the invariant; the
+        // test body did not enforce it on the actual `Default` impl. Both
+        // constructors are now asserted to satisfy the invariant, so a
+        // future revert of the explicit `impl Default` below trips this.
+        let from_new = CommitOptions::new();
+        assert!(
+            from_new.wait_for_apply,
+            "Self::new() must default wait_for_apply to true"
+        );
+        assert_eq!(from_new.expected_log_index, None);
+        assert!(from_new.op_id.is_none());
+
+        let from_default = CommitOptions::default();
+        assert!(
+            from_default.wait_for_apply,
+            "Default::default() must equal Self::new() — see issue #37 (do NOT revert to #[derive(Default)])"
+        );
+        assert_eq!(from_default.expected_log_index, None);
+        assert!(from_default.op_id.is_none());
     }
 
     #[test]

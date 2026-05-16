@@ -5,6 +5,70 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.15] — 2026-05-16
+
+**Critical fix for silent data-loss regression introduced in v0.8.13.**
+
+Closes yantrikos/yantrikdb#37 (reported externally by acidport on ARM64
+Oracle Cloud Docker, but root cause is platform-agnostic and affects
+every single-node deployment on v0.8.13 or v0.8.14).
+
+### Fixed
+
+- **`/v1/remember`, `/v1/relate`, and the other commit-routed write
+  handlers were durably appending to the commit log but skipping the
+  applier dispatch in single-node mode.** The receipt returned a valid
+  `log_index`, but the engine's `memories` table, vec_index, and
+  scoring cache were never updated. `/v1/recall` therefore could not
+  find the row, and `stats` memory counts did not grow.
+
+  Root cause: `CommitOptions` was declared with `#[derive(Default)]`
+  (PR-6.1, shipped in v0.8.13). `bool::default()` is `false`, so
+  `CommitOptions::default()` produced `wait_for_apply: false` — the
+  no-wait bulk-import shape — even though the documented default for
+  that field (and the explicit `CommitOptions::new()` constructor) is
+  `true`. The production HTTP handlers in `http_gateway.rs` all called
+  `CommitOptions::default()`, taking the no-wait branch on every
+  write.
+
+  Cluster (Raft) mode was unaffected: openraft's
+  `apply_to_state_machine` callback drives apply on every node
+  independently of the `wait_for_apply` field.
+
+  Fix: replaced `#[derive(Default)]` with an explicit
+  `impl Default for CommitOptions { fn default() -> Self { Self::new() } }`.
+  All four production handlers automatically heal — no handler changes
+  needed.
+
+### Added — regression tests
+
+- **`commit_options_default_is_safe` upgraded** (commit/trait_def.rs):
+  the pre-existing test was named for the invariant ("Default MUST
+  wait_for_apply=true") and commented for the failure mode ("a footgun
+  that causes 'I committed but recall doesn't see it' reports"), but
+  the test body only asserted on `CommitOptions::new()`. It now also
+  asserts on `CommitOptions::default()` so a future revert of the
+  explicit `Default` impl trips at the type level.
+
+- **`issue_37_default_options_dispatches_applier`** (commit/submitter.rs):
+  end-to-end pin at the layer where the regression actually lived.
+  Builds a `LocalSqliteSubmitter` + concrete `LocalApplier`, calls
+  `submit` with `CommitOptions::default()`, and asserts the applier's
+  high watermark advances to 1. Pre-fix this watermark would have
+  stayed at 0 because the no-wait branch skips the apply call.
+
+### Known follow-up — test-coverage gap
+
+`tests/http_integration.rs` mounts its own **mock** `handle_remember`
+handler set rather than importing the production handlers from
+`src/http_gateway.rs`. The mock and production handlers can drift
+silently; this is exactly how the v0.8.13 regression shipped under
+green CI. The structural fix is to promote `AppState` + handlers out
+of the bin-only crate into a sibling `lib.rs` so integration tests
+can import them. Filed as a follow-up issue. Until then, treat
+`http_integration.rs` as wire-protocol coverage only; handler logic
+is locked at the submitter/committer unit-test layer.
+
 ## [0.8.14] — 2026-05-14
 
 Engine dependency bump. No yantrikdb-server source changes.

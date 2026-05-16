@@ -430,6 +430,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn issue_37_default_options_dispatches_applier() {
+        // **Regression test for yantrikos/yantrikdb#37 — silent data loss.**
+        //
+        // Pre-fix: `CommitOptions` derived `Default`, so
+        // `CommitOptions::default()` produced `wait_for_apply: false` (the
+        // `bool` zero). Every production write handler in
+        // `http_gateway.rs` called `CommitOptions::default()`, which made
+        // the submitter take the no-wait branch and skip the applier
+        // dispatch. Result: `/v1/remember` durably appended to
+        // `memory_commit_log`, returned a valid `log_index`, but the
+        // engine state (memories table, vec_index, scoring cache) was
+        // never updated. `/v1/recall` therefore never found the row and
+        // memory counts stayed flat. Reported externally by acidport on
+        // ARM64 Oracle Cloud Docker (single-node) — verified to reproduce
+        // on x86 single-node too because the bug is platform-agnostic.
+        //
+        // The fix replaces `#[derive(Default)]` with an explicit
+        // `impl Default for CommitOptions { fn default() -> Self { Self::new() } }`
+        // so the documented default (`wait_for_apply: true`) is the
+        // observable default. This test pins the behavior at the layer
+        // where the regression lived: submitting with the implicit
+        // default MUST advance the applier's high watermark.
+        //
+        // A type-level pin lives in
+        // `trait_def::tests::commit_options_default_is_safe`. A future
+        // revert of the explicit Default impl trips that test first;
+        // this test trips if the submitter's wait-branch wiring drifts.
+        let committer = Arc::new(LocalSqliteCommitter::open_in_memory().unwrap());
+        let applier_concrete = Arc::new(crate::commit::applier::LocalApplier::new());
+        let applier_dyn: Arc<dyn Applier> = applier_concrete.clone();
+        let s = LocalSqliteSubmitter::new(committer, applier_dyn);
+
+        let tenant = TenantId::new(1);
+        let r = s
+            .submit(
+                tenant,
+                upsert_memory("rid-1"),
+                // The exact call shape the production handlers use.
+                CommitOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.log_index, 1);
+
+        // The applier WAS called — `LocalApplier::apply` inserts the
+        // `(tenant, log_index)` pair into its `seen` set on every call,
+        // and `applied_high_watermark` reports the max log_index per
+        // tenant. Pre-fix this watermark would have been 0 because the
+        // submitter took the no-wait branch and never called `apply`.
+        let watermark = applier_concrete
+            .applied_high_watermark(tenant)
+            .await
+            .expect("applier high watermark");
+        assert_eq!(
+            watermark, 1,
+            "CommitOptions::default() must dispatch to applier (issue #37). \
+             A watermark of 0 here means the no-wait branch is being taken \
+             — most likely Default was reverted to derive(Default)."
+        );
+    }
+
+    #[tokio::test]
     async fn submitter_committer_accessor_works() {
         // The committer accessor exists for bootstrap paths that
         // predate Submitter (forget integration, retention, etc.).

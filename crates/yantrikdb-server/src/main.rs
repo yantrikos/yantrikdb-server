@@ -1784,7 +1784,21 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
 
     // Initialize embedder based on config
     let embedder = match cfg.embedding.strategy {
-        config::EmbeddingStrategy::Builtin => Some(embedder::FastEmbedder::new()?),
+        config::EmbeddingStrategy::Builtin => {
+            tracing::info!("embedding strategy: builtin (fastembed + ONNX, MiniLM-L6-v2, dim=384)");
+            Some(embedder::ServerEmbedder::Fast(
+                embedder::FastEmbedder::new()?
+            ))
+        }
+        config::EmbeddingStrategy::Bundled => {
+            tracing::info!(
+                "embedding strategy: bundled (engine BundledEmbedder, potion-base-2M, dim={}, zero-network)",
+                yantrikdb::embedder::BUNDLED_EMBEDDER_DIM
+            );
+            Some(embedder::ServerEmbedder::Bundled(
+                yantrikdb::embedder::BundledEmbedder::new(),
+            ))
+        }
         config::EmbeddingStrategy::ClientOnly => {
             tracing::info!("embedding strategy: client_only (no server-side embeddings)");
             None

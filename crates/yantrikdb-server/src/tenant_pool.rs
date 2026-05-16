@@ -13,20 +13,20 @@ use yantrikdb::YantrikDB;
 use crate::commit::{ApplyError, EngineResolver, TenantId};
 use crate::config::ServerConfig;
 use crate::control::{ControlDb, DatabaseRecord};
-use crate::embedder::FastEmbedder;
+use crate::embedder::ServerEmbedder;
 
 pub struct TenantPool {
     engines: Mutex<HashMap<i64, Arc<YantrikDB>>>,
     data_dir: PathBuf,
     embedding_dim: usize,
-    embedder: Option<FastEmbedder>,
+    embedder: Option<ServerEmbedder>,
     master_key: Option<[u8; 32]>,
 }
 
 impl TenantPool {
     pub fn new(
         config: &ServerConfig,
-        embedder: Option<FastEmbedder>,
+        embedder: Option<ServerEmbedder>,
         master_key: Option<[u8; 32]>,
     ) -> Self {
         Self {
@@ -110,7 +110,7 @@ impl TenantPool {
     /// the model service hiccups instead of silently writing a row
     /// with `embedding=NULL` that then poisons the namespace's
     /// similarity-recall path.
-    pub fn embedder(&self) -> Option<&FastEmbedder> {
+    pub fn embedder(&self) -> Option<&ServerEmbedder> {
         self.embedder.as_ref()
     }
 

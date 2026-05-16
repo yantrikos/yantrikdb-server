@@ -22,10 +22,16 @@ FROM debian:trixie-slim AS runtime
 ARG ORT_VERSION=1.24.4
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl libgomp1 \
+    ca-certificates curl libgomp1 gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# Install ONNX Runtime shared libraries
+# Install ONNX Runtime shared libraries.
+#
+# Note: with the v0.8.16 default of `[embedding] strategy = "bundled"`,
+# ONNX Runtime is NOT loaded on the hot path — the engine's potion-base-2M
+# (pure-Rust model2vec) is used instead. ONNX is still installed here
+# because users who opt back to `strategy = "builtin"` need it. Removing
+# ONNX from the image to slim it down is a follow-up consideration.
 RUN curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
     -o /tmp/ort.tgz \
     && tar -xzf /tmp/ort.tgz -C /tmp \
@@ -40,18 +46,34 @@ RUN groupadd -r yantrikdb && useradd -r -g yantrikdb -m -d /var/lib/yantrikdb ya
 
 COPY --from=builder /build/target/release/yantrikdb /usr/local/bin/yantrikdb
 
+# Default config: uses `strategy = "bundled"` so the container starts
+# without needing network access on first run (issue #35 part 1).
+# Users can override by mounting their own config to the same path.
+COPY docker/yantrikdb.toml /etc/yantrikdb/yantrikdb.toml
+
+# Entrypoint script: chowns the data dir to the `yantrikdb` user before
+# dropping privileges via gosu. Fixes the volume-mount permission failure
+# reported in issue #35 part 2.
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 # Data + config volumes
 VOLUME /var/lib/yantrikdb
 VOLUME /etc/yantrikdb
 
-USER yantrikdb
+# NOTE: no `USER yantrikdb` here. The entrypoint script starts as root
+# so it can chown the mounted data dir, then `exec gosu yantrikdb` to
+# drop privileges before running the server. Users who want to skip the
+# chown step (e.g. air-gapped, pre-chowned host dir) can override the
+# user explicitly: `docker run -u 1000:1000 yantrikos/yantrikdb`.
 WORKDIR /var/lib/yantrikdb
 
 # Wire protocol, HTTP gateway, cluster port
 EXPOSE 7437 7438 7440
 
-# Default: single-node serve, mounted /var/lib/yantrikdb data dir
-CMD ["yantrikdb", "serve", "--data-dir", "/var/lib/yantrikdb"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-# Override with: docker run -v ./yantrikdb.toml:/etc/yantrikdb/yantrikdb.toml \
-#                yantrikos/yantrikdb yantrikdb serve --config /etc/yantrikdb/yantrikdb.toml
+# Default: single-node serve using the baked-in /etc/yantrikdb/yantrikdb.toml
+# (which sets strategy="bundled"). Override the config with:
+#   docker run -v ./my.toml:/etc/yantrikdb/yantrikdb.toml:ro yantrikos/yantrikdb
+CMD ["yantrikdb", "serve", "--config", "/etc/yantrikdb/yantrikdb.toml"]

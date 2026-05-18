@@ -5404,3 +5404,226 @@ mod fts5_fallback_tests {
         assert!(out.get("fallback").is_some());
     }
 }
+
+// ── Issue #39 task 201: dashboard contract fixture-asserted tests ───
+//
+// Captures wysie's dashboard JSON shape as a set of fixture files
+// under src/api/fixtures/. Each test queries the production router
+// via the e2e helper, then asserts SHAPE compatibility with the
+// fixture (key presence + JSON type discriminant), not value
+// equality.
+//
+// Why shape-not-value: timestamps, RIDs, and IDs vary per run. But
+// the dashboard reads specific KEYS at specific NESTING — those are
+// the wire contract. If field names drift, this test fails loud.
+//
+// Null in the fixture is treated as a wildcard (matches any actual
+// type) so Phase-1 null fields can be filled in by future engine
+// extensions without rewriting the fixture.
+
+#[cfg(test)]
+mod contract_fixture_tests {
+    use super::e2e_test_support::{build_fixture, get};
+    use serde_json::Value;
+
+    const FIXTURE_IDENTITY_SCOPE_PINNED: &str =
+        include_str!("api/fixtures/v1_identity_scope_pinned.json");
+    const FIXTURE_MEMORIES_WITH_ROW: &str = include_str!("api/fixtures/v1_memories_with_row.json");
+    const FIXTURE_MEMORY_DETAIL: &str = include_str!("api/fixtures/v1_memory_detail.json");
+
+    /// Assert that `actual` is shape-compatible with `expected`:
+    /// - For objects: every key in `expected` MUST be present in
+    ///   `actual` at the same nesting; values are matched recursively.
+    /// - For arrays: if both have at least one element, the first
+    ///   element shapes are matched. Empty arrays match each other.
+    /// - For primitives: type discriminants must match.
+    ///   `Value::Null` in `expected` is a wildcard (matches anything)
+    ///   so Phase-1 null fields can be populated by future engine
+    ///   revisions without breaking the fixture.
+    ///
+    /// `path` is the dotted JSON pointer reported in assertion
+    /// failures so the offending key is easy to find.
+    fn assert_shape_matches(actual: &Value, expected: &Value, path: &str) {
+        // Null in fixture = wildcard for typed values (forward-compat
+        // headroom). Null in actual = forward-compat with fixtures
+        // that asserted a typed primitive but engine is still ramping
+        // to that. Both directions intentional.
+        if expected.is_null() || actual.is_null() {
+            return;
+        }
+        match (actual, expected) {
+            (Value::Object(a), Value::Object(e)) => {
+                for (k, ev) in e {
+                    let av = a.get(k).unwrap_or_else(|| {
+                        panic!(
+                            "missing key `{path}.{k}` in actual response; got keys: {:?}",
+                            a.keys().collect::<Vec<_>>()
+                        )
+                    });
+                    let next_path = if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    };
+                    assert_shape_matches(av, ev, &next_path);
+                }
+            }
+            (Value::Array(a), Value::Array(e)) => {
+                if let (Some(av), Some(ev)) = (a.first(), e.first()) {
+                    assert_shape_matches(av, ev, &format!("{path}[0]"));
+                }
+                // Empty fixture array: actual may have any contents,
+                // including nothing. Empty actual: matches any
+                // fixture array (Phase-1 conditional-includes
+                // surface as []).
+            }
+            (a, e) => {
+                let same_kind = std::mem::discriminant(a) == std::mem::discriminant(e);
+                // Treat all JSON numbers as one type — fixtures may
+                // write `1700000000.0` while the engine emits an
+                // integer for `access_count`.
+                let numeric = a.is_number() && e.is_number();
+                assert!(
+                    same_kind || numeric,
+                    "type mismatch at `{path}`: actual={a:?} fixture={e:?}",
+                );
+            }
+        }
+    }
+
+    async fn plant_memory(
+        state: std::sync::Arc<crate::server::AppState>,
+        namespace: &str,
+        text: &str,
+    ) -> String {
+        let db = {
+            let ctrl = state.control.lock();
+            ctrl.get_database(namespace).unwrap().unwrap()
+        };
+        let engine = state.pool.get_engine(&db).unwrap();
+        let text_owned = text.to_string();
+        let namespace_owned = namespace.to_string();
+        tokio::task::spawn_blocking(move || {
+            let embedding = vec![0.0_f32; 384];
+            engine
+                .record(
+                    &text_owned,
+                    "fact",
+                    0.5,
+                    0.0,
+                    86_400.0,
+                    &serde_json::json!({}),
+                    &embedding,
+                    &namespace_owned,
+                    1.0,
+                    "general",
+                    "test",
+                    None,
+                )
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn identity_scope_response_matches_dashboard_fixture() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/identity-scope", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let actual: Value = serde_json::from_slice(&body).expect("parse response");
+        let expected: Value =
+            serde_json::from_str(FIXTURE_IDENTITY_SCOPE_PINNED).expect("parse fixture");
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[tokio::test]
+    async fn memories_response_matches_dashboard_fixture() {
+        let fx = build_fixture("acme");
+        plant_memory(fx.state.clone(), "acme", "fixture seed").await;
+        let (status, body) = get(fx.state.clone(), "/v1/memories", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let actual: Value = serde_json::from_slice(&body).expect("parse response");
+        let expected: Value =
+            serde_json::from_str(FIXTURE_MEMORIES_WITH_ROW).expect("parse fixture");
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[tokio::test]
+    async fn memory_detail_response_matches_dashboard_fixture() {
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "fixture seed").await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let actual: Value = serde_json::from_slice(&body).expect("parse response");
+        let expected: Value = serde_json::from_str(FIXTURE_MEMORY_DETAIL).expect("parse fixture");
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    // ── Self-tests for assert_shape_matches (the assertion needs to
+    //    be at least as careful as the contract it's enforcing) ──────
+
+    #[test]
+    fn shape_passes_on_identical_object() {
+        let v = serde_json::json!({"a": 1, "b": "x"});
+        assert_shape_matches(&v, &v, "");
+    }
+
+    #[test]
+    #[should_panic(expected = "missing key")]
+    fn shape_fails_on_missing_key_in_actual() {
+        let actual = serde_json::json!({"a": 1});
+        let expected = serde_json::json!({"a": 1, "b": "x"});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    fn shape_ignores_extra_keys_in_actual() {
+        // Actual can have MORE keys than fixture — fixture is the
+        // floor, not the ceiling. New fields land additively.
+        let actual = serde_json::json!({"a": 1, "b": "x", "c": "extra"});
+        let expected = serde_json::json!({"a": 1, "b": "x"});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    #[should_panic(expected = "type mismatch")]
+    fn shape_fails_on_type_mismatch() {
+        let actual = serde_json::json!({"a": "string"});
+        let expected = serde_json::json!({"a": 1});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    fn shape_passes_when_actual_is_int_and_fixture_is_float() {
+        // Both are JSON numbers; the engine may emit an integer where
+        // the fixture wrote a float (e.g. access_count). Don't break
+        // on that.
+        let actual = serde_json::json!({"n": 3});
+        let expected = serde_json::json!({"n": 1.5});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    fn shape_treats_null_fixture_as_wildcard() {
+        // Fixture says "null today, anything tomorrow" — used for
+        // Phase-1 nulls that future engine revs may populate.
+        let actual = serde_json::json!({"x": "actual string"});
+        let expected = serde_json::json!({"x": null});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    fn shape_treats_null_actual_as_wildcard_against_typed_fixture() {
+        // Inverse: a Phase-1 handler emits null today but the fixture
+        // captured a typed example. Don't break.
+        let actual = serde_json::json!({"x": null});
+        let expected = serde_json::json!({"x": "example"});
+        assert_shape_matches(&actual, &expected, "");
+    }
+}

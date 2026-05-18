@@ -4026,3 +4026,233 @@ mod identity_scope_tests {
         }
     }
 }
+
+// ── Issue #39 Phase 1 — e2e tests against the production router ─────
+//
+// Per issue #34 discipline, integration tests must exercise the real
+// `crate::http_gateway::router(state)` and the real auth middleware,
+// not mock handlers. tests/http_integration.rs can't reach production
+// code (bin-only crate), so e2e tests for the new Principal-based
+// endpoints live in src/ as `#[cfg(test)] mod` blocks.
+#[cfg(test)]
+pub(crate) mod e2e_test_support {
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
+    use crate::auth::ControlDbAuthProvider;
+    use crate::control::ControlDb;
+    use crate::server::AppState;
+
+    /// Bundles the live state + raw token + paths so tests can hit the
+    /// router with a real Bearer and tear down cleanly on drop.
+    pub struct E2eFixture {
+        pub state: Arc<AppState>,
+        pub raw_token: String,
+        pub tenant_namespace: String,
+        // Held to keep the data_dir alive until tests finish.
+        pub _tmp: tempfile::TempDir,
+    }
+
+    /// Build a real `AppState` against a tempdir. Wires:
+    /// - control DB with one database row + one issued token
+    /// - `ControlDbAuthProvider` over that control DB
+    /// - real `TenantPool`, `WorkerRegistry`, `AdmissionState`,
+    ///   `LocalSqliteCommitter`, `LocalSqliteJobQueue`, `FaultRegistry`
+    /// - no cluster, no openraft, no control runtime — Phase 1 read
+    ///   endpoints don't need them and stubs avoid spawning runtimes.
+    pub fn build_fixture(tenant_namespace: &str) -> E2eFixture {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let data_dir = tmp.path().to_path_buf();
+
+        let mut cfg = crate::config::ServerConfig::default();
+        cfg.server.data_dir = data_dir.clone();
+
+        // control DB + one tenant + one token
+        let control_path = data_dir.join("control.db");
+        let control = ControlDb::open(&control_path).expect("control db open");
+        let raw_token = crate::auth::generate_token();
+        let token_hash = crate::auth::hash_token(&raw_token);
+        let db_id = control
+            .create_database(tenant_namespace, tenant_namespace)
+            .expect("create_database");
+        control
+            .create_token(&token_hash, db_id, "e2e-test")
+            .expect("create_token");
+        let control = Arc::new(Mutex::new(control));
+
+        let pool = Arc::new(crate::tenant_pool::TenantPool::new(&cfg, None, None));
+        let workers = crate::background::WorkerRegistry::new(&cfg.background);
+        let admission = crate::admission::AdmissionState::new(Default::default());
+        let commit_log: Arc<dyn crate::commit::MutationCommitter> =
+            Arc::new(crate::commit::LocalSqliteCommitter::open_in_memory().expect("commit log"));
+        let jobs: Arc<dyn crate::jobs::JobQueue> =
+            Arc::new(crate::jobs::LocalSqliteJobQueue::open_in_memory().expect("jobs queue"));
+        let auth_provider: Arc<dyn crate::auth::AuthProvider> =
+            Arc::new(ControlDbAuthProvider::new(Arc::clone(&control), None));
+
+        let state = Arc::new(AppState {
+            control,
+            pool,
+            workers,
+            cluster: None,
+            inflight: std::sync::atomic::AtomicU32::new(0),
+            admission,
+            control_runtime: None,
+            commit_log,
+            raft: None,
+            fault_registry: crate::debug::FaultRegistry::new(),
+            jobs,
+            data_dir,
+            auth_provider,
+        });
+
+        E2eFixture {
+            state,
+            raw_token,
+            tenant_namespace: tenant_namespace.to_string(),
+            _tmp: tmp,
+        }
+    }
+
+    /// Helper: GET against the production router and return (status, body bytes).
+    pub async fn get(
+        state: Arc<AppState>,
+        path: &str,
+        bearer: Option<&str>,
+    ) -> (axum::http::StatusCode, axum::body::Bytes) {
+        use axum::body::to_bytes;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = super::router(state);
+        let mut builder = Request::builder().uri(path).method("GET");
+        if let Some(tok) = bearer {
+            builder = builder.header("authorization", format!("Bearer {tok}"));
+        }
+        let req = builder.body(axum::body::Body::empty()).unwrap();
+        let res = app.oneshot(req).await.expect("oneshot");
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 1024 * 1024)
+            .await
+            .expect("body bytes");
+        (status, bytes)
+    }
+}
+
+#[cfg(test)]
+mod identity_scope_e2e {
+    use super::e2e_test_support::{build_fixture, get};
+
+    #[tokio::test]
+    async fn returns_401_when_no_bearer_header() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/identity-scope", None).await;
+        assert_eq!(status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // Structured envelope, not Option-A string.
+        assert_eq!(v["error"]["code"], "unauthenticated");
+        assert!(v["error"]["message"].is_string());
+    }
+
+    #[tokio::test]
+    async fn returns_401_when_token_is_unknown() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/identity-scope",
+            Some("ydb_definitely_not_a_real_token"),
+        )
+        .await;
+        assert_eq!(status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn returns_200_with_dashboard_shape_for_valid_tenant_token() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/identity-scope", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Top-level keys match the dashboard contract.
+        for key in [
+            "schema_version",
+            "principal",
+            "effective_scope",
+            "identity_scope",
+            "namespace_inventory",
+            "summary",
+        ] {
+            assert!(v.get(key).is_some(), "missing top-level key `{key}`");
+        }
+
+        // Principal: tenant-pinned, not admin.
+        assert_eq!(v["principal"]["kind"], "token");
+        assert_eq!(v["principal"]["is_admin"], false);
+        let id = v["principal"]["id"].as_str().unwrap();
+        assert!(id.starts_with("tok_"), "principal.id should be hashed-form");
+        assert!(
+            !id.contains(&fx.raw_token),
+            "raw token must not appear in principal.id"
+        );
+
+        // Tenant principal sees exactly its own namespace.
+        assert_eq!(
+            v["effective_scope"]["namespaces"],
+            serde_json::json!([fx.tenant_namespace.as_str()])
+        );
+        assert_eq!(v["effective_scope"]["admin"], false);
+
+        // Permissions: full data-plane set, no admin.
+        let perms: Vec<&str> = v["effective_scope"]["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|x| x.as_str())
+            .collect();
+        for needed in [
+            "memory:read",
+            "memory:write",
+            "memory:recall",
+            "memory:forget",
+        ] {
+            assert!(
+                perms.contains(&needed),
+                "missing permission `{needed}` (got {perms:?})"
+            );
+        }
+        assert!(!perms.contains(&"admin"));
+
+        // namespace_inventory has the single visible entry with full shape.
+        let inv = v["namespace_inventory"].as_array().unwrap();
+        assert_eq!(inv.len(), 1);
+        assert_eq!(inv[0]["namespace"], fx.tenant_namespace);
+        assert_eq!(inv[0]["mapped"], false);
+        assert_eq!(inv[0]["count"], serde_json::Value::Null);
+
+        // Plugin-side concept arrays empty in Phase 1.
+        for key in ["identities", "actors", "spaces", "conversations"] {
+            assert_eq!(
+                v["identity_scope"][key],
+                serde_json::json!([]),
+                "identity_scope.{key} must be []"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_token_never_appears_in_response_body() {
+        // Explicit defense-in-depth assertion: even if the handler is
+        // refactored, the raw bearer must not leak into any field.
+        let fx = build_fixture("acme");
+        let (_status, body) =
+            get(fx.state.clone(), "/v1/identity-scope", Some(&fx.raw_token)).await;
+        let s = std::str::from_utf8(&body).unwrap();
+        assert!(
+            !s.contains(&fx.raw_token),
+            "raw bearer token leaked into response body"
+        );
+    }
+}

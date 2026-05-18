@@ -9,4 +9,5 @@
 //! - `docs/error-codes.md` — stable error-code registry
 //! - `errors` — structured error envelope (Option B)
 
+pub mod access;
 pub mod errors;

@@ -5,6 +5,173 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.17] — 2026-05-18
+
+HTTP read endpoints for [wysie](https://github.com/wysie)'s
+[`yantrikdb-hermes-dashboard`](https://github.com/wysie/yantrikdb-hermes-dashboard)
+unlock dashboard HTTP-mode against cluster deployments (the dashboard
+was embedded-SQLite-only). [Issue #39 Phase 1](https://github.com/yantrikos/yantrikdb-server/issues/39)
+ships three read endpoints plus the substrate that authorizes them.
+Engine pin advances to v0.7.17 (no-op for runtime behaviour;
+[PR #38](https://github.com/yantrikos/yantrikdb-server/pull/38) carried the bump).
+
+### Added — three Phase 1 HTTP read endpoints
+
+- **`GET /v1/identity-scope`** — returns the principal, effective
+  scope, namespace inventory, and identity-scope summary in the
+  nested envelope wysie's dashboard reads. Plugin-side concepts
+  (`identities`, `actors`, `spaces`, `conversations`) surface as
+  empty arrays in Phase 1; engine-side fields (visible namespaces,
+  permissions, `namespace_inventory`) are populated.
+
+- **`GET /v1/memories`** — paged, filtered listing of active
+  memories. Query params: `namespace` (narrows to token scope),
+  `status` (default `active`), `domain`, `memory_type`, `limit`
+  (default 50, max 200), `offset` (default 0), `sort` (default
+  `created_at`; allowed: `created_at`, `importance`, `last_access`).
+  Response envelope `{total, limit, offset, items[]}` with each
+  item the dashboard's 25-field row shape.
+
+- **`GET /v1/memory/{rid}`** — point read with conditional include
+  arrays (`consolidation_sources`, `entities`, `claims`; empty in
+  Phase 1 pending an engine extension). Supports `?min_seq=N` for
+  read-your-writes: 412 `replica_behind` if the local node's
+  applied seq is below `min_seq`; single-node mode trivially
+  satisfies any value.
+
+### Added — RFC 014-B Principal substrate wired through HTTP
+
+- New `auth::middleware::require_authenticated_principal` axum
+  layer extracts the Bearer token, calls `AuthProvider`, and
+  injects a typed `Principal` into request extensions, or returns
+  401 `unauthenticated`. Applied via a sub-router on the three new
+  routes only — legacy routes still authenticate inline through
+  `resolve_engine` and are unchanged.
+
+- New `auth::ControlDbAuthProvider` bridges the legacy
+  `control.tokens` table to RFC 014-B `Principal`:
+  - The cluster master secret resolves to a cluster-admin
+    principal (`tenant_id=None`, all scopes).
+  - Regular tokens resolve to tenant-pinned principals with the
+    data-plane scope bundle (`Read | Write | Recall | Forget`).
+  - Tokens are stored hashed at rest (`hash_token` via SHA-256);
+    the principal `id` exposes a hash-prefix only, never the raw
+    token.
+
+- `AppState` gains `auth_provider: Arc<dyn AuthProvider>`,
+  constructed in `main.rs` from `cfg.cluster.cluster_secret`.
+
+### Added — structured error envelope across `/v1/*`
+
+All `/v1/*` error responses now emit the canonical envelope:
+
+```json
+{ "error": { "code": "stable_id", "message": "human-readable", "hint": "optional" } }
+```
+
+The stable `code` is the part of the API surface clients should
+branch on. Registry lives at
+[`docs/error-codes.md`](docs/error-codes.md) and is mirrored from
+`crates/yantrikdb-server/src/api/errors.rs::ApiErrorCode` (gated by
+unit tests so both files stay in sync). Legacy call sites emit
+`code: "generic"` via a migration shim; new call sites emit
+specific codes (`unauthenticated`, `insufficient_scope`,
+`namespace_not_found`, `memory_not_found`, `invalid_query_parameter`,
+`replica_behind`, etc.).
+
+### Added — namespace + scope guards
+
+- `api::access::require_scope(&principal, scope)` — returns 403
+  `insufficient_scope` if the token doesn't hold the required scope.
+- `api::access::resolve_namespace(&principal, query_param)` — the
+  query param can narrow but never broaden the token's authorized
+  namespace. Pinned-vs-cluster-wide policy: cluster-wide tokens
+  must specify a namespace explicitly (no implicit default);
+  pinned tokens accept their own namespace or none.
+
+### Added — FTS5 fallback marker on `/v1/recall`
+
+POST `/v1/recall` responses now include a top-level `fallback`
+field — `"fts5_keyword"` when at least one result was retrieved via
+the engine's FTS5 keyword fallback (semantic returned nothing useful),
+`null` otherwise. The field is always present so dashboards can
+branch on its value without first probing engine version.
+
+### Changed — engine pin
+
+`yantrikdb` engine pin advances from `0.7.16` → `0.7.17`. No
+runtime-behaviour change for this release; the bump carries forward
+[PR #38](https://github.com/yantrikos/yantrikdb-server/pull/38)'s
+engine update (db.reembed() API surface).
+
+### Test coverage — Phase 1 e2e + contract suite
+
+Per the [issue #34](https://github.com/yantrikos/yantrikdb-server/issues/34)
+discipline ("integration tests must exercise the production
+handler, not mocks"), Phase 1 added an `e2e_test_support` helper
+inside `src/` so tests can build a real `AppState` against a
+tempdir and drive the production router via `tower::ServiceExt::oneshot`.
+
+Cumulative test delta across Phase 1 commits: **+98 tests**:
+- 4 `api::errors` unit tests
+- 8 `api::access` guard tests
+- 5 `ControlDbAuthProvider` tests
+- 9 `identity_scope_tests` unit tests
+- 4 `identity_scope_e2e` tests against production router
+- 20 `memories_list_tests` unit tests
+- 7 `memories_list_e2e` tests against production router
+- 7 `memory_get_e2e` tests against production router
+- 8 `fts5_fallback_tests` unit tests
+- 10 `contract_fixture_tests` (7 self-tests + 3 live shape-asserts
+  against fixtures in `src/api/fixtures/`)
+- 16 supporting auth-substrate tests (Principal, ScopeSet, audit,
+  middleware)
+
+Verification on the v0.8.17 release branch:
+
+```
+cargo fmt --check                                # clean
+cargo test --package yantrikdb-server            # 899 (bin) +
+                                                  # 13 (http_integration) +
+                                                  # 354 + 441 + 360 + 2 + 4 + 2 + 2 = 2077 passed
+                                                  # 0 failed / 2 ignored
+```
+
+### Phase 1 deliberate limitations (Phase 2/3 follow-ups)
+
+The shape ships; the depth follows engine extensions.
+
+- `identity_scope.{identities,actors,spaces,conversations}` — empty
+  arrays; these are plugin-side concepts (hermes/MCP/Slack) the
+  engine doesn't store.
+- `namespace_inventory[].count` — `null`; populating per-namespace
+  counts for cluster-admin tokens would mean opening every engine
+  on a synchronous handler call (deferred to a follow-up cached
+  path).
+- 25-field memory rows — `updated_at`, `updated_at_iso`,
+  `tombstone_reason`, `embedding_model`, `embedding_bytes` all
+  emit `null`. Engine v0.7.x doesn't surface these on
+  `list_memories` / `get`.
+- `/v1/memories` filters — `q` (full-text search), `source`, and
+  `sort ∈ {updated_at, access_count, certainty}` each return a
+  specific 400 `invalid_query_parameter` so clients see an honest
+  contract instead of silently getting `created_at`-sorted rows.
+- `/v1/memory/{rid}.consolidation_sources/entities/claims` — empty
+  arrays; engine's per-memory lookup APIs are currently `pub(crate)`
+  and not reachable from the server crate.
+- `?min_seq=N` — reject-not-wait: engine v0.7.17 doesn't expose a
+  `wait_for_visible_seq` primitive yet, so the handler returns 412
+  `replica_behind` immediately when the local node is behind. A
+  future engine bump may upgrade this to wait-and-then-reject for
+  better UX under transient lag.
+
+### Pull requests
+
+- [#40](https://github.com/yantrikos/yantrikdb-server/pull/40) — Phase 1 implementation
+- [#38](https://github.com/yantrikos/yantrikdb-server/pull/38) — engine bump 0.7.16 → 0.7.17 (already merged at d67cd4a)
+
+---
+
 ## [0.8.16] — 2026-05-16
 
 Docker bug fixes from [@renothing](https://github.com/renothing)'s

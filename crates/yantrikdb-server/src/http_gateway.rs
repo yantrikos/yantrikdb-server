@@ -1168,7 +1168,49 @@ async fn recall(
             })
         }),
     };
-    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+    let mut resp = execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await?;
+    annotate_fts5_fallback(&mut resp);
+    Ok(resp)
+}
+
+/// Issue #39 task 199: dashboard reads a top-level `fallback` field on
+/// /v1/recall responses to surface "semantic search returned nothing
+/// useful; we fell back to FTS5 keyword matching". The engine itself
+/// doesn't expose a single response-level marker, but the per-result
+/// `why_retrieved` arrays gain `"keyword_match"` entries when FTS5
+/// contributed the row. We use that as the signal:
+///
+/// - If any result was retrieved via `keyword_match` → emit
+///   `"fallback": "fts5_keyword"`.
+/// - Else emit `"fallback": null` so dashboards can branch on presence
+///   of the field without first checking the engine version.
+///
+/// Modifies `resp` in place. No-op if the body isn't an object (e.g.,
+/// an error envelope already on the way out — those don't reach here
+/// because `execute_cmd` returns Err for those).
+fn annotate_fts5_fallback(resp: &mut Json<Value>) {
+    let body = match resp.0.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    let has_keyword_match = body
+        .get("results")
+        .and_then(|v| v.as_array())
+        .map(|results| {
+            results.iter().any(|r| {
+                r.get("why_retrieved")
+                    .and_then(|w| w.as_array())
+                    .map(|arr| arr.iter().any(|x| x.as_str() == Some("keyword_match")))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    let fallback = if has_keyword_match {
+        Value::String("fts5_keyword".into())
+    } else {
+        Value::Null
+    };
+    body.insert("fallback".into(), fallback);
 }
 
 async fn forget(
@@ -5253,5 +5295,112 @@ mod memory_get_e2e {
         assert_eq!(status, 403);
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"]["code"], "namespace_not_found");
+    }
+}
+
+#[cfg(test)]
+mod fts5_fallback_tests {
+    use super::annotate_fts5_fallback;
+    use axum::Json;
+    use serde_json::{json, Value};
+
+    fn annotate(body: Value) -> Value {
+        let mut wrapped = Json(body);
+        annotate_fts5_fallback(&mut wrapped);
+        wrapped.0
+    }
+
+    #[test]
+    fn no_results_emits_null_fallback() {
+        // Empty result set: no FTS5 fallback was triggered (nothing
+        // matched anywhere). Field must still appear so dashboards
+        // can rely on presence.
+        let out = annotate(json!({"results": [], "total": 0}));
+        assert_eq!(out["fallback"], Value::Null);
+        assert_eq!(out["total"], 0);
+    }
+
+    #[test]
+    fn semantic_only_results_emit_null_fallback() {
+        // why_retrieved doesn't include "keyword_match" → semantic was
+        // sufficient → fallback is null.
+        let out = annotate(json!({
+            "results": [
+                {"rid": "mem_1", "why_retrieved": ["semantic"]},
+                {"rid": "mem_2", "why_retrieved": ["semantic", "graph-connected via Alice"]},
+            ],
+            "total": 2,
+        }));
+        assert_eq!(out["fallback"], Value::Null);
+    }
+
+    #[test]
+    fn any_keyword_match_emits_fts5_keyword() {
+        // The dashboard contract: presence of any FTS5-sourced row
+        // means the search degraded to keyword matching. Wire string
+        // is pinned because the dashboard reads it literally.
+        let out = annotate(json!({
+            "results": [
+                {"rid": "mem_1", "why_retrieved": ["keyword_match"]},
+                {"rid": "mem_2", "why_retrieved": ["semantic"]},
+            ],
+            "total": 2,
+        }));
+        assert_eq!(out["fallback"], "fts5_keyword");
+    }
+
+    #[test]
+    fn keyword_match_on_only_row_emits_fts5_keyword() {
+        let out = annotate(json!({
+            "results": [{"rid": "mem_1", "why_retrieved": ["keyword_match"]}],
+            "total": 1,
+        }));
+        assert_eq!(out["fallback"], "fts5_keyword");
+    }
+
+    #[test]
+    fn missing_why_retrieved_treated_as_no_keyword_match() {
+        // Defensive: if a future engine version stops emitting
+        // why_retrieved, default to "no fallback" rather than panic.
+        let out = annotate(json!({
+            "results": [{"rid": "mem_1"}],
+            "total": 1,
+        }));
+        assert_eq!(out["fallback"], Value::Null);
+    }
+
+    #[test]
+    fn non_object_body_is_left_alone() {
+        // Sanity: passing an array instead of an object doesn't panic;
+        // the annotator no-ops because there's no top-level slot to
+        // insert into.
+        let out = annotate(json!([1, 2, 3]));
+        // Array unchanged, no fallback key.
+        assert!(out.is_array());
+    }
+
+    #[test]
+    fn existing_fallback_value_is_overwritten() {
+        // The annotator is authoritative — if a caller pre-set a
+        // fallback field, we replace it with our computed value so
+        // there's only one source of truth.
+        let out = annotate(json!({
+            "results": [{"rid": "mem_1", "why_retrieved": ["keyword_match"]}],
+            "total": 1,
+            "fallback": "stale-marker",
+        }));
+        assert_eq!(out["fallback"], "fts5_keyword");
+    }
+
+    #[test]
+    fn preserves_other_top_level_fields() {
+        let out = annotate(json!({
+            "results": [],
+            "total": 0,
+            "summary": {"top_similarity": 0.9},
+        }));
+        assert_eq!(out["total"], 0);
+        assert_eq!(out["summary"]["top_similarity"], 0.9);
+        assert!(out.get("fallback").is_some());
     }
 }

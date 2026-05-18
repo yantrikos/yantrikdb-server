@@ -21,6 +21,8 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 pub mod audit;
+pub mod control_provider;
+pub mod middleware;
 pub mod principal;
 pub mod provider;
 pub mod scopes;
@@ -28,6 +30,8 @@ pub mod scopes;
 pub use audit::{
     AuditEvent, AuditEventKind, AuditOutcome, AuditSink, InMemoryAuditSink, NoopAuditSink,
 };
+pub use control_provider::ControlDbAuthProvider;
+pub use middleware::require_authenticated_principal;
 pub use principal::{AuthOutcome, Principal};
 pub use provider::{AuthError, AuthProvider, InMemoryAuthProvider};
 pub use scopes::{Scope, ScopeSet};

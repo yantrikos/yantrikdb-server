@@ -3280,6 +3280,130 @@ async fn execute_cmd_with_post_filter(
     }
 }
 
+// ── Issue #39 Phase 1 read endpoints ────────────────────────────────
+//
+// These routes use the RFC 014-B `Principal` substrate via the auth
+// middleware at [`crate::auth::middleware::require_authenticated_principal`].
+// They emit the structured error envelope from [`crate::api::errors`]
+// directly (no `app_error` shim) and authorize via the guards in
+// [`crate::api::access`].
+
+/// Map an RFC 014-B [`Scope`] to the dashboard's `memory:*` / `admin` /
+/// `tenant:manage` permission strings used in
+/// `effective_scope.permissions`.
+fn scope_to_permission(scope: crate::auth::Scope) -> &'static str {
+    use crate::auth::Scope;
+    match scope {
+        Scope::Read => "memory:read",
+        Scope::Write => "memory:write",
+        Scope::Recall => "memory:recall",
+        Scope::Forget => "memory:forget",
+        Scope::Admin => "admin",
+        Scope::TenantManagement => "tenant:manage",
+    }
+}
+
+/// Pure payload builder for [`identity_scope`]. Extracted so the handler's
+/// shape is unit-testable without spinning an `AppState` + axum runtime.
+fn build_identity_scope_payload(
+    principal: &crate::auth::Principal,
+    visible_namespaces: &[String],
+) -> Value {
+    use crate::auth::Scope;
+
+    let is_admin = principal.has_scope(Scope::Admin);
+
+    let permissions: Vec<&'static str> = principal.scopes.iter().map(scope_to_permission).collect();
+
+    // Phase 1 namespace_inventory: one entry per visible namespace.
+    // `count` is null in this slice — populating it for cluster-admin
+    // would mean opening every engine, which is too expensive for a
+    // sync handler call. Phase 2 may surface counts via a cached path.
+    let namespace_inventory: Vec<Value> = visible_namespaces
+        .iter()
+        .map(|ns| {
+            json!({
+                "namespace": ns,
+                "count": Value::Null,
+                "mapped": false,
+                "mapped_scope": Value::Null,
+                "mapped_to": Value::Null,
+                "mapping_type": Value::Null,
+                "mapping_source": Value::Null,
+                "derived_by_config": false,
+            })
+        })
+        .collect();
+
+    json!({
+        "schema_version": 1,
+        "principal": {
+            "kind": "token",
+            "id": principal.id,
+            "is_admin": is_admin,
+        },
+        "effective_scope": {
+            "namespaces": visible_namespaces,
+            "owners": [],
+            "permissions": permissions,
+            "admin": is_admin,
+        },
+        "identity_scope": {
+            "identities": [],
+            "actors": [],
+            "spaces": [],
+            "conversations": [],
+        },
+        "namespace_inventory": namespace_inventory,
+        "summary": {
+            "identities": 0,
+            "actors": 0,
+            "spaces": 0,
+            "conversations": 0,
+            "unmapped_namespaces": visible_namespaces.len(),
+        },
+    })
+}
+
+/// `GET /v1/identity-scope` — what does this token see?
+///
+/// Returns the nested envelope wysie's dashboard reads. Issue #39
+/// Phase 1 populates the engine-derivable portions; plugin-side
+/// concepts (identities, actors, spaces, conversations, namespace
+/// mapping) emit empty arrays / default flags. The dashboard already
+/// degrades gracefully on those.
+///
+/// Auth: requires `Scope::Read`. Cluster-admin principals enumerate
+/// all databases as their visible namespaces; tenant-pinned principals
+/// see exactly their `tenant_id`.
+async fn identity_scope(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::auth::Principal>,
+) -> AppResult {
+    use crate::api::access;
+    use crate::api::errors::{api_error, ApiErrorCode};
+    use crate::auth::Scope;
+
+    access::require_scope(&principal, Scope::Read)?;
+
+    let namespaces: Vec<String> = match &principal.tenant_id {
+        Some(ns) => vec![ns.clone()],
+        None => {
+            let ctrl = state.control.lock();
+            let dbs = ctrl.list_databases().map_err(|e| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ApiErrorCode::InternalError,
+                    format!("control db read failed: {e}"),
+                )
+            })?;
+            dbs.into_iter().map(|d| d.name).collect()
+        }
+    };
+
+    Ok(Json(build_identity_scope_payload(&principal, &namespaces)))
+}
+
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.admission.cfg.max_request_body_bytes;
@@ -3294,6 +3418,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         crate::raft::raft_status_router(assembly.raft.clone())
             .merge(crate::raft::raft_receive_router(assembly.raft.clone()))
     });
+
+    // Issue #39 Phase 1: read endpoints that use the RFC 014-B
+    // `Principal` substrate. The auth middleware runs on these routes
+    // only — legacy routes still authenticate inline via `resolve_engine`.
+    let principal_auth_router: Router = Router::new()
+        .route("/v1/identity-scope", get(identity_scope))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_authenticated_principal,
+        ))
+        .with_state(state.clone());
+
     let mut app = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/health/deep", get(health_deep))
@@ -3358,7 +3494,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         // before any handler runs. Defends against memory-blow attacks
         // and misconfigured clients.
         .layer(tower_http::limit::RequestBodyLimitLayer::new(body_limit))
-        .with_state(state);
+        .with_state(state)
+        .merge(principal_auth_router);
     if let Some(raft_router) = raft_sub_router {
         app = app.merge(raft_router);
     }
@@ -3721,6 +3858,170 @@ mod commit_error_mapping_tests {
             assert!(
                 body.0.get("error").is_some(),
                 "{label} body must include `error` key"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod identity_scope_tests {
+    use super::{build_identity_scope_payload, scope_to_permission};
+    use crate::auth::{Principal, Scope, ScopeSet};
+
+    fn pinned_tenant_principal() -> Principal {
+        Principal::new("tok_abcd1234")
+            .with_tenant("acme")
+            .with_scopes(ScopeSet::from_iter([
+                Scope::Read,
+                Scope::Write,
+                Scope::Recall,
+                Scope::Forget,
+            ]))
+    }
+
+    fn cluster_admin_principal() -> Principal {
+        Principal::new("cluster-admin")
+            .with_scopes(ScopeSet::all())
+            .with_label("cluster-master")
+    }
+
+    #[test]
+    fn scope_to_permission_pinned_strings() {
+        // The dashboard branches on these strings — they're part of the
+        // wire contract. Stability test.
+        assert_eq!(scope_to_permission(Scope::Read), "memory:read");
+        assert_eq!(scope_to_permission(Scope::Write), "memory:write");
+        assert_eq!(scope_to_permission(Scope::Recall), "memory:recall");
+        assert_eq!(scope_to_permission(Scope::Forget), "memory:forget");
+        assert_eq!(scope_to_permission(Scope::Admin), "admin");
+        assert_eq!(
+            scope_to_permission(Scope::TenantManagement),
+            "tenant:manage"
+        );
+    }
+
+    #[test]
+    fn payload_top_level_keys_match_dashboard_contract() {
+        // Stability: the dashboard reads these specific top-level keys.
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        for key in [
+            "schema_version",
+            "principal",
+            "effective_scope",
+            "identity_scope",
+            "namespace_inventory",
+            "summary",
+        ] {
+            assert!(v.get(key).is_some(), "missing key `{key}` in payload");
+        }
+    }
+
+    #[test]
+    fn pinned_principal_emits_single_namespace() {
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        assert_eq!(
+            v["effective_scope"]["namespaces"],
+            serde_json::json!(["acme"])
+        );
+        assert_eq!(v["effective_scope"]["admin"], false);
+        assert_eq!(v["principal"]["id"], "tok_abcd1234");
+        assert_eq!(v["principal"]["is_admin"], false);
+        assert_eq!(v["principal"]["kind"], "token");
+    }
+
+    #[test]
+    fn pinned_principal_permissions_are_data_plane_set() {
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        let perms = v["effective_scope"]["permissions"].as_array().unwrap();
+        let strs: Vec<&str> = perms.iter().filter_map(|x| x.as_str()).collect();
+        assert!(strs.contains(&"memory:read"));
+        assert!(strs.contains(&"memory:write"));
+        assert!(strs.contains(&"memory:recall"));
+        assert!(strs.contains(&"memory:forget"));
+        assert!(!strs.contains(&"admin"));
+        assert!(!strs.contains(&"tenant:manage"));
+    }
+
+    #[test]
+    fn cluster_admin_principal_marks_admin_true() {
+        let p = cluster_admin_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into(), "default".into()]);
+        assert_eq!(v["principal"]["is_admin"], true);
+        assert_eq!(v["effective_scope"]["admin"], true);
+        let strs: Vec<&str> = v["effective_scope"]["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|x| x.as_str())
+            .collect();
+        assert!(strs.contains(&"admin"));
+        assert!(strs.contains(&"tenant:manage"));
+    }
+
+    #[test]
+    fn cluster_admin_principal_enumerates_all_namespaces() {
+        let p = cluster_admin_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into(), "default".into()]);
+        assert_eq!(
+            v["effective_scope"]["namespaces"],
+            serde_json::json!(["acme", "default"])
+        );
+        // namespace_inventory should mirror.
+        let inv = v["namespace_inventory"].as_array().unwrap();
+        assert_eq!(inv.len(), 2);
+        assert_eq!(inv[0]["namespace"], "acme");
+        assert_eq!(inv[1]["namespace"], "default");
+    }
+
+    #[test]
+    fn namespace_inventory_entry_has_full_dashboard_shape() {
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        let entry = &v["namespace_inventory"][0];
+        // Every key the dashboard reads must be present, even if null.
+        for key in [
+            "namespace",
+            "count",
+            "mapped",
+            "mapped_scope",
+            "mapped_to",
+            "mapping_type",
+            "mapping_source",
+            "derived_by_config",
+        ] {
+            assert!(entry.get(key).is_some(), "missing inventory key `{key}`");
+        }
+        // Phase 1 defaults: no plugin mapping, no count.
+        assert_eq!(entry["mapped"], false);
+        assert_eq!(entry["count"], serde_json::Value::Null);
+        assert_eq!(entry["derived_by_config"], false);
+    }
+
+    #[test]
+    fn summary_unmapped_namespaces_matches_namespace_count() {
+        let p = cluster_admin_principal();
+        let v = build_identity_scope_payload(&p, &["a".into(), "b".into(), "c".into()]);
+        assert_eq!(v["summary"]["unmapped_namespaces"], 3);
+        assert_eq!(v["summary"]["identities"], 0);
+        assert_eq!(v["summary"]["actors"], 0);
+        assert_eq!(v["summary"]["spaces"], 0);
+        assert_eq!(v["summary"]["conversations"], 0);
+    }
+
+    #[test]
+    fn identity_scope_arrays_are_empty_in_phase_1() {
+        // Phase 1: plugin-side concepts not surfaced. Dashboard reads
+        // these as arrays; empty is the correct Phase-1 value.
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        for key in ["identities", "actors", "spaces", "conversations"] {
+            assert_eq!(
+                v["identity_scope"][key],
+                serde_json::json!([]),
+                "identity_scope.{key} must be []"
             );
         }
     }

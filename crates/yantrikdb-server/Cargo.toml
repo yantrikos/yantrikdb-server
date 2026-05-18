@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-server"
-version = "0.8.16"
+version = "0.8.17"
 edition = "2021"
 description = "YantrikDB database server — multi-tenant cognitive memory with wire protocol, HTTP gateway, replication, auto-failover, and at-rest encryption"
 license = "AGPL-3.0-only"
@@ -50,6 +50,12 @@ serde_json = "1"
 sha2 = "0.10"
 hex = "0.4"
 rand = { version = "0.8", features = ["small_rng"] }
+
+# Time formatting (Unix epoch ↔ ISO 8601 for HTTP responses). Issue
+# #39 read endpoints emit RFC-3339 timestamps alongside the existing
+# Unix-float fields. Already transitive via reqwest/openraft; making
+# it a direct dep so the dep graph stays explicit.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 # Observability
 tracing = "0.1"

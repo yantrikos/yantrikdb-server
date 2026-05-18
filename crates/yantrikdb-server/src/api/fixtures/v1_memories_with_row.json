@@ -1,0 +1,36 @@
+{
+  "total": 1,
+  "limit": 50,
+  "offset": 0,
+  "items": [
+    {
+      "rid": "mem_0123456789abcdef",
+      "type": "fact",
+      "text": "example memory text",
+      "created_at": 1700000000.0,
+      "created_at_iso": "2023-11-14T22:13:20Z",
+      "updated_at": null,
+      "updated_at_iso": null,
+      "importance": 0.5,
+      "half_life": 86400.0,
+      "last_access": 1700000000.0,
+      "access_count": 0,
+      "valence": 0.0,
+      "consolidated_into": null,
+      "consolidation_status": "active",
+      "storage_tier": "hot",
+      "metadata_json": {},
+      "namespace": "acme",
+      "certainty": 1.0,
+      "domain": "general",
+      "source": "test",
+      "emotional_state": null,
+      "session_id": null,
+      "due_at": null,
+      "temporal_kind": null,
+      "tombstone_reason": null,
+      "embedding_model": null,
+      "embedding_bytes": null
+    }
+  ]
+}

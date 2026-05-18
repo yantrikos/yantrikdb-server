@@ -1,4 +1,5 @@
 mod admission;
+mod api;
 mod auth;
 mod background;
 mod backup;
@@ -2152,6 +2153,15 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     );
     tracing::info!(jobs_path = %jobs_path.display(), "job queue opened");
 
+    // Issue #39: control-DB-backed AuthProvider. Recognizes the cluster
+    // master secret as the cluster-admin principal; resolves regular
+    // tokens via control.tokens → Principal{tenant=db.name, scopes=data-plane}.
+    let auth_provider: Arc<dyn crate::auth::AuthProvider> =
+        Arc::new(crate::auth::ControlDbAuthProvider::new(
+            control.clone(),
+            cfg.cluster.cluster_secret.clone(),
+        ));
+
     let state = Arc::new(AppState {
         control,
         pool,
@@ -2165,6 +2175,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         fault_registry,
         jobs,
         data_dir: cfg.server.data_dir.clone(),
+        auth_provider,
     });
 
     // Built-in watchdog — periodically probes the engine lock and fires a

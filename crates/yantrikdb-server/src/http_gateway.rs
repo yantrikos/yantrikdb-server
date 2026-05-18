@@ -139,8 +139,23 @@ type EngineHandle = Arc<yantrikdb::YantrikDB>;
 /// Error tuple returned by auth-checking helpers.
 type AppError = (StatusCode, Json<Value>);
 
+/// Issue #39: every error response across `/v1/*` now emits the
+/// canonical structured envelope from [`crate::api::errors`]:
+///
+/// ```json
+/// {"error": {"code": "stable_id", "message": "human", "hint": "optional"}}
+/// ```
+///
+/// This helper is a migration shim for ~125 pre-existing call sites
+/// that emitted `{"error": "string"}` (Option A). Those sites get the
+/// new envelope shape immediately with `code: "generic"`. Each call
+/// site individually migrates to a specific code via
+/// [`crate::api::errors::api_error`] over time.
+///
+/// **New code MUST NOT use `app_error()`.** Call `api_error(status,
+/// ApiErrorCode::SomeSpecificCode, message)` directly.
 fn app_error(status: StatusCode, message: impl Into<String>) -> AppError {
-    (status, Json(json!({ "error": message.into() })))
+    crate::api::errors::api_error(status, crate::api::errors::ApiErrorCode::Generic, message)
 }
 
 /// Translate a [`crate::commit::CommitError`] into an HTTP response per
@@ -1153,7 +1168,49 @@ async fn recall(
             })
         }),
     };
-    execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
+    let mut resp = execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await?;
+    annotate_fts5_fallback(&mut resp);
+    Ok(resp)
+}
+
+/// Issue #39 task 199: dashboard reads a top-level `fallback` field on
+/// /v1/recall responses to surface "semantic search returned nothing
+/// useful; we fell back to FTS5 keyword matching". The engine itself
+/// doesn't expose a single response-level marker, but the per-result
+/// `why_retrieved` arrays gain `"keyword_match"` entries when FTS5
+/// contributed the row. We use that as the signal:
+///
+/// - If any result was retrieved via `keyword_match` → emit
+///   `"fallback": "fts5_keyword"`.
+/// - Else emit `"fallback": null` so dashboards can branch on presence
+///   of the field without first checking the engine version.
+///
+/// Modifies `resp` in place. No-op if the body isn't an object (e.g.,
+/// an error envelope already on the way out — those don't reach here
+/// because `execute_cmd` returns Err for those).
+fn annotate_fts5_fallback(resp: &mut Json<Value>) {
+    let body = match resp.0.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    let has_keyword_match = body
+        .get("results")
+        .and_then(|v| v.as_array())
+        .map(|results| {
+            results.iter().any(|r| {
+                r.get("why_retrieved")
+                    .and_then(|w| w.as_array())
+                    .map(|arr| arr.iter().any(|x| x.as_str() == Some("keyword_match")))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    let fallback = if has_keyword_match {
+        Value::String("fts5_keyword".into())
+    } else {
+        Value::Null
+    };
+    body.insert("fallback".into(), fallback);
 }
 
 async fn forget(
@@ -3265,6 +3322,504 @@ async fn execute_cmd_with_post_filter(
     }
 }
 
+// ── Issue #39 Phase 1 read endpoints ────────────────────────────────
+//
+// These routes use the RFC 014-B `Principal` substrate via the auth
+// middleware at [`crate::auth::middleware::require_authenticated_principal`].
+// They emit the structured error envelope from [`crate::api::errors`]
+// directly (no `app_error` shim) and authorize via the guards in
+// [`crate::api::access`].
+
+/// Map an RFC 014-B [`Scope`] to the dashboard's `memory:*` / `admin` /
+/// `tenant:manage` permission strings used in
+/// `effective_scope.permissions`.
+fn scope_to_permission(scope: crate::auth::Scope) -> &'static str {
+    use crate::auth::Scope;
+    match scope {
+        Scope::Read => "memory:read",
+        Scope::Write => "memory:write",
+        Scope::Recall => "memory:recall",
+        Scope::Forget => "memory:forget",
+        Scope::Admin => "admin",
+        Scope::TenantManagement => "tenant:manage",
+    }
+}
+
+/// Pure payload builder for [`identity_scope`]. Extracted so the handler's
+/// shape is unit-testable without spinning an `AppState` + axum runtime.
+fn build_identity_scope_payload(
+    principal: &crate::auth::Principal,
+    visible_namespaces: &[String],
+) -> Value {
+    use crate::auth::Scope;
+
+    let is_admin = principal.has_scope(Scope::Admin);
+
+    let permissions: Vec<&'static str> = principal.scopes.iter().map(scope_to_permission).collect();
+
+    // Phase 1 namespace_inventory: one entry per visible namespace.
+    // `count` is null in this slice — populating it for cluster-admin
+    // would mean opening every engine, which is too expensive for a
+    // sync handler call. Phase 2 may surface counts via a cached path.
+    let namespace_inventory: Vec<Value> = visible_namespaces
+        .iter()
+        .map(|ns| {
+            json!({
+                "namespace": ns,
+                "count": Value::Null,
+                "mapped": false,
+                "mapped_scope": Value::Null,
+                "mapped_to": Value::Null,
+                "mapping_type": Value::Null,
+                "mapping_source": Value::Null,
+                "derived_by_config": false,
+            })
+        })
+        .collect();
+
+    json!({
+        "schema_version": 1,
+        "principal": {
+            "kind": "token",
+            "id": principal.id,
+            "is_admin": is_admin,
+        },
+        "effective_scope": {
+            "namespaces": visible_namespaces,
+            "owners": [],
+            "permissions": permissions,
+            "admin": is_admin,
+        },
+        "identity_scope": {
+            "identities": [],
+            "actors": [],
+            "spaces": [],
+            "conversations": [],
+        },
+        "namespace_inventory": namespace_inventory,
+        "summary": {
+            "identities": 0,
+            "actors": 0,
+            "spaces": 0,
+            "conversations": 0,
+            "unmapped_namespaces": visible_namespaces.len(),
+        },
+    })
+}
+
+/// `GET /v1/identity-scope` — what does this token see?
+///
+/// Returns the nested envelope wysie's dashboard reads. Issue #39
+/// Phase 1 populates the engine-derivable portions; plugin-side
+/// concepts (identities, actors, spaces, conversations, namespace
+/// mapping) emit empty arrays / default flags. The dashboard already
+/// degrades gracefully on those.
+///
+/// Auth: requires `Scope::Read`. Cluster-admin principals enumerate
+/// all databases as their visible namespaces; tenant-pinned principals
+/// see exactly their `tenant_id`.
+async fn identity_scope(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::auth::Principal>,
+) -> AppResult {
+    use crate::api::access;
+    use crate::api::errors::{api_error, ApiErrorCode};
+    use crate::auth::Scope;
+
+    access::require_scope(&principal, Scope::Read)?;
+
+    let namespaces: Vec<String> = match &principal.tenant_id {
+        Some(ns) => vec![ns.clone()],
+        None => {
+            let ctrl = state.control.lock();
+            let dbs = ctrl.list_databases().map_err(|e| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ApiErrorCode::InternalError,
+                    format!("control db read failed: {e}"),
+                )
+            })?;
+            dbs.into_iter().map(|d| d.name).collect()
+        }
+    };
+
+    Ok(Json(build_identity_scope_payload(&principal, &namespaces)))
+}
+
+// ── /v1/memories — list endpoint (issue #39 Phase 1 task 196) ───────
+
+const MEMORIES_DEFAULT_LIMIT: usize = 50;
+const MEMORIES_MAX_LIMIT: usize = 200;
+const MEMORIES_SUPPORTED_SORTS: &[&str] = &["created_at", "importance", "last_access"];
+const MEMORIES_PHASE_2_SORTS: &[&str] = &["updated_at", "access_count", "certainty"];
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct MemoriesListParams {
+    namespace: Option<String>,
+    status: Option<String>,
+    domain: Option<String>,
+    source: Option<String>,
+    memory_type: Option<String>,
+    q: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    sort: Option<String>,
+}
+
+fn unix_to_iso(epoch_seconds: f64) -> Option<String> {
+    if !epoch_seconds.is_finite() {
+        return None;
+    }
+    let secs = epoch_seconds.trunc() as i64;
+    let nanos = ((epoch_seconds.fract().abs()) * 1_000_000_000.0).round() as u32;
+    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nanos.min(999_999_999))?;
+    Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+fn memory_to_dashboard_row(m: &yantrikdb::Memory) -> Value {
+    json!({
+        "rid": m.rid,
+        "type": m.memory_type,
+        "text": m.text,
+        "created_at": m.created_at,
+        "created_at_iso": unix_to_iso(m.created_at),
+        "updated_at": Value::Null,
+        "updated_at_iso": Value::Null,
+        "importance": m.importance,
+        "half_life": m.half_life,
+        "last_access": m.last_access,
+        "access_count": m.access_count,
+        "valence": m.valence,
+        "consolidated_into": m.consolidated_into,
+        "consolidation_status": m.consolidation_status,
+        "storage_tier": m.storage_tier,
+        "metadata_json": m.metadata,
+        "namespace": m.namespace,
+        "certainty": m.certainty,
+        "domain": m.domain,
+        "source": m.source,
+        "emotional_state": m.emotional_state,
+        "session_id": m.session_id,
+        "due_at": m.due_at,
+        "temporal_kind": m.temporal_kind,
+        "tombstone_reason": Value::Null,
+        "embedding_model": Value::Null,
+        "embedding_bytes": Value::Null,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MemoriesListResolved {
+    effective_namespace: String,
+    limit: usize,
+    offset: usize,
+    sort_by: String,
+    domain: Option<String>,
+    memory_type: Option<String>,
+}
+
+fn validate_memories_params(
+    principal: &crate::auth::Principal,
+    params: &MemoriesListParams,
+) -> Result<MemoriesListResolved, AppError> {
+    use crate::api::access;
+    use crate::api::errors::{api_error, ApiErrorCode};
+
+    if let Some(s) = &params.status {
+        if s != "active" {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                ApiErrorCode::InvalidQueryParameter,
+                format!(
+                    "status filter `{s}` is not implemented in Phase 1; only `active` is supported"
+                ),
+            ));
+        }
+    }
+    if params.q.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            "text search filter `q` is not implemented on /v1/memories in Phase 1; use /v1/recall for semantic search",
+        ));
+    }
+    if params.source.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            "source filter is not implemented on /v1/memories in Phase 1",
+        ));
+    }
+
+    let sort_by = params.sort.as_deref().unwrap_or("created_at");
+    if MEMORIES_PHASE_2_SORTS.contains(&sort_by) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            format!(
+                "sort=`{sort_by}` is not implemented in Phase 1; engine v0.7.x supports {MEMORIES_SUPPORTED_SORTS:?}"
+            ),
+        ));
+    }
+    if !MEMORIES_SUPPORTED_SORTS.contains(&sort_by) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            format!(
+                "sort=`{sort_by}` is not a recognized value; allowed: {MEMORIES_SUPPORTED_SORTS:?}"
+            ),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(MEMORIES_DEFAULT_LIMIT);
+    if limit == 0 || limit > MEMORIES_MAX_LIMIT {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            format!("limit must be 1..={MEMORIES_MAX_LIMIT} (got {limit})"),
+        ));
+    }
+    let offset = params.offset.unwrap_or(0);
+
+    let effective_namespace = access::resolve_namespace(principal, params.namespace.as_deref())?;
+
+    Ok(MemoriesListResolved {
+        effective_namespace,
+        limit,
+        offset,
+        sort_by: sort_by.to_string(),
+        domain: params.domain.clone(),
+        memory_type: params.memory_type.clone(),
+    })
+}
+
+async fn memories_list(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::auth::Principal>,
+    Query(params): Query<MemoriesListParams>,
+) -> AppResult {
+    use crate::api::errors::{api_error, ApiErrorCode};
+    use crate::auth::Scope;
+
+    crate::api::access::require_scope(&principal, Scope::Read)?;
+    let resolved = validate_memories_params(&principal, &params)?;
+
+    let db_record = {
+        let ctrl = state.control.lock();
+        ctrl.get_database(&resolved.effective_namespace)
+            .map_err(|e| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ApiErrorCode::InternalError,
+                    format!("control db lookup failed: {e}"),
+                )
+            })?
+            .ok_or_else(|| {
+                api_error(
+                    StatusCode::FORBIDDEN,
+                    ApiErrorCode::NamespaceNotFound,
+                    format!("namespace not found: {}", resolved.effective_namespace),
+                )
+            })?
+    };
+
+    let engine = state.pool.get_engine(&db_record).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("engine load failed: {e}"),
+        )
+    })?;
+
+    let domain = resolved.domain.clone();
+    let memory_type = resolved.memory_type.clone();
+    let effective_namespace = resolved.effective_namespace.clone();
+    let sort_by = resolved.sort_by.clone();
+    let limit = resolved.limit;
+    let offset = resolved.offset;
+    let engine_clone = engine.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        engine_clone.list_memories(
+            limit,
+            offset,
+            domain.as_deref(),
+            memory_type.as_deref(),
+            Some(&effective_namespace),
+            &sort_by,
+        )
+    })
+    .await
+    .map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("blocking thread join failed: {e}"),
+        )
+    })?;
+    let (memories, total) = res.map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("list_memories failed: {e}"),
+        )
+    })?;
+
+    let items: Vec<Value> = memories.iter().map(memory_to_dashboard_row).collect();
+    Ok(Json(json!({
+        "total": total,
+        "limit": resolved.limit,
+        "offset": resolved.offset,
+        "items": items,
+    })))
+}
+
+// ── /v1/memory/{rid} — point read (issue #39 Phase 1 task 197) ──────
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct MemoryGetParams {
+    namespace: Option<String>,
+    /// Read-your-writes hint. If supplied, the server checks the local
+    /// node's applied seq against this value before reading. If the
+    /// local replica is behind, returns 412 `replica_behind` so clients
+    /// can retry with backoff or route to the leader. No wait primitive
+    /// is available in engine v0.7.17, so this is reject-not-wait
+    /// semantics — the dashboard contract documents 412 as the
+    /// behavior, which matches.
+    min_seq: Option<u64>,
+}
+
+/// Compare a caller's `min_seq` against the local node's applied seq.
+/// Returns `Err(412 replica_behind)` if the replica hasn't caught up,
+/// `Ok(())` otherwise.
+///
+/// Single-node mode (no `state.raft`) always satisfies the check —
+/// there is no replication lag to wait for.
+fn check_min_seq(state: &AppState, min_seq: u64) -> Result<(), AppError> {
+    use crate::api::errors::{api_error, ApiErrorCode};
+
+    let Some(raft) = state.raft.as_ref() else {
+        return Ok(());
+    };
+    let metrics = raft.raft.metrics().borrow().clone();
+    let applied = metrics.last_applied.as_ref().map(|l| l.index).unwrap_or(0);
+    if applied < min_seq {
+        return Err(api_error(
+            StatusCode::PRECONDITION_FAILED,
+            ApiErrorCode::ReplicaBehind,
+            format!(
+                "replica at seq {applied}, requested min_seq {min_seq}; retry with backoff or route to the leader"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// `GET /v1/memory/{rid}` — point read with conditional includes + RYW.
+///
+/// Auth: requires `Scope::Read`. The `namespace` query param narrows
+/// to the principal's scope; the returned memory's `namespace` column
+/// must also match (otherwise 404, treating cross-namespace reads as
+/// "not visible").
+///
+/// Phase-1 conditional arrays (`consolidation_sources`, `entities`,
+/// `claims`) emit empty `[]`. Engine v0.7.x doesn't expose public
+/// readers for these tables; populating them is a follow-up engine
+/// extension. Dashboard tolerates empty arrays per its degradation
+/// pattern.
+async fn memory_get(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::auth::Principal>,
+    AxumPath(rid): AxumPath<String>,
+    Query(params): Query<MemoryGetParams>,
+) -> AppResult {
+    use crate::api::access;
+    use crate::api::errors::{api_error, ApiErrorCode};
+    use crate::auth::Scope;
+
+    access::require_scope(&principal, Scope::Read)?;
+    let effective_namespace = access::resolve_namespace(&principal, params.namespace.as_deref())?;
+
+    if let Some(min_seq) = params.min_seq {
+        check_min_seq(&state, min_seq)?;
+    }
+
+    let db_record = {
+        let ctrl = state.control.lock();
+        ctrl.get_database(&effective_namespace)
+            .map_err(|e| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ApiErrorCode::InternalError,
+                    format!("control db lookup failed: {e}"),
+                )
+            })?
+            .ok_or_else(|| {
+                api_error(
+                    StatusCode::FORBIDDEN,
+                    ApiErrorCode::NamespaceNotFound,
+                    format!("namespace not found: {effective_namespace}"),
+                )
+            })?
+    };
+
+    let engine = state.pool.get_engine(&db_record).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("engine load failed: {e}"),
+        )
+    })?;
+
+    let rid_for_engine = rid.clone();
+    let engine_clone = engine.clone();
+    let res = tokio::task::spawn_blocking(move || engine_clone.get(&rid_for_engine))
+        .await
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiErrorCode::InternalError,
+                format!("blocking thread join failed: {e}"),
+            )
+        })?;
+    let memory = res.map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("engine get failed: {e}"),
+        )
+    })?;
+
+    let Some(memory) = memory else {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            ApiErrorCode::MemoryNotFound,
+            format!("memory not found: {rid}"),
+        ));
+    };
+
+    // Cross-namespace requests get the same 404 as missing rids — we
+    // never confirm a memory's existence outside the caller's scope.
+    if memory.namespace != effective_namespace {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            ApiErrorCode::MemoryNotFound,
+            format!("memory not found: {rid}"),
+        ));
+    }
+
+    let mut row = memory_to_dashboard_row(&memory);
+    // Phase-1 conditional includes: empty arrays. Engine extensions
+    // populate these in a follow-up; dashboard reads empty as "no data
+    // for this rid", which is structurally honest while empty.
+    if let Some(obj) = row.as_object_mut() {
+        obj.insert("consolidation_sources".into(), json!([]));
+        obj.insert("entities".into(), json!([]));
+        obj.insert("claims".into(), json!([]));
+    }
+
+    Ok(Json(row))
+}
+
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.admission.cfg.max_request_body_bytes;
@@ -3279,6 +3834,20 @@ pub fn router(state: Arc<AppState>) -> Router {
         crate::raft::raft_status_router(assembly.raft.clone())
             .merge(crate::raft::raft_receive_router(assembly.raft.clone()))
     });
+
+    // Issue #39 Phase 1: read endpoints that use the RFC 014-B
+    // `Principal` substrate. The auth middleware runs on these routes
+    // only — legacy routes still authenticate inline via `resolve_engine`.
+    let principal_auth_router: Router = Router::new()
+        .route("/v1/identity-scope", get(identity_scope))
+        .route("/v1/memories", get(memories_list))
+        .route("/v1/memory/{rid}", get(memory_get))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_authenticated_principal,
+        ))
+        .with_state(state.clone());
+
     let mut app = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/health/deep", get(health_deep))
@@ -3343,7 +3912,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         // before any handler runs. Defends against memory-blow attacks
         // and misconfigured clients.
         .layer(tower_http::limit::RequestBodyLimitLayer::new(body_limit))
-        .with_state(state);
+        .with_state(state)
+        .merge(principal_auth_router);
     if let Some(raft_router) = raft_sub_router {
         app = app.merge(raft_router);
     }
@@ -3708,5 +4278,1352 @@ mod commit_error_mapping_tests {
                 "{label} body must include `error` key"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_scope_tests {
+    use super::{build_identity_scope_payload, scope_to_permission};
+    use crate::auth::{Principal, Scope, ScopeSet};
+
+    fn pinned_tenant_principal() -> Principal {
+        Principal::new("tok_abcd1234")
+            .with_tenant("acme")
+            .with_scopes(ScopeSet::from_iter([
+                Scope::Read,
+                Scope::Write,
+                Scope::Recall,
+                Scope::Forget,
+            ]))
+    }
+
+    fn cluster_admin_principal() -> Principal {
+        Principal::new("cluster-admin")
+            .with_scopes(ScopeSet::all())
+            .with_label("cluster-master")
+    }
+
+    #[test]
+    fn scope_to_permission_pinned_strings() {
+        // The dashboard branches on these strings — they're part of the
+        // wire contract. Stability test.
+        assert_eq!(scope_to_permission(Scope::Read), "memory:read");
+        assert_eq!(scope_to_permission(Scope::Write), "memory:write");
+        assert_eq!(scope_to_permission(Scope::Recall), "memory:recall");
+        assert_eq!(scope_to_permission(Scope::Forget), "memory:forget");
+        assert_eq!(scope_to_permission(Scope::Admin), "admin");
+        assert_eq!(
+            scope_to_permission(Scope::TenantManagement),
+            "tenant:manage"
+        );
+    }
+
+    #[test]
+    fn payload_top_level_keys_match_dashboard_contract() {
+        // Stability: the dashboard reads these specific top-level keys.
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        for key in [
+            "schema_version",
+            "principal",
+            "effective_scope",
+            "identity_scope",
+            "namespace_inventory",
+            "summary",
+        ] {
+            assert!(v.get(key).is_some(), "missing key `{key}` in payload");
+        }
+    }
+
+    #[test]
+    fn pinned_principal_emits_single_namespace() {
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        assert_eq!(
+            v["effective_scope"]["namespaces"],
+            serde_json::json!(["acme"])
+        );
+        assert_eq!(v["effective_scope"]["admin"], false);
+        assert_eq!(v["principal"]["id"], "tok_abcd1234");
+        assert_eq!(v["principal"]["is_admin"], false);
+        assert_eq!(v["principal"]["kind"], "token");
+    }
+
+    #[test]
+    fn pinned_principal_permissions_are_data_plane_set() {
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        let perms = v["effective_scope"]["permissions"].as_array().unwrap();
+        let strs: Vec<&str> = perms.iter().filter_map(|x| x.as_str()).collect();
+        assert!(strs.contains(&"memory:read"));
+        assert!(strs.contains(&"memory:write"));
+        assert!(strs.contains(&"memory:recall"));
+        assert!(strs.contains(&"memory:forget"));
+        assert!(!strs.contains(&"admin"));
+        assert!(!strs.contains(&"tenant:manage"));
+    }
+
+    #[test]
+    fn cluster_admin_principal_marks_admin_true() {
+        let p = cluster_admin_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into(), "default".into()]);
+        assert_eq!(v["principal"]["is_admin"], true);
+        assert_eq!(v["effective_scope"]["admin"], true);
+        let strs: Vec<&str> = v["effective_scope"]["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|x| x.as_str())
+            .collect();
+        assert!(strs.contains(&"admin"));
+        assert!(strs.contains(&"tenant:manage"));
+    }
+
+    #[test]
+    fn cluster_admin_principal_enumerates_all_namespaces() {
+        let p = cluster_admin_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into(), "default".into()]);
+        assert_eq!(
+            v["effective_scope"]["namespaces"],
+            serde_json::json!(["acme", "default"])
+        );
+        // namespace_inventory should mirror.
+        let inv = v["namespace_inventory"].as_array().unwrap();
+        assert_eq!(inv.len(), 2);
+        assert_eq!(inv[0]["namespace"], "acme");
+        assert_eq!(inv[1]["namespace"], "default");
+    }
+
+    #[test]
+    fn namespace_inventory_entry_has_full_dashboard_shape() {
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        let entry = &v["namespace_inventory"][0];
+        // Every key the dashboard reads must be present, even if null.
+        for key in [
+            "namespace",
+            "count",
+            "mapped",
+            "mapped_scope",
+            "mapped_to",
+            "mapping_type",
+            "mapping_source",
+            "derived_by_config",
+        ] {
+            assert!(entry.get(key).is_some(), "missing inventory key `{key}`");
+        }
+        // Phase 1 defaults: no plugin mapping, no count.
+        assert_eq!(entry["mapped"], false);
+        assert_eq!(entry["count"], serde_json::Value::Null);
+        assert_eq!(entry["derived_by_config"], false);
+    }
+
+    #[test]
+    fn summary_unmapped_namespaces_matches_namespace_count() {
+        let p = cluster_admin_principal();
+        let v = build_identity_scope_payload(&p, &["a".into(), "b".into(), "c".into()]);
+        assert_eq!(v["summary"]["unmapped_namespaces"], 3);
+        assert_eq!(v["summary"]["identities"], 0);
+        assert_eq!(v["summary"]["actors"], 0);
+        assert_eq!(v["summary"]["spaces"], 0);
+        assert_eq!(v["summary"]["conversations"], 0);
+    }
+
+    #[test]
+    fn identity_scope_arrays_are_empty_in_phase_1() {
+        // Phase 1: plugin-side concepts not surfaced. Dashboard reads
+        // these as arrays; empty is the correct Phase-1 value.
+        let p = pinned_tenant_principal();
+        let v = build_identity_scope_payload(&p, &["acme".into()]);
+        for key in ["identities", "actors", "spaces", "conversations"] {
+            assert_eq!(
+                v["identity_scope"][key],
+                serde_json::json!([]),
+                "identity_scope.{key} must be []"
+            );
+        }
+    }
+}
+
+// ── Issue #39 Phase 1 — e2e tests against the production router ─────
+//
+// Per issue #34 discipline, integration tests must exercise the real
+// `crate::http_gateway::router(state)` and the real auth middleware,
+// not mock handlers. tests/http_integration.rs can't reach production
+// code (bin-only crate), so e2e tests for the new Principal-based
+// endpoints live in src/ as `#[cfg(test)] mod` blocks.
+#[cfg(test)]
+pub(crate) mod e2e_test_support {
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
+    use crate::auth::ControlDbAuthProvider;
+    use crate::control::ControlDb;
+    use crate::server::AppState;
+
+    /// Bundles the live state + raw token + paths so tests can hit the
+    /// router with a real Bearer and tear down cleanly on drop.
+    pub struct E2eFixture {
+        pub state: Arc<AppState>,
+        pub raw_token: String,
+        pub tenant_namespace: String,
+        // Held to keep the data_dir alive until tests finish.
+        pub _tmp: tempfile::TempDir,
+    }
+
+    /// Build a real `AppState` against a tempdir. Wires:
+    /// - control DB with one database row + one issued token
+    /// - `ControlDbAuthProvider` over that control DB
+    /// - real `TenantPool`, `WorkerRegistry`, `AdmissionState`,
+    ///   `LocalSqliteCommitter`, `LocalSqliteJobQueue`, `FaultRegistry`
+    /// - no cluster, no openraft, no control runtime — Phase 1 read
+    ///   endpoints don't need them and stubs avoid spawning runtimes.
+    pub fn build_fixture(tenant_namespace: &str) -> E2eFixture {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let data_dir = tmp.path().to_path_buf();
+
+        let mut cfg = crate::config::ServerConfig::default();
+        cfg.server.data_dir = data_dir.clone();
+
+        // control DB + one tenant + one token
+        let control_path = data_dir.join("control.db");
+        let control = ControlDb::open(&control_path).expect("control db open");
+        let raw_token = crate::auth::generate_token();
+        let token_hash = crate::auth::hash_token(&raw_token);
+        let db_id = control
+            .create_database(tenant_namespace, tenant_namespace)
+            .expect("create_database");
+        control
+            .create_token(&token_hash, db_id, "e2e-test")
+            .expect("create_token");
+        let control = Arc::new(Mutex::new(control));
+
+        let pool = Arc::new(crate::tenant_pool::TenantPool::new(&cfg, None, None));
+        let workers = crate::background::WorkerRegistry::new(&cfg.background);
+        let admission = crate::admission::AdmissionState::new(Default::default());
+        let commit_log: Arc<dyn crate::commit::MutationCommitter> =
+            Arc::new(crate::commit::LocalSqliteCommitter::open_in_memory().expect("commit log"));
+        let jobs: Arc<dyn crate::jobs::JobQueue> =
+            Arc::new(crate::jobs::LocalSqliteJobQueue::open_in_memory().expect("jobs queue"));
+        let auth_provider: Arc<dyn crate::auth::AuthProvider> =
+            Arc::new(ControlDbAuthProvider::new(Arc::clone(&control), None));
+
+        let state = Arc::new(AppState {
+            control,
+            pool,
+            workers,
+            cluster: None,
+            inflight: std::sync::atomic::AtomicU32::new(0),
+            admission,
+            control_runtime: None,
+            commit_log,
+            raft: None,
+            fault_registry: crate::debug::FaultRegistry::new(),
+            jobs,
+            data_dir,
+            auth_provider,
+        });
+
+        E2eFixture {
+            state,
+            raw_token,
+            tenant_namespace: tenant_namespace.to_string(),
+            _tmp: tmp,
+        }
+    }
+
+    /// Helper: GET against the production router and return (status, body bytes).
+    pub async fn get(
+        state: Arc<AppState>,
+        path: &str,
+        bearer: Option<&str>,
+    ) -> (axum::http::StatusCode, axum::body::Bytes) {
+        use axum::body::to_bytes;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = super::router(state);
+        let mut builder = Request::builder().uri(path).method("GET");
+        if let Some(tok) = bearer {
+            builder = builder.header("authorization", format!("Bearer {tok}"));
+        }
+        let req = builder.body(axum::body::Body::empty()).unwrap();
+        let res = app.oneshot(req).await.expect("oneshot");
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 1024 * 1024)
+            .await
+            .expect("body bytes");
+        (status, bytes)
+    }
+}
+
+#[cfg(test)]
+mod identity_scope_e2e {
+    use super::e2e_test_support::{build_fixture, get};
+
+    #[tokio::test]
+    async fn returns_401_when_no_bearer_header() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/identity-scope", None).await;
+        assert_eq!(status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // Structured envelope, not Option-A string.
+        assert_eq!(v["error"]["code"], "unauthenticated");
+        assert!(v["error"]["message"].is_string());
+    }
+
+    #[tokio::test]
+    async fn returns_401_when_token_is_unknown() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/identity-scope",
+            Some("ydb_definitely_not_a_real_token"),
+        )
+        .await;
+        assert_eq!(status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn returns_200_with_dashboard_shape_for_valid_tenant_token() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/identity-scope", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Top-level keys match the dashboard contract.
+        for key in [
+            "schema_version",
+            "principal",
+            "effective_scope",
+            "identity_scope",
+            "namespace_inventory",
+            "summary",
+        ] {
+            assert!(v.get(key).is_some(), "missing top-level key `{key}`");
+        }
+
+        // Principal: tenant-pinned, not admin.
+        assert_eq!(v["principal"]["kind"], "token");
+        assert_eq!(v["principal"]["is_admin"], false);
+        let id = v["principal"]["id"].as_str().unwrap();
+        assert!(id.starts_with("tok_"), "principal.id should be hashed-form");
+        assert!(
+            !id.contains(&fx.raw_token),
+            "raw token must not appear in principal.id"
+        );
+
+        // Tenant principal sees exactly its own namespace.
+        assert_eq!(
+            v["effective_scope"]["namespaces"],
+            serde_json::json!([fx.tenant_namespace.as_str()])
+        );
+        assert_eq!(v["effective_scope"]["admin"], false);
+
+        // Permissions: full data-plane set, no admin.
+        let perms: Vec<&str> = v["effective_scope"]["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|x| x.as_str())
+            .collect();
+        for needed in [
+            "memory:read",
+            "memory:write",
+            "memory:recall",
+            "memory:forget",
+        ] {
+            assert!(
+                perms.contains(&needed),
+                "missing permission `{needed}` (got {perms:?})"
+            );
+        }
+        assert!(!perms.contains(&"admin"));
+
+        // namespace_inventory has the single visible entry with full shape.
+        let inv = v["namespace_inventory"].as_array().unwrap();
+        assert_eq!(inv.len(), 1);
+        assert_eq!(inv[0]["namespace"], fx.tenant_namespace);
+        assert_eq!(inv[0]["mapped"], false);
+        assert_eq!(inv[0]["count"], serde_json::Value::Null);
+
+        // Plugin-side concept arrays empty in Phase 1.
+        for key in ["identities", "actors", "spaces", "conversations"] {
+            assert_eq!(
+                v["identity_scope"][key],
+                serde_json::json!([]),
+                "identity_scope.{key} must be []"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_token_never_appears_in_response_body() {
+        // Explicit defense-in-depth assertion: even if the handler is
+        // refactored, the raw bearer must not leak into any field.
+        let fx = build_fixture("acme");
+        let (_status, body) =
+            get(fx.state.clone(), "/v1/identity-scope", Some(&fx.raw_token)).await;
+        let s = std::str::from_utf8(&body).unwrap();
+        assert!(
+            !s.contains(&fx.raw_token),
+            "raw bearer token leaked into response body"
+        );
+    }
+}
+
+#[cfg(test)]
+mod memories_list_tests {
+    use super::*;
+    use crate::auth::{Principal, Scope, ScopeSet};
+
+    fn pinned(ns: &str) -> Principal {
+        Principal::new("tok_abcd1234")
+            .with_tenant(ns)
+            .with_scopes(ScopeSet::from_iter([
+                Scope::Read,
+                Scope::Write,
+                Scope::Recall,
+                Scope::Forget,
+            ]))
+    }
+
+    // ── unix_to_iso ─────────────────────────────────────────────────
+
+    #[test]
+    fn unix_to_iso_epoch_zero_is_utc_1970() {
+        let s = unix_to_iso(0.0).expect("convert");
+        assert_eq!(s, "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn unix_to_iso_rejects_nan_and_infinity() {
+        assert!(unix_to_iso(f64::NAN).is_none());
+        assert!(unix_to_iso(f64::INFINITY).is_none());
+        assert!(unix_to_iso(f64::NEG_INFINITY).is_none());
+    }
+
+    #[test]
+    fn unix_to_iso_truncates_to_seconds() {
+        // SecondsFormat::Secs strips sub-second precision so the
+        // dashboard sees a stable string regardless of how the engine
+        // wrote the timestamp.
+        let s = unix_to_iso(1_700_000_000.123).expect("convert");
+        assert!(
+            !s.contains('.'),
+            "iso form should not include fraction: {s}"
+        );
+    }
+
+    // ── memory_to_dashboard_row ─────────────────────────────────────
+
+    fn sample_memory() -> yantrikdb::Memory {
+        yantrikdb::Memory {
+            rid: "mem_abc".into(),
+            memory_type: "fact".into(),
+            text: "the sky is blue".into(),
+            created_at: 1_700_000_000.0,
+            importance: 0.7,
+            valence: 0.0,
+            half_life: 86_400.0,
+            last_access: 1_700_000_100.0,
+            access_count: 3,
+            consolidation_status: "active".into(),
+            storage_tier: "hot".into(),
+            consolidated_into: None,
+            metadata: serde_json::json!({"a": 1}),
+            namespace: "acme".into(),
+            certainty: 0.9,
+            domain: "general".into(),
+            source: "user".into(),
+            emotional_state: None,
+            session_id: None,
+            due_at: None,
+            temporal_kind: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_row_has_all_25_required_keys() {
+        // Dashboard reads 25 specific top-level keys per the fixture.
+        // Phase 1 may emit null for some, but every key must be present.
+        let row = memory_to_dashboard_row(&sample_memory());
+        for key in [
+            "rid",
+            "type",
+            "text",
+            "created_at",
+            "created_at_iso",
+            "updated_at",
+            "updated_at_iso",
+            "importance",
+            "half_life",
+            "last_access",
+            "access_count",
+            "valence",
+            "consolidated_into",
+            "consolidation_status",
+            "storage_tier",
+            "metadata_json",
+            "namespace",
+            "certainty",
+            "domain",
+            "source",
+            "emotional_state",
+            "session_id",
+            "due_at",
+            "temporal_kind",
+            "tombstone_reason",
+            "embedding_model",
+            "embedding_bytes",
+        ] {
+            assert!(row.get(key).is_some(), "missing dashboard key `{key}`");
+        }
+    }
+
+    #[test]
+    fn dashboard_row_renames_memory_type_to_type() {
+        // Engine: `memory_type`. Dashboard: `type`. Wire contract.
+        let row = memory_to_dashboard_row(&sample_memory());
+        assert_eq!(row["type"], "fact");
+        assert!(
+            row.get("memory_type").is_none(),
+            "must not surface engine field name"
+        );
+    }
+
+    #[test]
+    fn dashboard_row_renames_metadata_to_metadata_json() {
+        let row = memory_to_dashboard_row(&sample_memory());
+        assert_eq!(row["metadata_json"], serde_json::json!({"a": 1}));
+        assert!(
+            row.get("metadata").is_none(),
+            "must not surface engine field name"
+        );
+    }
+
+    #[test]
+    fn dashboard_row_phase_1_nulls() {
+        // Fields the engine doesn't surface today emit null. If a
+        // future engine bump populates them, the assertion needs to be
+        // updated alongside.
+        let row = memory_to_dashboard_row(&sample_memory());
+        for key in [
+            "updated_at",
+            "updated_at_iso",
+            "tombstone_reason",
+            "embedding_model",
+            "embedding_bytes",
+        ] {
+            assert_eq!(
+                row[key],
+                serde_json::Value::Null,
+                "Phase 1: `{key}` must be null"
+            );
+        }
+    }
+
+    #[test]
+    fn dashboard_row_created_at_iso_matches_unix() {
+        let row = memory_to_dashboard_row(&sample_memory());
+        let iso = row["created_at_iso"].as_str().unwrap();
+        // 1_700_000_000 UTC = 2023-11-14T22:13:20Z
+        assert_eq!(iso, "2023-11-14T22:13:20Z");
+    }
+
+    // ── validate_memories_params ────────────────────────────────────
+
+    fn body_field<'a>(err: &'a AppError, field: &str) -> &'a serde_json::Value {
+        &err.1 .0["error"][field]
+    }
+
+    #[test]
+    fn validate_defaults_when_params_empty() {
+        let p = pinned("acme");
+        let params = MemoriesListParams::default();
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.effective_namespace, "acme");
+        assert_eq!(out.limit, MEMORIES_DEFAULT_LIMIT);
+        assert_eq!(out.offset, 0);
+        assert_eq!(out.sort_by, "created_at");
+    }
+
+    #[test]
+    fn validate_rejects_status_other_than_active() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            status: Some("tombstoned".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(body_field(&err, "code"), "invalid_query_parameter");
+    }
+
+    #[test]
+    fn validate_accepts_explicit_status_active() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            status: Some("active".into()),
+            ..Default::default()
+        };
+        assert!(validate_memories_params(&p, &params).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_text_search_q() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            q: Some("anything".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_rejects_source_filter() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            source: Some("user".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_rejects_phase_2_sort_with_specific_message() {
+        // `updated_at` is in the dashboard spec but engine v0.7.x
+        // can't honor it. Surface the gap explicitly.
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            sort: Some("updated_at".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(body_field(&err, "message")
+            .as_str()
+            .unwrap()
+            .contains("Phase 1"));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_sort() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            sort: Some("bogus".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_accepts_each_supported_sort() {
+        let p = pinned("acme");
+        for sort in MEMORIES_SUPPORTED_SORTS {
+            let params = MemoriesListParams {
+                sort: Some((*sort).into()),
+                ..Default::default()
+            };
+            let out = validate_memories_params(&p, &params).expect("must accept");
+            assert_eq!(out.sort_by, *sort);
+        }
+    }
+
+    #[test]
+    fn validate_caps_limit_at_200() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            limit: Some(500),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        // Message names the cap so callers know how to fix.
+        assert!(body_field(&err, "message")
+            .as_str()
+            .unwrap()
+            .contains(&MEMORIES_MAX_LIMIT.to_string()));
+    }
+
+    #[test]
+    fn validate_rejects_limit_zero() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            limit: Some(0),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_rejects_cross_namespace_query_for_pinned_token() {
+        // resolve_namespace catches this; the validator just plumbs through.
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            namespace: Some("not-acme".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(body_field(&err, "code"), "namespace_not_found");
+    }
+
+    #[test]
+    fn validate_accepts_matching_namespace_query_for_pinned_token() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            namespace: Some("acme".into()),
+            ..Default::default()
+        };
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.effective_namespace, "acme");
+    }
+}
+
+#[cfg(test)]
+mod memories_list_e2e {
+    use super::e2e_test_support::{build_fixture, get};
+
+    /// Plant a memory directly via the engine handle so the e2e test
+    /// has rows to list without needing a real embedder.
+    async fn plant_memory(
+        state: std::sync::Arc<crate::server::AppState>,
+        namespace: &str,
+        text: &str,
+    ) {
+        // Look up the database for the namespace and grab its engine.
+        let db = {
+            let ctrl = state.control.lock();
+            ctrl.get_database(namespace).unwrap().unwrap()
+        };
+        let engine = state.pool.get_engine(&db).unwrap();
+        let text_owned = text.to_string();
+        let namespace_owned = namespace.to_string();
+        tokio::task::spawn_blocking(move || {
+            // Fake fixed-dim embedding — engine doesn't validate vector
+            // content for list_memories, only that the row exists.
+            let embedding = vec![0.0_f32; 384];
+            engine
+                .record(
+                    &text_owned,
+                    "fact",
+                    0.5,
+                    0.0,
+                    86_400.0,
+                    &serde_json::json!({}),
+                    &embedding,
+                    &namespace_owned,
+                    1.0,
+                    "general",
+                    "test",
+                    None,
+                )
+                .unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn returns_401_when_no_bearer_header() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/memories", None).await;
+        assert_eq!(status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn returns_400_on_unsupported_q_filter() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memories?q=anything",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 400);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "invalid_query_parameter");
+    }
+
+    #[tokio::test]
+    async fn returns_403_when_pinned_token_asks_for_other_namespace() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memories?namespace=secret",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 403);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "namespace_not_found");
+    }
+
+    #[tokio::test]
+    async fn returns_empty_page_with_envelope_when_no_memories() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/memories", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], 0);
+        assert_eq!(v["limit"], 50);
+        assert_eq!(v["offset"], 0);
+        assert_eq!(v["items"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn returns_planted_memory_with_dashboard_row_shape() {
+        let fx = build_fixture("acme");
+        plant_memory(fx.state.clone(), "acme", "hello world").await;
+
+        let (status, body) = get(fx.state.clone(), "/v1/memories", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], 1);
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["text"], "hello world");
+        assert_eq!(items[0]["type"], "fact");
+        assert_eq!(items[0]["namespace"], "acme");
+        // Phase-1 null fields surface as null, not missing.
+        assert_eq!(items[0]["updated_at"], serde_json::Value::Null);
+        assert_eq!(items[0]["embedding_model"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn offset_paginates_planted_rows() {
+        let fx = build_fixture("acme");
+        for i in 0..3 {
+            plant_memory(fx.state.clone(), "acme", &format!("memory-{i}")).await;
+        }
+        // First page: limit=2 offset=0
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memories?limit=2&offset=0",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], 3);
+        assert_eq!(v["limit"], 2);
+        assert_eq!(v["offset"], 0);
+        assert_eq!(v["items"].as_array().unwrap().len(), 2);
+
+        // Second page: limit=2 offset=2 → 1 row
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memories?limit=2&offset=2",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], 3);
+        assert_eq!(v["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn limit_over_200_is_rejected() {
+        let fx = build_fixture("acme");
+        let (status, _body) = get(
+            fx.state.clone(),
+            "/v1/memories?limit=999",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 400);
+    }
+}
+
+#[cfg(test)]
+mod memory_get_e2e {
+    use super::e2e_test_support::{build_fixture, get};
+
+    async fn plant_memory(
+        state: std::sync::Arc<crate::server::AppState>,
+        namespace: &str,
+        text: &str,
+    ) -> String {
+        let db = {
+            let ctrl = state.control.lock();
+            ctrl.get_database(namespace).unwrap().unwrap()
+        };
+        let engine = state.pool.get_engine(&db).unwrap();
+        let text_owned = text.to_string();
+        let namespace_owned = namespace.to_string();
+        tokio::task::spawn_blocking(move || {
+            let embedding = vec![0.0_f32; 384];
+            engine
+                .record(
+                    &text_owned,
+                    "fact",
+                    0.5,
+                    0.0,
+                    86_400.0,
+                    &serde_json::json!({}),
+                    &embedding,
+                    &namespace_owned,
+                    1.0,
+                    "general",
+                    "test",
+                    None,
+                )
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn returns_401_when_no_bearer_header() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/memory/anything", None).await;
+        assert_eq!(status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn returns_404_for_unknown_rid() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memory/mem_does_not_exist",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 404);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "memory_not_found");
+    }
+
+    #[tokio::test]
+    async fn returns_planted_memory_with_dashboard_shape_and_conditional_arrays() {
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "the sky is blue").await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["rid"], rid);
+        assert_eq!(v["text"], "the sky is blue");
+        assert_eq!(v["type"], "fact");
+        assert_eq!(v["namespace"], "acme");
+        // Phase-1 conditional includes: empty arrays, not missing.
+        assert_eq!(v["consolidation_sources"], serde_json::json!([]));
+        assert_eq!(v["entities"], serde_json::json!([]));
+        assert_eq!(v["claims"], serde_json::json!([]));
+        // Phase-1 nulls from the row mapper still apply.
+        assert_eq!(v["updated_at"], serde_json::Value::Null);
+        assert_eq!(v["embedding_model"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn returns_403_when_pinned_token_asks_for_other_namespace() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memory/mem_anything?namespace=secret",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 403);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "namespace_not_found");
+    }
+
+    #[tokio::test]
+    async fn min_seq_zero_passes_in_single_node_mode() {
+        // Single-node has no openraft assembly → no replica drift →
+        // every min_seq value is satisfied trivially. This is the
+        // documented Phase-1 behavior. Cluster-mode handling lives
+        // behind state.raft.is_some().
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "hello").await;
+        let (status, _body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}?min_seq=0"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+    }
+
+    #[tokio::test]
+    async fn min_seq_huge_value_also_passes_in_single_node_mode() {
+        // Same as above — pin the contract: single-node satisfies any
+        // min_seq because there is no replication lag concept.
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "hello").await;
+        let (status, _body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}?min_seq=9999999"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+    }
+
+    #[tokio::test]
+    async fn cross_namespace_request_via_namespace_param_is_403() {
+        // The handler enforces resolve_namespace BEFORE doing the
+        // engine fetch. A pinned token asking for ?namespace=other
+        // never reaches the engine — 403 namespace_not_found.
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "hello").await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}?namespace=other"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 403);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "namespace_not_found");
+    }
+}
+
+#[cfg(test)]
+mod fts5_fallback_tests {
+    use super::annotate_fts5_fallback;
+    use axum::Json;
+    use serde_json::{json, Value};
+
+    fn annotate(body: Value) -> Value {
+        let mut wrapped = Json(body);
+        annotate_fts5_fallback(&mut wrapped);
+        wrapped.0
+    }
+
+    #[test]
+    fn no_results_emits_null_fallback() {
+        // Empty result set: no FTS5 fallback was triggered (nothing
+        // matched anywhere). Field must still appear so dashboards
+        // can rely on presence.
+        let out = annotate(json!({"results": [], "total": 0}));
+        assert_eq!(out["fallback"], Value::Null);
+        assert_eq!(out["total"], 0);
+    }
+
+    #[test]
+    fn semantic_only_results_emit_null_fallback() {
+        // why_retrieved doesn't include "keyword_match" → semantic was
+        // sufficient → fallback is null.
+        let out = annotate(json!({
+            "results": [
+                {"rid": "mem_1", "why_retrieved": ["semantic"]},
+                {"rid": "mem_2", "why_retrieved": ["semantic", "graph-connected via Alice"]},
+            ],
+            "total": 2,
+        }));
+        assert_eq!(out["fallback"], Value::Null);
+    }
+
+    #[test]
+    fn any_keyword_match_emits_fts5_keyword() {
+        // The dashboard contract: presence of any FTS5-sourced row
+        // means the search degraded to keyword matching. Wire string
+        // is pinned because the dashboard reads it literally.
+        let out = annotate(json!({
+            "results": [
+                {"rid": "mem_1", "why_retrieved": ["keyword_match"]},
+                {"rid": "mem_2", "why_retrieved": ["semantic"]},
+            ],
+            "total": 2,
+        }));
+        assert_eq!(out["fallback"], "fts5_keyword");
+    }
+
+    #[test]
+    fn keyword_match_on_only_row_emits_fts5_keyword() {
+        let out = annotate(json!({
+            "results": [{"rid": "mem_1", "why_retrieved": ["keyword_match"]}],
+            "total": 1,
+        }));
+        assert_eq!(out["fallback"], "fts5_keyword");
+    }
+
+    #[test]
+    fn missing_why_retrieved_treated_as_no_keyword_match() {
+        // Defensive: if a future engine version stops emitting
+        // why_retrieved, default to "no fallback" rather than panic.
+        let out = annotate(json!({
+            "results": [{"rid": "mem_1"}],
+            "total": 1,
+        }));
+        assert_eq!(out["fallback"], Value::Null);
+    }
+
+    #[test]
+    fn non_object_body_is_left_alone() {
+        // Sanity: passing an array instead of an object doesn't panic;
+        // the annotator no-ops because there's no top-level slot to
+        // insert into.
+        let out = annotate(json!([1, 2, 3]));
+        // Array unchanged, no fallback key.
+        assert!(out.is_array());
+    }
+
+    #[test]
+    fn existing_fallback_value_is_overwritten() {
+        // The annotator is authoritative — if a caller pre-set a
+        // fallback field, we replace it with our computed value so
+        // there's only one source of truth.
+        let out = annotate(json!({
+            "results": [{"rid": "mem_1", "why_retrieved": ["keyword_match"]}],
+            "total": 1,
+            "fallback": "stale-marker",
+        }));
+        assert_eq!(out["fallback"], "fts5_keyword");
+    }
+
+    #[test]
+    fn preserves_other_top_level_fields() {
+        let out = annotate(json!({
+            "results": [],
+            "total": 0,
+            "summary": {"top_similarity": 0.9},
+        }));
+        assert_eq!(out["total"], 0);
+        assert_eq!(out["summary"]["top_similarity"], 0.9);
+        assert!(out.get("fallback").is_some());
+    }
+}
+
+// ── Issue #39 task 201: dashboard contract fixture-asserted tests ───
+//
+// Captures wysie's dashboard JSON shape as a set of fixture files
+// under src/api/fixtures/. Each test queries the production router
+// via the e2e helper, then asserts SHAPE compatibility with the
+// fixture (key presence + JSON type discriminant), not value
+// equality.
+//
+// Why shape-not-value: timestamps, RIDs, and IDs vary per run. But
+// the dashboard reads specific KEYS at specific NESTING — those are
+// the wire contract. If field names drift, this test fails loud.
+//
+// Null in the fixture is treated as a wildcard (matches any actual
+// type) so Phase-1 null fields can be filled in by future engine
+// extensions without rewriting the fixture.
+
+#[cfg(test)]
+mod contract_fixture_tests {
+    use super::e2e_test_support::{build_fixture, get};
+    use serde_json::Value;
+
+    const FIXTURE_IDENTITY_SCOPE_PINNED: &str =
+        include_str!("api/fixtures/v1_identity_scope_pinned.json");
+    const FIXTURE_MEMORIES_WITH_ROW: &str = include_str!("api/fixtures/v1_memories_with_row.json");
+    const FIXTURE_MEMORY_DETAIL: &str = include_str!("api/fixtures/v1_memory_detail.json");
+
+    /// Assert that `actual` is shape-compatible with `expected`:
+    /// - For objects: every key in `expected` MUST be present in
+    ///   `actual` at the same nesting; values are matched recursively.
+    /// - For arrays: if both have at least one element, the first
+    ///   element shapes are matched. Empty arrays match each other.
+    /// - For primitives: type discriminants must match.
+    ///   `Value::Null` in `expected` is a wildcard (matches anything)
+    ///   so Phase-1 null fields can be populated by future engine
+    ///   revisions without breaking the fixture.
+    ///
+    /// `path` is the dotted JSON pointer reported in assertion
+    /// failures so the offending key is easy to find.
+    fn assert_shape_matches(actual: &Value, expected: &Value, path: &str) {
+        // Null in fixture = wildcard for typed values (forward-compat
+        // headroom). Null in actual = forward-compat with fixtures
+        // that asserted a typed primitive but engine is still ramping
+        // to that. Both directions intentional.
+        if expected.is_null() || actual.is_null() {
+            return;
+        }
+        match (actual, expected) {
+            (Value::Object(a), Value::Object(e)) => {
+                for (k, ev) in e {
+                    let av = a.get(k).unwrap_or_else(|| {
+                        panic!(
+                            "missing key `{path}.{k}` in actual response; got keys: {:?}",
+                            a.keys().collect::<Vec<_>>()
+                        )
+                    });
+                    let next_path = if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    };
+                    assert_shape_matches(av, ev, &next_path);
+                }
+            }
+            (Value::Array(a), Value::Array(e)) => {
+                if let (Some(av), Some(ev)) = (a.first(), e.first()) {
+                    assert_shape_matches(av, ev, &format!("{path}[0]"));
+                }
+                // Empty fixture array: actual may have any contents,
+                // including nothing. Empty actual: matches any
+                // fixture array (Phase-1 conditional-includes
+                // surface as []).
+            }
+            (a, e) => {
+                let same_kind = std::mem::discriminant(a) == std::mem::discriminant(e);
+                // Treat all JSON numbers as one type — fixtures may
+                // write `1700000000.0` while the engine emits an
+                // integer for `access_count`.
+                let numeric = a.is_number() && e.is_number();
+                assert!(
+                    same_kind || numeric,
+                    "type mismatch at `{path}`: actual={a:?} fixture={e:?}",
+                );
+            }
+        }
+    }
+
+    async fn plant_memory(
+        state: std::sync::Arc<crate::server::AppState>,
+        namespace: &str,
+        text: &str,
+    ) -> String {
+        let db = {
+            let ctrl = state.control.lock();
+            ctrl.get_database(namespace).unwrap().unwrap()
+        };
+        let engine = state.pool.get_engine(&db).unwrap();
+        let text_owned = text.to_string();
+        let namespace_owned = namespace.to_string();
+        tokio::task::spawn_blocking(move || {
+            let embedding = vec![0.0_f32; 384];
+            engine
+                .record(
+                    &text_owned,
+                    "fact",
+                    0.5,
+                    0.0,
+                    86_400.0,
+                    &serde_json::json!({}),
+                    &embedding,
+                    &namespace_owned,
+                    1.0,
+                    "general",
+                    "test",
+                    None,
+                )
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn identity_scope_response_matches_dashboard_fixture() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/identity-scope", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let actual: Value = serde_json::from_slice(&body).expect("parse response");
+        let expected: Value =
+            serde_json::from_str(FIXTURE_IDENTITY_SCOPE_PINNED).expect("parse fixture");
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[tokio::test]
+    async fn memories_response_matches_dashboard_fixture() {
+        let fx = build_fixture("acme");
+        plant_memory(fx.state.clone(), "acme", "fixture seed").await;
+        let (status, body) = get(fx.state.clone(), "/v1/memories", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let actual: Value = serde_json::from_slice(&body).expect("parse response");
+        let expected: Value =
+            serde_json::from_str(FIXTURE_MEMORIES_WITH_ROW).expect("parse fixture");
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[tokio::test]
+    async fn memory_detail_response_matches_dashboard_fixture() {
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "fixture seed").await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let actual: Value = serde_json::from_slice(&body).expect("parse response");
+        let expected: Value = serde_json::from_str(FIXTURE_MEMORY_DETAIL).expect("parse fixture");
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    // ── Self-tests for assert_shape_matches (the assertion needs to
+    //    be at least as careful as the contract it's enforcing) ──────
+
+    #[test]
+    fn shape_passes_on_identical_object() {
+        let v = serde_json::json!({"a": 1, "b": "x"});
+        assert_shape_matches(&v, &v, "");
+    }
+
+    #[test]
+    #[should_panic(expected = "missing key")]
+    fn shape_fails_on_missing_key_in_actual() {
+        let actual = serde_json::json!({"a": 1});
+        let expected = serde_json::json!({"a": 1, "b": "x"});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    fn shape_ignores_extra_keys_in_actual() {
+        // Actual can have MORE keys than fixture — fixture is the
+        // floor, not the ceiling. New fields land additively.
+        let actual = serde_json::json!({"a": 1, "b": "x", "c": "extra"});
+        let expected = serde_json::json!({"a": 1, "b": "x"});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    #[should_panic(expected = "type mismatch")]
+    fn shape_fails_on_type_mismatch() {
+        let actual = serde_json::json!({"a": "string"});
+        let expected = serde_json::json!({"a": 1});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    fn shape_passes_when_actual_is_int_and_fixture_is_float() {
+        // Both are JSON numbers; the engine may emit an integer where
+        // the fixture wrote a float (e.g. access_count). Don't break
+        // on that.
+        let actual = serde_json::json!({"n": 3});
+        let expected = serde_json::json!({"n": 1.5});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    fn shape_treats_null_fixture_as_wildcard() {
+        // Fixture says "null today, anything tomorrow" — used for
+        // Phase-1 nulls that future engine revs may populate.
+        let actual = serde_json::json!({"x": "actual string"});
+        let expected = serde_json::json!({"x": null});
+        assert_shape_matches(&actual, &expected, "");
+    }
+
+    #[test]
+    fn shape_treats_null_actual_as_wildcard_against_typed_fixture() {
+        // Inverse: a Phase-1 handler emits null today but the fixture
+        // captured a typed example. Don't break.
+        let actual = serde_json::json!({"x": null});
+        let expected = serde_json::json!({"x": "example"});
+        assert_shape_matches(&actual, &expected, "");
     }
 }

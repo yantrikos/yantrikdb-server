@@ -5085,7 +5085,7 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb-server"
-version = "0.8.16"
+version = "0.8.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5093,6 +5093,7 @@ dependencies = [
  "axum-extra",
  "blake3",
  "bytes",
+ "chrono",
  "clap",
  "console-subscriber",
  "fastembed",

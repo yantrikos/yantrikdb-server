@@ -66,6 +66,13 @@ pub struct AppState {
     /// `/v1/admin/migrations` endpoint enumerates commit_log.sqlite and
     /// jobs.sqlite from this path).
     pub data_dir: std::path::PathBuf,
+    /// Issue #39: RFC 014-B [`AuthProvider`](crate::auth::AuthProvider)
+    /// used by the [`crate::auth::middleware`] layer to resolve a Bearer
+    /// token to a [`crate::auth::Principal`]. New `/v1/*` routes that
+    /// use the typed scope substrate go through this; legacy routes
+    /// still authenticate inline via `control.tokens` (same data, no
+    /// `Principal`).
+    pub auth_provider: Arc<dyn auth::AuthProvider>,
 }
 
 /// Maximum concurrent blocking operations before shedding load.

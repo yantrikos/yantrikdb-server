@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "principal": {
+    "kind": "token",
+    "id": "tok_0123456789abcdef",
+    "is_admin": false
+  },
+  "effective_scope": {
+    "namespaces": ["acme"],
+    "owners": [],
+    "permissions": ["memory:read", "memory:write", "memory:recall", "memory:forget"],
+    "admin": false
+  },
+  "identity_scope": {
+    "identities": [],
+    "actors": [],
+    "spaces": [],
+    "conversations": []
+  },
+  "namespace_inventory": [
+    {
+      "namespace": "acme",
+      "count": null,
+      "mapped": false,
+      "mapped_scope": null,
+      "mapped_to": null,
+      "mapping_type": null,
+      "mapping_source": null,
+      "derived_by_config": false
+    }
+  ],
+  "summary": {
+    "identities": 0,
+    "actors": 0,
+    "spaces": 0,
+    "conversations": 0,
+    "unmapped_namespaces": 1
+  }
+}

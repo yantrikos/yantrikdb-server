@@ -3631,6 +3631,153 @@ async fn memories_list(
     })))
 }
 
+// ── /v1/memory/{rid} — point read (issue #39 Phase 1 task 197) ──────
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct MemoryGetParams {
+    namespace: Option<String>,
+    /// Read-your-writes hint. If supplied, the server checks the local
+    /// node's applied seq against this value before reading. If the
+    /// local replica is behind, returns 412 `replica_behind` so clients
+    /// can retry with backoff or route to the leader. No wait primitive
+    /// is available in engine v0.7.17, so this is reject-not-wait
+    /// semantics — the dashboard contract documents 412 as the
+    /// behavior, which matches.
+    min_seq: Option<u64>,
+}
+
+/// Compare a caller's `min_seq` against the local node's applied seq.
+/// Returns `Err(412 replica_behind)` if the replica hasn't caught up,
+/// `Ok(())` otherwise.
+///
+/// Single-node mode (no `state.raft`) always satisfies the check —
+/// there is no replication lag to wait for.
+fn check_min_seq(state: &AppState, min_seq: u64) -> Result<(), AppError> {
+    use crate::api::errors::{api_error, ApiErrorCode};
+
+    let Some(raft) = state.raft.as_ref() else {
+        return Ok(());
+    };
+    let metrics = raft.raft.metrics().borrow().clone();
+    let applied = metrics.last_applied.as_ref().map(|l| l.index).unwrap_or(0);
+    if applied < min_seq {
+        return Err(api_error(
+            StatusCode::PRECONDITION_FAILED,
+            ApiErrorCode::ReplicaBehind,
+            format!(
+                "replica at seq {applied}, requested min_seq {min_seq}; retry with backoff or route to the leader"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// `GET /v1/memory/{rid}` — point read with conditional includes + RYW.
+///
+/// Auth: requires `Scope::Read`. The `namespace` query param narrows
+/// to the principal's scope; the returned memory's `namespace` column
+/// must also match (otherwise 404, treating cross-namespace reads as
+/// "not visible").
+///
+/// Phase-1 conditional arrays (`consolidation_sources`, `entities`,
+/// `claims`) emit empty `[]`. Engine v0.7.x doesn't expose public
+/// readers for these tables; populating them is a follow-up engine
+/// extension. Dashboard tolerates empty arrays per its degradation
+/// pattern.
+async fn memory_get(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::auth::Principal>,
+    AxumPath(rid): AxumPath<String>,
+    Query(params): Query<MemoryGetParams>,
+) -> AppResult {
+    use crate::api::access;
+    use crate::api::errors::{api_error, ApiErrorCode};
+    use crate::auth::Scope;
+
+    access::require_scope(&principal, Scope::Read)?;
+    let effective_namespace = access::resolve_namespace(&principal, params.namespace.as_deref())?;
+
+    if let Some(min_seq) = params.min_seq {
+        check_min_seq(&state, min_seq)?;
+    }
+
+    let db_record = {
+        let ctrl = state.control.lock();
+        ctrl.get_database(&effective_namespace)
+            .map_err(|e| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ApiErrorCode::InternalError,
+                    format!("control db lookup failed: {e}"),
+                )
+            })?
+            .ok_or_else(|| {
+                api_error(
+                    StatusCode::FORBIDDEN,
+                    ApiErrorCode::NamespaceNotFound,
+                    format!("namespace not found: {effective_namespace}"),
+                )
+            })?
+    };
+
+    let engine = state.pool.get_engine(&db_record).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("engine load failed: {e}"),
+        )
+    })?;
+
+    let rid_for_engine = rid.clone();
+    let engine_clone = engine.clone();
+    let res = tokio::task::spawn_blocking(move || engine_clone.get(&rid_for_engine))
+        .await
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiErrorCode::InternalError,
+                format!("blocking thread join failed: {e}"),
+            )
+        })?;
+    let memory = res.map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("engine get failed: {e}"),
+        )
+    })?;
+
+    let Some(memory) = memory else {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            ApiErrorCode::MemoryNotFound,
+            format!("memory not found: {rid}"),
+        ));
+    };
+
+    // Cross-namespace requests get the same 404 as missing rids — we
+    // never confirm a memory's existence outside the caller's scope.
+    if memory.namespace != effective_namespace {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            ApiErrorCode::MemoryNotFound,
+            format!("memory not found: {rid}"),
+        ));
+    }
+
+    let mut row = memory_to_dashboard_row(&memory);
+    // Phase-1 conditional includes: empty arrays. Engine extensions
+    // populate these in a follow-up; dashboard reads empty as "no data
+    // for this rid", which is structurally honest while empty.
+    if let Some(obj) = row.as_object_mut() {
+        obj.insert("consolidation_sources".into(), json!([]));
+        obj.insert("entities".into(), json!([]));
+        obj.insert("claims".into(), json!([]));
+    }
+
+    Ok(Json(row))
+}
+
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.admission.cfg.max_request_body_bytes;
@@ -3652,6 +3799,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let principal_auth_router: Router = Router::new()
         .route("/v1/identity-scope", get(identity_scope))
         .route("/v1/memories", get(memories_list))
+        .route("/v1/memory/{rid}", get(memory_get))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_authenticated_principal,
@@ -4953,5 +5101,157 @@ mod memories_list_e2e {
         )
         .await;
         assert_eq!(status, 400);
+    }
+}
+
+#[cfg(test)]
+mod memory_get_e2e {
+    use super::e2e_test_support::{build_fixture, get};
+
+    async fn plant_memory(
+        state: std::sync::Arc<crate::server::AppState>,
+        namespace: &str,
+        text: &str,
+    ) -> String {
+        let db = {
+            let ctrl = state.control.lock();
+            ctrl.get_database(namespace).unwrap().unwrap()
+        };
+        let engine = state.pool.get_engine(&db).unwrap();
+        let text_owned = text.to_string();
+        let namespace_owned = namespace.to_string();
+        tokio::task::spawn_blocking(move || {
+            let embedding = vec![0.0_f32; 384];
+            engine
+                .record(
+                    &text_owned,
+                    "fact",
+                    0.5,
+                    0.0,
+                    86_400.0,
+                    &serde_json::json!({}),
+                    &embedding,
+                    &namespace_owned,
+                    1.0,
+                    "general",
+                    "test",
+                    None,
+                )
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn returns_401_when_no_bearer_header() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/memory/anything", None).await;
+        assert_eq!(status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn returns_404_for_unknown_rid() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memory/mem_does_not_exist",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 404);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "memory_not_found");
+    }
+
+    #[tokio::test]
+    async fn returns_planted_memory_with_dashboard_shape_and_conditional_arrays() {
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "the sky is blue").await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["rid"], rid);
+        assert_eq!(v["text"], "the sky is blue");
+        assert_eq!(v["type"], "fact");
+        assert_eq!(v["namespace"], "acme");
+        // Phase-1 conditional includes: empty arrays, not missing.
+        assert_eq!(v["consolidation_sources"], serde_json::json!([]));
+        assert_eq!(v["entities"], serde_json::json!([]));
+        assert_eq!(v["claims"], serde_json::json!([]));
+        // Phase-1 nulls from the row mapper still apply.
+        assert_eq!(v["updated_at"], serde_json::Value::Null);
+        assert_eq!(v["embedding_model"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn returns_403_when_pinned_token_asks_for_other_namespace() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memory/mem_anything?namespace=secret",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 403);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "namespace_not_found");
+    }
+
+    #[tokio::test]
+    async fn min_seq_zero_passes_in_single_node_mode() {
+        // Single-node has no openraft assembly → no replica drift →
+        // every min_seq value is satisfied trivially. This is the
+        // documented Phase-1 behavior. Cluster-mode handling lives
+        // behind state.raft.is_some().
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "hello").await;
+        let (status, _body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}?min_seq=0"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+    }
+
+    #[tokio::test]
+    async fn min_seq_huge_value_also_passes_in_single_node_mode() {
+        // Same as above — pin the contract: single-node satisfies any
+        // min_seq because there is no replication lag concept.
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "hello").await;
+        let (status, _body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}?min_seq=9999999"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+    }
+
+    #[tokio::test]
+    async fn cross_namespace_request_via_namespace_param_is_403() {
+        // The handler enforces resolve_namespace BEFORE doing the
+        // engine fetch. A pinned token asking for ?namespace=other
+        // never reaches the engine — 403 namespace_not_found.
+        let fx = build_fixture("acme");
+        let rid = plant_memory(fx.state.clone(), "acme", "hello").await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}?namespace=other"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 403);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "namespace_not_found");
     }
 }

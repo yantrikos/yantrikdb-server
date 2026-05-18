@@ -3404,6 +3404,233 @@ async fn identity_scope(
     Ok(Json(build_identity_scope_payload(&principal, &namespaces)))
 }
 
+// ── /v1/memories — list endpoint (issue #39 Phase 1 task 196) ───────
+
+const MEMORIES_DEFAULT_LIMIT: usize = 50;
+const MEMORIES_MAX_LIMIT: usize = 200;
+const MEMORIES_SUPPORTED_SORTS: &[&str] = &["created_at", "importance", "last_access"];
+const MEMORIES_PHASE_2_SORTS: &[&str] = &["updated_at", "access_count", "certainty"];
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct MemoriesListParams {
+    namespace: Option<String>,
+    status: Option<String>,
+    domain: Option<String>,
+    source: Option<String>,
+    memory_type: Option<String>,
+    q: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    sort: Option<String>,
+}
+
+fn unix_to_iso(epoch_seconds: f64) -> Option<String> {
+    if !epoch_seconds.is_finite() {
+        return None;
+    }
+    let secs = epoch_seconds.trunc() as i64;
+    let nanos = ((epoch_seconds.fract().abs()) * 1_000_000_000.0).round() as u32;
+    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nanos.min(999_999_999))?;
+    Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+fn memory_to_dashboard_row(m: &yantrikdb::Memory) -> Value {
+    json!({
+        "rid": m.rid,
+        "type": m.memory_type,
+        "text": m.text,
+        "created_at": m.created_at,
+        "created_at_iso": unix_to_iso(m.created_at),
+        "updated_at": Value::Null,
+        "updated_at_iso": Value::Null,
+        "importance": m.importance,
+        "half_life": m.half_life,
+        "last_access": m.last_access,
+        "access_count": m.access_count,
+        "valence": m.valence,
+        "consolidated_into": m.consolidated_into,
+        "consolidation_status": m.consolidation_status,
+        "storage_tier": m.storage_tier,
+        "metadata_json": m.metadata,
+        "namespace": m.namespace,
+        "certainty": m.certainty,
+        "domain": m.domain,
+        "source": m.source,
+        "emotional_state": m.emotional_state,
+        "session_id": m.session_id,
+        "due_at": m.due_at,
+        "temporal_kind": m.temporal_kind,
+        "tombstone_reason": Value::Null,
+        "embedding_model": Value::Null,
+        "embedding_bytes": Value::Null,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MemoriesListResolved {
+    effective_namespace: String,
+    limit: usize,
+    offset: usize,
+    sort_by: String,
+    domain: Option<String>,
+    memory_type: Option<String>,
+}
+
+fn validate_memories_params(
+    principal: &crate::auth::Principal,
+    params: &MemoriesListParams,
+) -> Result<MemoriesListResolved, AppError> {
+    use crate::api::access;
+    use crate::api::errors::{api_error, ApiErrorCode};
+
+    if let Some(s) = &params.status {
+        if s != "active" {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                ApiErrorCode::InvalidQueryParameter,
+                format!(
+                    "status filter `{s}` is not implemented in Phase 1; only `active` is supported"
+                ),
+            ));
+        }
+    }
+    if params.q.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            "text search filter `q` is not implemented on /v1/memories in Phase 1; use /v1/recall for semantic search",
+        ));
+    }
+    if params.source.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            "source filter is not implemented on /v1/memories in Phase 1",
+        ));
+    }
+
+    let sort_by = params.sort.as_deref().unwrap_or("created_at");
+    if MEMORIES_PHASE_2_SORTS.contains(&sort_by) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            format!(
+                "sort=`{sort_by}` is not implemented in Phase 1; engine v0.7.x supports {MEMORIES_SUPPORTED_SORTS:?}"
+            ),
+        ));
+    }
+    if !MEMORIES_SUPPORTED_SORTS.contains(&sort_by) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            format!(
+                "sort=`{sort_by}` is not a recognized value; allowed: {MEMORIES_SUPPORTED_SORTS:?}"
+            ),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(MEMORIES_DEFAULT_LIMIT);
+    if limit == 0 || limit > MEMORIES_MAX_LIMIT {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            format!("limit must be 1..={MEMORIES_MAX_LIMIT} (got {limit})"),
+        ));
+    }
+    let offset = params.offset.unwrap_or(0);
+
+    let effective_namespace = access::resolve_namespace(principal, params.namespace.as_deref())?;
+
+    Ok(MemoriesListResolved {
+        effective_namespace,
+        limit,
+        offset,
+        sort_by: sort_by.to_string(),
+        domain: params.domain.clone(),
+        memory_type: params.memory_type.clone(),
+    })
+}
+
+async fn memories_list(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::auth::Principal>,
+    Query(params): Query<MemoriesListParams>,
+) -> AppResult {
+    use crate::api::errors::{api_error, ApiErrorCode};
+    use crate::auth::Scope;
+
+    crate::api::access::require_scope(&principal, Scope::Read)?;
+    let resolved = validate_memories_params(&principal, &params)?;
+
+    let db_record = {
+        let ctrl = state.control.lock();
+        ctrl.get_database(&resolved.effective_namespace)
+            .map_err(|e| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ApiErrorCode::InternalError,
+                    format!("control db lookup failed: {e}"),
+                )
+            })?
+            .ok_or_else(|| {
+                api_error(
+                    StatusCode::FORBIDDEN,
+                    ApiErrorCode::NamespaceNotFound,
+                    format!("namespace not found: {}", resolved.effective_namespace),
+                )
+            })?
+    };
+
+    let engine = state.pool.get_engine(&db_record).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("engine load failed: {e}"),
+        )
+    })?;
+
+    let domain = resolved.domain.clone();
+    let memory_type = resolved.memory_type.clone();
+    let effective_namespace = resolved.effective_namespace.clone();
+    let sort_by = resolved.sort_by.clone();
+    let limit = resolved.limit;
+    let offset = resolved.offset;
+    let engine_clone = engine.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        engine_clone.list_memories(
+            limit,
+            offset,
+            domain.as_deref(),
+            memory_type.as_deref(),
+            Some(&effective_namespace),
+            &sort_by,
+        )
+    })
+    .await
+    .map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("blocking thread join failed: {e}"),
+        )
+    })?;
+    let (memories, total) = res.map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+            format!("list_memories failed: {e}"),
+        )
+    })?;
+
+    let items: Vec<Value> = memories.iter().map(memory_to_dashboard_row).collect();
+    Ok(Json(json!({
+        "total": total,
+        "limit": resolved.limit,
+        "offset": resolved.offset,
+        "items": items,
+    })))
+}
+
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.admission.cfg.max_request_body_bytes;
@@ -3424,6 +3651,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     // only — legacy routes still authenticate inline via `resolve_engine`.
     let principal_auth_router: Router = Router::new()
         .route("/v1/identity-scope", get(identity_scope))
+        .route("/v1/memories", get(memories_list))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_authenticated_principal,
@@ -4254,5 +4482,476 @@ mod identity_scope_e2e {
             !s.contains(&fx.raw_token),
             "raw bearer token leaked into response body"
         );
+    }
+}
+
+#[cfg(test)]
+mod memories_list_tests {
+    use super::*;
+    use crate::auth::{Principal, Scope, ScopeSet};
+
+    fn pinned(ns: &str) -> Principal {
+        Principal::new("tok_abcd1234")
+            .with_tenant(ns)
+            .with_scopes(ScopeSet::from_iter([
+                Scope::Read,
+                Scope::Write,
+                Scope::Recall,
+                Scope::Forget,
+            ]))
+    }
+
+    // ── unix_to_iso ─────────────────────────────────────────────────
+
+    #[test]
+    fn unix_to_iso_epoch_zero_is_utc_1970() {
+        let s = unix_to_iso(0.0).expect("convert");
+        assert_eq!(s, "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn unix_to_iso_rejects_nan_and_infinity() {
+        assert!(unix_to_iso(f64::NAN).is_none());
+        assert!(unix_to_iso(f64::INFINITY).is_none());
+        assert!(unix_to_iso(f64::NEG_INFINITY).is_none());
+    }
+
+    #[test]
+    fn unix_to_iso_truncates_to_seconds() {
+        // SecondsFormat::Secs strips sub-second precision so the
+        // dashboard sees a stable string regardless of how the engine
+        // wrote the timestamp.
+        let s = unix_to_iso(1_700_000_000.123).expect("convert");
+        assert!(
+            !s.contains('.'),
+            "iso form should not include fraction: {s}"
+        );
+    }
+
+    // ── memory_to_dashboard_row ─────────────────────────────────────
+
+    fn sample_memory() -> yantrikdb::Memory {
+        yantrikdb::Memory {
+            rid: "mem_abc".into(),
+            memory_type: "fact".into(),
+            text: "the sky is blue".into(),
+            created_at: 1_700_000_000.0,
+            importance: 0.7,
+            valence: 0.0,
+            half_life: 86_400.0,
+            last_access: 1_700_000_100.0,
+            access_count: 3,
+            consolidation_status: "active".into(),
+            storage_tier: "hot".into(),
+            consolidated_into: None,
+            metadata: serde_json::json!({"a": 1}),
+            namespace: "acme".into(),
+            certainty: 0.9,
+            domain: "general".into(),
+            source: "user".into(),
+            emotional_state: None,
+            session_id: None,
+            due_at: None,
+            temporal_kind: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_row_has_all_25_required_keys() {
+        // Dashboard reads 25 specific top-level keys per the fixture.
+        // Phase 1 may emit null for some, but every key must be present.
+        let row = memory_to_dashboard_row(&sample_memory());
+        for key in [
+            "rid",
+            "type",
+            "text",
+            "created_at",
+            "created_at_iso",
+            "updated_at",
+            "updated_at_iso",
+            "importance",
+            "half_life",
+            "last_access",
+            "access_count",
+            "valence",
+            "consolidated_into",
+            "consolidation_status",
+            "storage_tier",
+            "metadata_json",
+            "namespace",
+            "certainty",
+            "domain",
+            "source",
+            "emotional_state",
+            "session_id",
+            "due_at",
+            "temporal_kind",
+            "tombstone_reason",
+            "embedding_model",
+            "embedding_bytes",
+        ] {
+            assert!(row.get(key).is_some(), "missing dashboard key `{key}`");
+        }
+    }
+
+    #[test]
+    fn dashboard_row_renames_memory_type_to_type() {
+        // Engine: `memory_type`. Dashboard: `type`. Wire contract.
+        let row = memory_to_dashboard_row(&sample_memory());
+        assert_eq!(row["type"], "fact");
+        assert!(
+            row.get("memory_type").is_none(),
+            "must not surface engine field name"
+        );
+    }
+
+    #[test]
+    fn dashboard_row_renames_metadata_to_metadata_json() {
+        let row = memory_to_dashboard_row(&sample_memory());
+        assert_eq!(row["metadata_json"], serde_json::json!({"a": 1}));
+        assert!(
+            row.get("metadata").is_none(),
+            "must not surface engine field name"
+        );
+    }
+
+    #[test]
+    fn dashboard_row_phase_1_nulls() {
+        // Fields the engine doesn't surface today emit null. If a
+        // future engine bump populates them, the assertion needs to be
+        // updated alongside.
+        let row = memory_to_dashboard_row(&sample_memory());
+        for key in [
+            "updated_at",
+            "updated_at_iso",
+            "tombstone_reason",
+            "embedding_model",
+            "embedding_bytes",
+        ] {
+            assert_eq!(
+                row[key],
+                serde_json::Value::Null,
+                "Phase 1: `{key}` must be null"
+            );
+        }
+    }
+
+    #[test]
+    fn dashboard_row_created_at_iso_matches_unix() {
+        let row = memory_to_dashboard_row(&sample_memory());
+        let iso = row["created_at_iso"].as_str().unwrap();
+        // 1_700_000_000 UTC = 2023-11-14T22:13:20Z
+        assert_eq!(iso, "2023-11-14T22:13:20Z");
+    }
+
+    // ── validate_memories_params ────────────────────────────────────
+
+    fn body_field<'a>(err: &'a AppError, field: &str) -> &'a serde_json::Value {
+        &err.1 .0["error"][field]
+    }
+
+    #[test]
+    fn validate_defaults_when_params_empty() {
+        let p = pinned("acme");
+        let params = MemoriesListParams::default();
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.effective_namespace, "acme");
+        assert_eq!(out.limit, MEMORIES_DEFAULT_LIMIT);
+        assert_eq!(out.offset, 0);
+        assert_eq!(out.sort_by, "created_at");
+    }
+
+    #[test]
+    fn validate_rejects_status_other_than_active() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            status: Some("tombstoned".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(body_field(&err, "code"), "invalid_query_parameter");
+    }
+
+    #[test]
+    fn validate_accepts_explicit_status_active() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            status: Some("active".into()),
+            ..Default::default()
+        };
+        assert!(validate_memories_params(&p, &params).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_text_search_q() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            q: Some("anything".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_rejects_source_filter() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            source: Some("user".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_rejects_phase_2_sort_with_specific_message() {
+        // `updated_at` is in the dashboard spec but engine v0.7.x
+        // can't honor it. Surface the gap explicitly.
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            sort: Some("updated_at".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(body_field(&err, "message")
+            .as_str()
+            .unwrap()
+            .contains("Phase 1"));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_sort() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            sort: Some("bogus".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_accepts_each_supported_sort() {
+        let p = pinned("acme");
+        for sort in MEMORIES_SUPPORTED_SORTS {
+            let params = MemoriesListParams {
+                sort: Some((*sort).into()),
+                ..Default::default()
+            };
+            let out = validate_memories_params(&p, &params).expect("must accept");
+            assert_eq!(out.sort_by, *sort);
+        }
+    }
+
+    #[test]
+    fn validate_caps_limit_at_200() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            limit: Some(500),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        // Message names the cap so callers know how to fix.
+        assert!(body_field(&err, "message")
+            .as_str()
+            .unwrap()
+            .contains(&MEMORIES_MAX_LIMIT.to_string()));
+    }
+
+    #[test]
+    fn validate_rejects_limit_zero() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            limit: Some(0),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_rejects_cross_namespace_query_for_pinned_token() {
+        // resolve_namespace catches this; the validator just plumbs through.
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            namespace: Some("not-acme".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(body_field(&err, "code"), "namespace_not_found");
+    }
+
+    #[test]
+    fn validate_accepts_matching_namespace_query_for_pinned_token() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            namespace: Some("acme".into()),
+            ..Default::default()
+        };
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.effective_namespace, "acme");
+    }
+}
+
+#[cfg(test)]
+mod memories_list_e2e {
+    use super::e2e_test_support::{build_fixture, get};
+
+    /// Plant a memory directly via the engine handle so the e2e test
+    /// has rows to list without needing a real embedder.
+    async fn plant_memory(
+        state: std::sync::Arc<crate::server::AppState>,
+        namespace: &str,
+        text: &str,
+    ) {
+        // Look up the database for the namespace and grab its engine.
+        let db = {
+            let ctrl = state.control.lock();
+            ctrl.get_database(namespace).unwrap().unwrap()
+        };
+        let engine = state.pool.get_engine(&db).unwrap();
+        let text_owned = text.to_string();
+        let namespace_owned = namespace.to_string();
+        tokio::task::spawn_blocking(move || {
+            // Fake fixed-dim embedding — engine doesn't validate vector
+            // content for list_memories, only that the row exists.
+            let embedding = vec![0.0_f32; 384];
+            engine
+                .record(
+                    &text_owned,
+                    "fact",
+                    0.5,
+                    0.0,
+                    86_400.0,
+                    &serde_json::json!({}),
+                    &embedding,
+                    &namespace_owned,
+                    1.0,
+                    "general",
+                    "test",
+                    None,
+                )
+                .unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn returns_401_when_no_bearer_header() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/memories", None).await;
+        assert_eq!(status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn returns_400_on_unsupported_q_filter() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memories?q=anything",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 400);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "invalid_query_parameter");
+    }
+
+    #[tokio::test]
+    async fn returns_403_when_pinned_token_asks_for_other_namespace() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memories?namespace=secret",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 403);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "namespace_not_found");
+    }
+
+    #[tokio::test]
+    async fn returns_empty_page_with_envelope_when_no_memories() {
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/memories", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], 0);
+        assert_eq!(v["limit"], 50);
+        assert_eq!(v["offset"], 0);
+        assert_eq!(v["items"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn returns_planted_memory_with_dashboard_row_shape() {
+        let fx = build_fixture("acme");
+        plant_memory(fx.state.clone(), "acme", "hello world").await;
+
+        let (status, body) = get(fx.state.clone(), "/v1/memories", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], 1);
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["text"], "hello world");
+        assert_eq!(items[0]["type"], "fact");
+        assert_eq!(items[0]["namespace"], "acme");
+        // Phase-1 null fields surface as null, not missing.
+        assert_eq!(items[0]["updated_at"], serde_json::Value::Null);
+        assert_eq!(items[0]["embedding_model"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn offset_paginates_planted_rows() {
+        let fx = build_fixture("acme");
+        for i in 0..3 {
+            plant_memory(fx.state.clone(), "acme", &format!("memory-{i}")).await;
+        }
+        // First page: limit=2 offset=0
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memories?limit=2&offset=0",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], 3);
+        assert_eq!(v["limit"], 2);
+        assert_eq!(v["offset"], 0);
+        assert_eq!(v["items"].as_array().unwrap().len(), 2);
+
+        // Second page: limit=2 offset=2 → 1 row
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/memories?limit=2&offset=2",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], 3);
+        assert_eq!(v["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn limit_over_200_is_rejected() {
+        let fx = build_fixture("acme");
+        let (status, _body) = get(
+            fx.state.clone(),
+            "/v1/memories?limit=999",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 400);
     }
 }

@@ -139,8 +139,23 @@ type EngineHandle = Arc<yantrikdb::YantrikDB>;
 /// Error tuple returned by auth-checking helpers.
 type AppError = (StatusCode, Json<Value>);
 
+/// Issue #39: every error response across `/v1/*` now emits the
+/// canonical structured envelope from [`crate::api::errors`]:
+///
+/// ```json
+/// {"error": {"code": "stable_id", "message": "human", "hint": "optional"}}
+/// ```
+///
+/// This helper is a migration shim for ~125 pre-existing call sites
+/// that emitted `{"error": "string"}` (Option A). Those sites get the
+/// new envelope shape immediately with `code: "generic"`. Each call
+/// site individually migrates to a specific code via
+/// [`crate::api::errors::api_error`] over time.
+///
+/// **New code MUST NOT use `app_error()`.** Call `api_error(status,
+/// ApiErrorCode::SomeSpecificCode, message)` directly.
 fn app_error(status: StatusCode, message: impl Into<String>) -> AppError {
-    (status, Json(json!({ "error": message.into() })))
+    crate::api::errors::api_error(status, crate::api::errors::ApiErrorCode::Generic, message)
 }
 
 /// Translate a [`crate::commit::CommitError`] into an HTTP response per

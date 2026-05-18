@@ -1,4 +1,5 @@
 mod admission;
+mod api;
 mod auth;
 mod background;
 mod backup;

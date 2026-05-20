@@ -5,6 +5,37 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.19] — 2026-05-20
+
+Hotfix for the cluster-mode startup regression in v0.8.18. **Cluster operators must upgrade.** Single-node deployments were unaffected by the v0.8.18 regression.
+
+### Fixed — `Cannot drop a runtime in a context where blocking is not allowed`
+
+`run_server` constructs an optional `SplitRuntime` (RFC 009 §4 Layer 1) inside the outer tokio runtime's `block_on` context. The contract at `main.rs:479-486` requires `SplitRuntime::shutdown_timeout` to be invoked from a thread that has no tokio runtime context — otherwise the internal `BlockingPool::shutdown` blocking-wait panics at `tokio-1.52/src/runtime/blocking/shutdown.rs:51`.
+
+The cleanup at the bottom of `run_server` only ran on the clean-exit arm of the top-level `select!`, and even there the call happened inline from inside `async_main`. v0.8.18's engine bump to v0.7.19 exposed an Err path from `raft::assembly` that pre-v0.7.19 didn't hit. The Err propagated up through `?`, the partial-state cleanup dropped `SplitRuntime`'s internal Runtimes from async context, and the panic surfaced ~2 minutes into cluster startup on every cluster-mode deployment.
+
+Two changes bundled:
+
+1. **`main.rs`**: wraps the body of `run_server` between `SplitRuntime` construction and the existing shutdown in an inner async block bound to a local `Result`, so the shutdown runs unconditionally regardless of which path the inner block took.
+2. **`main.rs`**: dispatches the actual `rt.shutdown_timeout(...)` call through `tokio::task::spawn_blocking(move || { ... }).await` so the synchronous blocking-pool drain happens on a worker thread that has no tokio runtime context. Without this, the explicit `shutdown_timeout` call panics for the same reason as the implicit drop did.
+
+### Fixed — `reqwest client build failed: incompatible TLS identity type`
+
+Surfaced once the panic above was fixed (the panic had been masking it). On cluster-mode startup, `raft::assembly` builds a `reqwest::Client` with `Identity::from_pem(...)`. With both `rustls-tls` (declared by `yantrikdb-server`) and `native-tls` (pulled in transitively post-engine-v0.7.19) enabled, the Identity is constructed via the rustls backend while the Client builder defaults to native-tls — `builder.build()` rejects the mismatch with `incompatible TLS identity type`.
+
+Fix: explicit `.use_rustls_tls()` on the Client builder in `raft/assembly.rs` pins the backend so the Identity matches.
+
+The transitive feature unification is worth investigating engine-side too (so the workaround can be removed in a future release), tracked separately.
+
+### Engine pin
+
+Unchanged at v0.7.19. The engine fixes from v0.8.18 (compactor + compensating-DELETE) stay in place.
+
+### Process change
+
+Cluster-mode validation is now a hard release gate. v0.8.19 was validated on the live 2-node openraft cluster (CT 141 + .140 peer) end-to-end before tagging: `raft::assembly` completes cleanly, HTTP gateway binds, cluster joined as Follower under leader=4 with `replication_lag_log_entries=0`, no Runtime panic on either the clean-exit or Err-propagation paths.
+
 ## [0.8.18] — 2026-05-20
 
 Engine bump to v0.7.19 closes two latent reliability bugs that had

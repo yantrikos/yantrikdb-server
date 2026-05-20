@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use yantrikdb::engine::materializer::{recommended_worker_count, spawn_all_workers, AllWorkerGuards};
+use yantrikdb::engine::materializer::{
+    recommended_worker_count, spawn_all_workers, AllWorkerGuards,
+};
 use yantrikdb::YantrikDB;
 
 use crate::commit::{ApplyError, EngineResolver, TenantId};

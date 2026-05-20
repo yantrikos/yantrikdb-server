@@ -308,6 +308,16 @@ fn build_reqwest_client_for_cluster(
         .map_err(|e| AssemblyError::ReqwestBuild(format!("Certificate::from_pem: {e}")))?;
 
     let mut builder = reqwest::Client::builder()
+        // v0.8.19 (issue surfaced 2026-05-20): force the rustls TLS backend
+        // for this Client. Without this, transitive deps (e.g. via openraft
+        // / engine v0.7.19 bump) can pull in native-tls features which
+        // makes reqwest enable both backends. With both enabled,
+        // `Identity::from_pem` constructs a rustls-side Identity but
+        // `Client::builder().identity()` defaults to native-tls — the
+        // build then fails with "incompatible TLS identity type".
+        // Explicit `.use_rustls_tls()` pins the Client to rustls so the
+        // Identity backend matches.
+        .use_rustls_tls()
         .timeout(request_timeout)
         .identity(identity)
         .add_root_certificate(ca_cert)

@@ -1947,398 +1947,433 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     };
     let control_runtime_handle = split_runtime.as_ref().map(|rt| rt.control_handle());
 
-    // RFC 014-A: validate cluster-mTLS config at startup. If certs are
-    // configured, prove they load successfully BEFORE the cluster
-    // transport tries to use them — fail-fast on misconfiguration.
-    // If not configured, this is a no-op (cluster_tls is opt-in until
-    // RFC 010 PR-4 openraft mode makes it required).
-    if cfg.cluster_tls.is_fully_specified() {
-        match crate::security::build_acceptor(&cfg.cluster_tls) {
-            Ok(_) => tracing::info!(
-                dev_mode = cfg.cluster_tls.dev_mode,
-                "cluster mTLS acceptor: loaded successfully"
-            ),
-            Err(e) => {
-                tracing::error!(error = %e, "cluster mTLS acceptor: load FAILED");
-                anyhow::bail!("cluster mTLS misconfigured: {e}");
-            }
-        }
-        match crate::security::build_connector(&cfg.cluster_tls) {
-            Ok(_) => tracing::info!("cluster mTLS connector: loaded successfully"),
-            Err(e) => {
-                tracing::error!(error = %e, "cluster mTLS connector: load FAILED");
-                anyhow::bail!("cluster mTLS misconfigured: {e}");
-            }
-        }
-        if cfg.cluster_tls.dev_mode {
-            tracing::warn!(
-                "cluster_tls.dev_mode=true — peer cert verification SKIPPED. \
-                 NEVER use in production."
-            );
-        }
-    }
-
-    // RFC 010 PR-2: durable commit log substrate. SQLite-backed file
-    // alongside the existing data dir. Filename pinned so backup/DR
-    // (RFC 012) can find it without config plumbing.
-    let commit_log_path = cfg.server.data_dir.join("commit_log.sqlite");
-    let local_committer = Arc::new(
-        crate::commit::LocalSqliteCommitter::open(&commit_log_path)
-            .map_err(|e| anyhow::anyhow!("failed to open commit log: {e}"))?,
-    );
-    tracing::info!(
-        commit_log_path = %commit_log_path.display(),
-        "commit log opened"
-    );
-
-    // RFC 010 PR-4: assemble openraft when the cluster section asks for
-    // it. Misconfig (openraft mode without cluster_tls) fails fast here
-    // — server refuses to start, which is the production-safety
-    // guarantee from `build_raft_cluster`.
-    let (commit_log, raft_assembly): (
-        Arc<dyn crate::commit::MutationCommitter>,
-        Option<Arc<crate::raft::RaftAssembly>>,
-    ) = match cfg.cluster.raft_mode {
-        crate::raft::RaftClusterMode::Disabled => {
-            // RFC 010 PR-6.4 — single-node also needs an Applier so
-            // committed mutations actually land in engine state. Without
-            // this wrapping, `commit_log.commit(...)` would write to the
-            // commit log but the engine `memories` table would never see
-            // the row — RYW broken on single-node too. Wrap
-            // `LocalSqliteCommitter` in `LocalSqliteSubmitter` (which
-            // composes committer + applier) and expose it as
-            // `Arc<dyn MutationCommitter>` via the impl in
-            // `commit/submitter.rs`.
-            let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
-                pool.clone(),
-                control.clone(),
-            )) as Arc<dyn crate::commit::EngineResolver>;
-            let applier: Arc<dyn crate::commit::Applier> =
-                Arc::new(crate::commit::EngineApplier::new(engine_resolver));
-            let submitter = Arc::new(crate::commit::LocalSqliteSubmitter::new(
-                local_committer.clone(),
-                applier,
-            ));
-            (submitter as Arc<dyn crate::commit::MutationCommitter>, None)
-        }
-        crate::raft::RaftClusterMode::OpenRaft => {
-            let raft_log_path = cfg.server.data_dir.join("raft_log.sqlite");
-            let raft_log_conn = rusqlite::Connection::open(&raft_log_path)
-                .map_err(|e| anyhow::anyhow!("failed to open raft_log.sqlite: {e}"))?;
-            // Migrations m004 must already be in run_pending so the table
-            // exists. The committer construction above already ran them
-            // for commit_log.sqlite — we run them on raft_log.sqlite too.
-            let mut raft_log_conn = raft_log_conn;
-            crate::migrations::MigrationRunner::run_pending(&mut raft_log_conn)
-                .map_err(|e| anyhow::anyhow!("raft_log migrations: {e}"))?;
-            let log_storage = crate::raft::SqliteRaftLogStorage::new(Arc::new(
-                parking_lot::Mutex::new(raft_log_conn),
-            ));
-
-            let node_id = crate::raft::YantrikNodeId::new(cfg.cluster.node_id as u64);
-            let node_addr = cfg
-                .cluster
-                .advertise_addr
-                .clone()
-                .unwrap_or_else(|| format!("https://127.0.0.1:{}", cfg.cluster.cluster_port));
-
-            // PR-6.5 boot invariant: full voter set including self.
-            // openraft member ids are u32-based; we mirror cfg.cluster.peers
-            // and append this node's address so the validation gate sees
-            // a coherent quorum view (peers.len() >= 2).
-            let mut peers: Vec<String> = cfg.cluster.peers.iter().map(|p| p.addr.clone()).collect();
-            if !peers.iter().any(|a| a == &node_addr) {
-                peers.push(node_addr.clone());
-            }
-
-            // RFC 010 PR-6.4 — engine apply path. Wire `EngineApplier`
-            // over a `TenantPool`-backed resolver so every committed
-            // mutation (leader + followers) flows into engine state via
-            // the deterministic `record_with_rid` family. Without this,
-            // openraft replicates the commit log but engine state stays
-            // empty on followers — the cosmetic-openraft regression the
-            // architect surfaced on 2026-05-02.
-            let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
-                pool.clone(),
-                control.clone(),
-            )) as Arc<dyn crate::commit::EngineResolver>;
-            let applier: Arc<dyn crate::commit::Applier> =
-                Arc::new(crate::commit::EngineApplier::new(engine_resolver));
-
-            let assembly_cfg = crate::raft::RaftAssemblyConfig {
-                mode: crate::raft::RaftClusterMode::OpenRaft,
-                node_id,
-                node_addr: node_addr.clone(),
-                cluster_tls: Some(cfg.cluster_tls.clone()),
-                peers,
-                // PR-6.5: openraft mode REQUIRES RaftSubmitter at the
-                // handler level. Today's binary still uses the legacy
-                // engine.record() path inside Command::Remember; the
-                // declaration here is a forward-compat marker that
-                // satisfies the validate() gate. The actual handler
-                // migration happens in PR 6.4 (saga task #187), at
-                // which point this stays unchanged but starts being
-                // load-bearing.
-                write_path: crate::raft::HandlerWritePath::RaftSubmitter,
-                applier,
-                request_timeout: std::time::Duration::from_secs(10),
-                openraft_config: openraft::Config {
-                    cluster_name: "yantrikdb".into(),
-                    heartbeat_interval: cfg.cluster.heartbeat_interval_ms,
-                    election_timeout_min: cfg.cluster.election_timeout_ms,
-                    election_timeout_max: cfg.cluster.election_timeout_ms.saturating_mul(2),
-                    ..Default::default()
-                },
-            };
-
-            tracing::info!(
-                node_id = %node_id,
-                node_addr = %node_addr,
-                "assembling openraft cluster (RFC 010 PR-4)"
-            );
-            let assembly = crate::raft::build_raft_cluster(
-                assembly_cfg,
-                log_storage,
-                local_committer.clone() as Arc<dyn crate::commit::MutationCommitter>,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("openraft assembly failed: {e}"))?;
-            tracing::info!("openraft assembled — RaftCommitter now driving writes");
-
-            // v0.8.3: auto-bootstrap removed (was a fragile node_id heuristic).
-            // For fresh openraft deployments, the seed operator runs:
-            //   yantrikdb cluster initialize-cluster --leader http://X:7438 --master-token T
-            // Subsequent nodes are added via add-learner + promote-voter.
-            //
-            // Existing v0.8.2 deployments where auto-bootstrap already wrote
-            // a membership record continue to work — openraft persists
-            // membership in raft_log.sqlite across restarts.
-            {
-                let metrics = assembly.raft.metrics().borrow().clone();
-                if metrics.membership_config.nodes().count() == 0 {
-                    tracing::warn!(
-                        node_id = cfg.cluster.node_id,
-                        "openraft membership empty. Run \
-                         `yantrikdb cluster initialize-cluster` on the seed node \
-                         (one time per cluster) or `cluster add-learner` from an \
-                         existing leader to add this node."
-                    );
+    // v0.8.19 (incident 2026-05-20): wrap the rest of run_server in an
+    // inner async block so split_runtime ALWAYS drops in sync context
+    // after the outer block completes. Without this, any `?` propagation
+    // past SplitRuntime construction drops `split_runtime` while still
+    // inside the outer `runtime.block_on(async_main())`, panicking at
+    // tokio-1.52.3/src/runtime/blocking/shutdown.rs:51 with "Cannot drop
+    // a runtime in a context where blocking is not allowed". v0.8.18
+    // hit this on cluster nodes after engine v0.7.19 returned Err from
+    // a path called post-construction. See main.rs:479-486 for the
+    // original v0.8.4 documentation of this contract.
+    let result: anyhow::Result<()> = (async {
+        // RFC 014-A: validate cluster-mTLS config at startup. If certs are
+        // configured, prove they load successfully BEFORE the cluster
+        // transport tries to use them — fail-fast on misconfiguration.
+        // If not configured, this is a no-op (cluster_tls is opt-in until
+        // RFC 010 PR-4 openraft mode makes it required).
+        if cfg.cluster_tls.is_fully_specified() {
+            match crate::security::build_acceptor(&cfg.cluster_tls) {
+                Ok(_) => tracing::info!(
+                    dev_mode = cfg.cluster_tls.dev_mode,
+                    "cluster mTLS acceptor: loaded successfully"
+                ),
+                Err(e) => {
+                    tracing::error!(error = %e, "cluster mTLS acceptor: load FAILED");
+                    anyhow::bail!("cluster mTLS misconfigured: {e}");
                 }
             }
-
-            // Spawn the metrics recorder so /metrics gets live
-            // openraft gauges. Tied to a CancellationToken so we can
-            // drop it cleanly on shutdown — for now the token is
-            // never cancelled (server runs until SIGTERM kills us).
-            let cancel = tokio_util::sync::CancellationToken::new();
-            crate::raft::spawn_raft_metrics_recorder(assembly.raft.clone(), cancel);
-
-            let committer: Arc<dyn crate::commit::MutationCommitter> =
-                Arc::new(assembly.committer.clone());
-            let assembly_arc = Arc::new(assembly);
-            (committer, Some(assembly_arc))
-        }
-    };
-
-    // RFC 010 PR-5: fault-injection registry for Jepsen runs. Empty in
-    // production builds; populated via /v1/debug/fault/inject.
-    let fault_registry = crate::debug::FaultRegistry::new();
-
-    // RFC 019: durable job queue. Same data dir as commit log; separate
-    // SQLite file so the two contend on different WAL files.
-    let jobs_path = cfg.server.data_dir.join("jobs.sqlite");
-    let jobs: Arc<dyn crate::jobs::JobQueue> = Arc::new(
-        crate::jobs::LocalSqliteJobQueue::open(&jobs_path)
-            .map_err(|e| anyhow::anyhow!("failed to open job queue: {e}"))?,
-    );
-    tracing::info!(jobs_path = %jobs_path.display(), "job queue opened");
-
-    // Issue #39: control-DB-backed AuthProvider. Recognizes the cluster
-    // master secret as the cluster-admin principal; resolves regular
-    // tokens via control.tokens → Principal{tenant=db.name, scopes=data-plane}.
-    let auth_provider: Arc<dyn crate::auth::AuthProvider> =
-        Arc::new(crate::auth::ControlDbAuthProvider::new(
-            control.clone(),
-            cfg.cluster.cluster_secret.clone(),
-        ));
-
-    let state = Arc::new(AppState {
-        control,
-        pool,
-        workers,
-        cluster: cluster_ctx.clone(),
-        inflight: std::sync::atomic::AtomicU32::new(0),
-        admission,
-        control_runtime: control_runtime_handle.clone(),
-        commit_log,
-        raft: raft_assembly,
-        fault_registry,
-        jobs,
-        data_dir: cfg.server.data_dir.clone(),
-        auth_provider,
-    });
-
-    // Built-in watchdog — periodically probes the engine lock and fires a
-    // metric if acquisition takes too long. Complement to the external bash
-    // watchdog: this one runs in-process and feeds /metrics directly, while
-    // the external one captures gdb backtraces and triggers ntfy alerts.
-    {
-        let state_clone = Arc::clone(&state);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-                let pool = state_clone.pool.clone();
-                let control = state_clone.control.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    // Probe engine lock on default db
-                    let db_record = {
-                        let ctrl = control.lock();
-                        ctrl.get_database("default").ok().flatten()
-                    };
-                    if let Some(rec) = db_record {
-                        if let Ok(engine) = pool.get_engine(&rec) {
-                            // v0.8.9: engine is Arc<YantrikDB> with no outer
-                            // mutex — exercise the read pool via stats() and
-                            // record probe latency as the health signal.
-                            let start = std::time::Instant::now();
-                            let _ = engine.stats(None);
-                            let elapsed = start.elapsed();
-                            crate::metrics::record_engine_lock_wait(elapsed);
-                            if elapsed >= std::time::Duration::from_secs(5) {
-                                tracing::warn!(
-                                    elapsed_ms = elapsed.as_millis() as u64,
-                                    "built-in watchdog: engine probe slow (>5s)"
-                                );
-                            }
-                        }
-                    }
-                })
-                .await;
+            match crate::security::build_connector(&cfg.cluster_tls) {
+                Ok(_) => tracing::info!("cluster mTLS connector: loaded successfully"),
+                Err(e) => {
+                    tracing::error!(error = %e, "cluster mTLS connector: load FAILED");
+                    anyhow::bail!("cluster mTLS misconfigured: {e}");
+                }
             }
-        });
-        tracing::info!("built-in watchdog started (15s cadence, 5s lock timeout)");
-    }
+            if cfg.cluster_tls.dev_mode {
+                tracing::warn!(
+                    "cluster_tls.dev_mode=true — peer cert verification SKIPPED. \
+                     NEVER use in production."
+                );
+            }
+        }
 
-    // Build TLS acceptor if configured
-    let tls_acceptor = if cfg.tls.is_enabled() {
-        let acceptor = tls::build_tls_acceptor(&cfg.tls)?;
-        tracing::info!("TLS enabled");
-        Some(acceptor)
-    } else {
-        None
-    };
-
-    // Start wire protocol server
-    let wire_addr = format!("0.0.0.0:{}", cfg.server.wire_port);
-    let wire_listener = tokio::net::TcpListener::bind(&wire_addr).await?;
-
-    // Start HTTP gateway
-    let http_addr = format!("0.0.0.0:{}", cfg.server.http_port);
-    let http_listener = tokio::net::TcpListener::bind(&http_addr).await?;
-
-    tracing::info!(
-        wire_port = cfg.server.wire_port,
-        http_port = cfg.server.http_port,
-        tls = cfg.tls.is_enabled(),
-        data_dir = %cfg.server.data_dir.display(),
-        "YantrikDB server starting"
-    );
-
-    let wire_state = Arc::clone(&state);
-    let http_state = Arc::clone(&state);
-    let shutdown_state = Arc::clone(&state);
-
-    // Cancellation token for cluster background tasks
-    let cluster_cancel = tokio_util::sync::CancellationToken::new();
-
-    // Spawn cluster server + background loops if clustered.
-    // Per RFC 009 §4: when split runtime is active, ALL cluster background
-    // tasks spawn on `control_runtime_handle` so HTTP/recall load can't
-    // starve them of CPU. Falls back to current runtime if split runtime
-    // failed to build (best-effort isolation).
-    let mut cluster_handles = Vec::new();
-    if let Some(ref ctx) = cluster_ctx {
-        let cluster_addr = format!("0.0.0.0:{}", cfg.cluster.cluster_port);
-        let cluster_listener = tokio::net::TcpListener::bind(&cluster_addr).await?;
+        // RFC 010 PR-2: durable commit log substrate. SQLite-backed file
+        // alongside the existing data dir. Filename pinned so backup/DR
+        // (RFC 012) can find it without config plumbing.
+        let commit_log_path = cfg.server.data_dir.join("commit_log.sqlite");
+        let local_committer = Arc::new(
+            crate::commit::LocalSqliteCommitter::open(&commit_log_path)
+                .map_err(|e| anyhow::anyhow!("failed to open commit log: {e}"))?,
+        );
         tracing::info!(
-            cluster_port = cfg.cluster.cluster_port,
-            isolated_runtime = control_runtime_handle.is_some(),
-            "cluster wire server starting"
+            commit_log_path = %commit_log_path.display(),
+            "commit log opened"
         );
 
-        let spawn = |fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>| {
-            match control_runtime_handle.as_ref() {
-                Some(handle) => handle.spawn(fut),
-                None => tokio::spawn(fut),
+        // RFC 010 PR-4: assemble openraft when the cluster section asks for
+        // it. Misconfig (openraft mode without cluster_tls) fails fast here
+        // — server refuses to start, which is the production-safety
+        // guarantee from `build_raft_cluster`.
+        let (commit_log, raft_assembly): (
+            Arc<dyn crate::commit::MutationCommitter>,
+            Option<Arc<crate::raft::RaftAssembly>>,
+        ) = match cfg.cluster.raft_mode {
+            crate::raft::RaftClusterMode::Disabled => {
+                // RFC 010 PR-6.4 — single-node also needs an Applier so
+                // committed mutations actually land in engine state. Without
+                // this wrapping, `commit_log.commit(...)` would write to the
+                // commit log but the engine `memories` table would never see
+                // the row — RYW broken on single-node too. Wrap
+                // `LocalSqliteCommitter` in `LocalSqliteSubmitter` (which
+                // composes committer + applier) and expose it as
+                // `Arc<dyn MutationCommitter>` via the impl in
+                // `commit/submitter.rs`.
+                let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
+                    pool.clone(),
+                    control.clone(),
+                )) as Arc<dyn crate::commit::EngineResolver>;
+                let applier: Arc<dyn crate::commit::Applier> =
+                    Arc::new(crate::commit::EngineApplier::new(engine_resolver));
+                let submitter = Arc::new(crate::commit::LocalSqliteSubmitter::new(
+                    local_committer.clone(),
+                    applier,
+                ));
+                (submitter as Arc<dyn crate::commit::MutationCommitter>, None)
+            }
+            crate::raft::RaftClusterMode::OpenRaft => {
+                let raft_log_path = cfg.server.data_dir.join("raft_log.sqlite");
+                let raft_log_conn = rusqlite::Connection::open(&raft_log_path)
+                    .map_err(|e| anyhow::anyhow!("failed to open raft_log.sqlite: {e}"))?;
+                // Migrations m004 must already be in run_pending so the table
+                // exists. The committer construction above already ran them
+                // for commit_log.sqlite — we run them on raft_log.sqlite too.
+                let mut raft_log_conn = raft_log_conn;
+                crate::migrations::MigrationRunner::run_pending(&mut raft_log_conn)
+                    .map_err(|e| anyhow::anyhow!("raft_log migrations: {e}"))?;
+                let log_storage = crate::raft::SqliteRaftLogStorage::new(Arc::new(
+                    parking_lot::Mutex::new(raft_log_conn),
+                ));
+
+                let node_id = crate::raft::YantrikNodeId::new(cfg.cluster.node_id as u64);
+                let node_addr =
+                    cfg.cluster.advertise_addr.clone().unwrap_or_else(|| {
+                        format!("https://127.0.0.1:{}", cfg.cluster.cluster_port)
+                    });
+
+                // PR-6.5 boot invariant: full voter set including self.
+                // openraft member ids are u32-based; we mirror cfg.cluster.peers
+                // and append this node's address so the validation gate sees
+                // a coherent quorum view (peers.len() >= 2).
+                let mut peers: Vec<String> =
+                    cfg.cluster.peers.iter().map(|p| p.addr.clone()).collect();
+                if !peers.iter().any(|a| a == &node_addr) {
+                    peers.push(node_addr.clone());
+                }
+
+                // RFC 010 PR-6.4 — engine apply path. Wire `EngineApplier`
+                // over a `TenantPool`-backed resolver so every committed
+                // mutation (leader + followers) flows into engine state via
+                // the deterministic `record_with_rid` family. Without this,
+                // openraft replicates the commit log but engine state stays
+                // empty on followers — the cosmetic-openraft regression the
+                // architect surfaced on 2026-05-02.
+                let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
+                    pool.clone(),
+                    control.clone(),
+                )) as Arc<dyn crate::commit::EngineResolver>;
+                let applier: Arc<dyn crate::commit::Applier> =
+                    Arc::new(crate::commit::EngineApplier::new(engine_resolver));
+
+                let assembly_cfg = crate::raft::RaftAssemblyConfig {
+                    mode: crate::raft::RaftClusterMode::OpenRaft,
+                    node_id,
+                    node_addr: node_addr.clone(),
+                    cluster_tls: Some(cfg.cluster_tls.clone()),
+                    peers,
+                    // PR-6.5: openraft mode REQUIRES RaftSubmitter at the
+                    // handler level. Today's binary still uses the legacy
+                    // engine.record() path inside Command::Remember; the
+                    // declaration here is a forward-compat marker that
+                    // satisfies the validate() gate. The actual handler
+                    // migration happens in PR 6.4 (saga task #187), at
+                    // which point this stays unchanged but starts being
+                    // load-bearing.
+                    write_path: crate::raft::HandlerWritePath::RaftSubmitter,
+                    applier,
+                    request_timeout: std::time::Duration::from_secs(10),
+                    openraft_config: openraft::Config {
+                        cluster_name: "yantrikdb".into(),
+                        heartbeat_interval: cfg.cluster.heartbeat_interval_ms,
+                        election_timeout_min: cfg.cluster.election_timeout_ms,
+                        election_timeout_max: cfg.cluster.election_timeout_ms.saturating_mul(2),
+                        ..Default::default()
+                    },
+                };
+
+                tracing::info!(
+                    node_id = %node_id,
+                    node_addr = %node_addr,
+                    "assembling openraft cluster (RFC 010 PR-4)"
+                );
+                let assembly = crate::raft::build_raft_cluster(
+                    assembly_cfg,
+                    log_storage,
+                    local_committer.clone() as Arc<dyn crate::commit::MutationCommitter>,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("openraft assembly failed: {e}"))?;
+                tracing::info!("openraft assembled — RaftCommitter now driving writes");
+
+                // v0.8.3: auto-bootstrap removed (was a fragile node_id heuristic).
+                // For fresh openraft deployments, the seed operator runs:
+                //   yantrikdb cluster initialize-cluster --leader http://X:7438 --master-token T
+                // Subsequent nodes are added via add-learner + promote-voter.
+                //
+                // Existing v0.8.2 deployments where auto-bootstrap already wrote
+                // a membership record continue to work — openraft persists
+                // membership in raft_log.sqlite across restarts.
+                {
+                    let metrics = assembly.raft.metrics().borrow().clone();
+                    if metrics.membership_config.nodes().count() == 0 {
+                        tracing::warn!(
+                            node_id = cfg.cluster.node_id,
+                            "openraft membership empty. Run \
+                             `yantrikdb cluster initialize-cluster` on the seed node \
+                             (one time per cluster) or `cluster add-learner` from an \
+                             existing leader to add this node."
+                        );
+                    }
+                }
+
+                // Spawn the metrics recorder so /metrics gets live
+                // openraft gauges. Tied to a CancellationToken so we can
+                // drop it cleanly on shutdown — for now the token is
+                // never cancelled (server runs until SIGTERM kills us).
+                let cancel = tokio_util::sync::CancellationToken::new();
+                crate::raft::spawn_raft_metrics_recorder(assembly.raft.clone(), cancel);
+
+                let committer: Arc<dyn crate::commit::MutationCommitter> =
+                    Arc::new(assembly.committer.clone());
+                let assembly_arc = Arc::new(assembly);
+                (committer, Some(assembly_arc))
             }
         };
 
-        // Cluster server (peer-to-peer)
-        let ctx_clone = Arc::clone(ctx);
-        cluster_handles.push(spawn(Box::pin(async move {
-            if let Err(e) = cluster::server::run_cluster_server(cluster_listener, ctx_clone).await {
-                tracing::error!(error = %e, "cluster server crashed");
+        // RFC 010 PR-5: fault-injection registry for Jepsen runs. Empty in
+        // production builds; populated via /v1/debug/fault/inject.
+        let fault_registry = crate::debug::FaultRegistry::new();
+
+        // RFC 019: durable job queue. Same data dir as commit log; separate
+        // SQLite file so the two contend on different WAL files.
+        let jobs_path = cfg.server.data_dir.join("jobs.sqlite");
+        let jobs: Arc<dyn crate::jobs::JobQueue> = Arc::new(
+            crate::jobs::LocalSqliteJobQueue::open(&jobs_path)
+                .map_err(|e| anyhow::anyhow!("failed to open job queue: {e}"))?,
+        );
+        tracing::info!(jobs_path = %jobs_path.display(), "job queue opened");
+
+        // Issue #39: control-DB-backed AuthProvider. Recognizes the cluster
+        // master secret as the cluster-admin principal; resolves regular
+        // tokens via control.tokens → Principal{tenant=db.name, scopes=data-plane}.
+        let auth_provider: Arc<dyn crate::auth::AuthProvider> =
+            Arc::new(crate::auth::ControlDbAuthProvider::new(
+                control.clone(),
+                cfg.cluster.cluster_secret.clone(),
+            ));
+
+        let state = Arc::new(AppState {
+            control,
+            pool,
+            workers,
+            cluster: cluster_ctx.clone(),
+            inflight: std::sync::atomic::AtomicU32::new(0),
+            admission,
+            control_runtime: control_runtime_handle.clone(),
+            commit_log,
+            raft: raft_assembly,
+            fault_registry,
+            jobs,
+            data_dir: cfg.server.data_dir.clone(),
+            auth_provider,
+        });
+
+        // Built-in watchdog — periodically probes the engine lock and fires a
+        // metric if acquisition takes too long. Complement to the external bash
+        // watchdog: this one runs in-process and feeds /metrics directly, while
+        // the external one captures gdb backtraces and triggers ntfy alerts.
+        {
+            let state_clone = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    let pool = state_clone.pool.clone();
+                    let control = state_clone.control.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        // Probe engine lock on default db
+                        let db_record = {
+                            let ctrl = control.lock();
+                            ctrl.get_database("default").ok().flatten()
+                        };
+                        if let Some(rec) = db_record {
+                            if let Ok(engine) = pool.get_engine(&rec) {
+                                // v0.8.9: engine is Arc<YantrikDB> with no outer
+                                // mutex — exercise the read pool via stats() and
+                                // record probe latency as the health signal.
+                                let start = std::time::Instant::now();
+                                let _ = engine.stats(None);
+                                let elapsed = start.elapsed();
+                                crate::metrics::record_engine_lock_wait(elapsed);
+                                if elapsed >= std::time::Duration::from_secs(5) {
+                                    tracing::warn!(
+                                        elapsed_ms = elapsed.as_millis() as u64,
+                                        "built-in watchdog: engine probe slow (>5s)"
+                                    );
+                                }
+                            }
+                        }
+                    })
+                    .await;
+                }
+            });
+            tracing::info!("built-in watchdog started (15s cadence, 5s lock timeout)");
+        }
+
+        // Build TLS acceptor if configured
+        let tls_acceptor = if cfg.tls.is_enabled() {
+            let acceptor = tls::build_tls_acceptor(&cfg.tls)?;
+            tracing::info!("TLS enabled");
+            Some(acceptor)
+        } else {
+            None
+        };
+
+        // Start wire protocol server
+        let wire_addr = format!("0.0.0.0:{}", cfg.server.wire_port);
+        let wire_listener = tokio::net::TcpListener::bind(&wire_addr).await?;
+
+        // Start HTTP gateway
+        let http_addr = format!("0.0.0.0:{}", cfg.server.http_port);
+        let http_listener = tokio::net::TcpListener::bind(&http_addr).await?;
+
+        tracing::info!(
+            wire_port = cfg.server.wire_port,
+            http_port = cfg.server.http_port,
+            tls = cfg.tls.is_enabled(),
+            data_dir = %cfg.server.data_dir.display(),
+            "YantrikDB server starting"
+        );
+
+        let wire_state = Arc::clone(&state);
+        let http_state = Arc::clone(&state);
+        let shutdown_state = Arc::clone(&state);
+
+        // Cancellation token for cluster background tasks
+        let cluster_cancel = tokio_util::sync::CancellationToken::new();
+
+        // Spawn cluster server + background loops if clustered.
+        // Per RFC 009 §4: when split runtime is active, ALL cluster background
+        // tasks spawn on `control_runtime_handle` so HTTP/recall load can't
+        // starve them of CPU. Falls back to current runtime if split runtime
+        // failed to build (best-effort isolation).
+        let mut cluster_handles = Vec::new();
+        if let Some(ref ctx) = cluster_ctx {
+            let cluster_addr = format!("0.0.0.0:{}", cfg.cluster.cluster_port);
+            let cluster_listener = tokio::net::TcpListener::bind(&cluster_addr).await?;
+            tracing::info!(
+                cluster_port = cfg.cluster.cluster_port,
+                isolated_runtime = control_runtime_handle.is_some(),
+                "cluster wire server starting"
+            );
+
+            let spawn = |fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>| {
+                match control_runtime_handle.as_ref() {
+                    Some(handle) => handle.spawn(fut),
+                    None => tokio::spawn(fut),
+                }
+            };
+
+            // Cluster server (peer-to-peer)
+            let ctx_clone = Arc::clone(ctx);
+            cluster_handles.push(spawn(Box::pin(async move {
+                if let Err(e) =
+                    cluster::server::run_cluster_server(cluster_listener, ctx_clone).await
+                {
+                    tracing::error!(error = %e, "cluster server crashed");
+                }
+            })));
+
+            // Heartbeat loop (leader sends heartbeats, followers monitor).
+            // This is the task whose scheduling latency drives the term=1423
+            // thrashing failure mode. Highest priority for CPU isolation.
+            let ctx_clone = Arc::clone(ctx);
+            let cancel_clone = cluster_cancel.clone();
+            cluster_handles.push(spawn(Box::pin(async move {
+                cluster::heartbeat::run_heartbeat_loop(ctx_clone, cancel_clone).await;
+            })));
+
+            // Oplog sync loop (followers/replicas pull from leader)
+            let ctx_clone = Arc::clone(ctx);
+            let cancel_clone = cluster_cancel.clone();
+            cluster_handles.push(spawn(Box::pin(async move {
+                cluster::sync_loop::run_sync_loop(ctx_clone, cancel_clone).await;
+            })));
+
+            // Scheduling-latency probe — spawns on the control runtime,
+            // measures the gap between when it's woken and when it runs.
+            // This is the metric `tests/cpu_isolation.rs` asserts on.
+            // See `runtime::start_scheduling_latency_probe`.
+            let cancel_clone = cluster_cancel.clone();
+            cluster_handles.push(spawn(Box::pin(async move {
+                run_scheduling_latency_probe(cancel_clone).await;
+            })));
+        }
+
+        // Run both servers concurrently, shutdown on ctrl-c
+        tokio::select! {
+            result = server::run_wire_server(wire_listener, wire_state, tls_acceptor) => {
+                result?;
             }
-        })));
-
-        // Heartbeat loop (leader sends heartbeats, followers monitor).
-        // This is the task whose scheduling latency drives the term=1423
-        // thrashing failure mode. Highest priority for CPU isolation.
-        let ctx_clone = Arc::clone(ctx);
-        let cancel_clone = cluster_cancel.clone();
-        cluster_handles.push(spawn(Box::pin(async move {
-            cluster::heartbeat::run_heartbeat_loop(ctx_clone, cancel_clone).await;
-        })));
-
-        // Oplog sync loop (followers/replicas pull from leader)
-        let ctx_clone = Arc::clone(ctx);
-        let cancel_clone = cluster_cancel.clone();
-        cluster_handles.push(spawn(Box::pin(async move {
-            cluster::sync_loop::run_sync_loop(ctx_clone, cancel_clone).await;
-        })));
-
-        // Scheduling-latency probe — spawns on the control runtime,
-        // measures the gap between when it's woken and when it runs.
-        // This is the metric `tests/cpu_isolation.rs` asserts on.
-        // See `runtime::start_scheduling_latency_probe`.
-        let cancel_clone = cluster_cancel.clone();
-        cluster_handles.push(spawn(Box::pin(async move {
-            run_scheduling_latency_probe(cancel_clone).await;
-        })));
-    }
-
-    // Run both servers concurrently, shutdown on ctrl-c
-    tokio::select! {
-        result = server::run_wire_server(wire_listener, wire_state, tls_acceptor) => {
-            result?;
+            result = axum::serve(http_listener, http_gateway::router(http_state))
+                .with_graceful_shutdown(shutdown_signal()) => {
+                result?;
+            }
+            _ = shutdown_signal() => {
+                tracing::info!("shutdown signal received");
+            }
         }
-        result = axum::serve(http_listener, http_gateway::router(http_state))
-            .with_graceful_shutdown(shutdown_signal()) => {
-            result?;
-        }
-        _ = shutdown_signal() => {
-            tracing::info!("shutdown signal received");
-        }
-    }
 
-    // Stop cluster background tasks
-    cluster_cancel.cancel();
-    for h in cluster_handles {
-        let _ = h.await;
-    }
+        // Stop cluster background tasks
+        cluster_cancel.cancel();
+        for h in cluster_handles {
+            let _ = h.await;
+        }
 
-    // Graceful shutdown
-    tracing::info!("stopping background workers...");
-    shutdown_state.workers.stop_all();
+        // Graceful shutdown
+        tracing::info!("stopping background workers...");
+        shutdown_state.workers.stop_all();
+
+        Ok(())
+    })
+    .await;
 
     // Shut down the split runtime (if active). 5s deadline per runtime.
     // App runtime drops first so any control-runtime tasks waiting on
     // app futures don't hang. See `SplitRuntime::shutdown_timeout`.
+    //
+    // v0.8.19 incident root cause (2026-05-20): `Runtime::shutdown_timeout`
+    // itself panics when called from inside an async context (we're inside
+    // the outer `runtime.block_on(async_main())` here). The v0.8.19
+    // inner-async wrap above is necessary but not sufficient — we also
+    // need to do the actual shutdown on a thread that has NO tokio
+    // thread-local context. `spawn_blocking` dispatches the closure to
+    // the outer runtime's blocking pool, where the worker thread has no
+    // active Runtime handle, so the inner SplitRuntime's Runtime drops
+    // cleanly without tripping the "Cannot drop a runtime in a context
+    // where blocking is not allowed" panic in
+    // tokio-1.52/src/runtime/blocking/shutdown.rs:51.
     if let Some(rt) = split_runtime {
-        rt.shutdown_timeout(std::time::Duration::from_secs(5));
+        let _ = tokio::task::spawn_blocking(move || {
+            rt.shutdown_timeout(std::time::Duration::from_secs(5));
+        })
+        .await;
     }
+
+    // Propagate the inner block result AFTER split_runtime drop.
+    result?;
 
     tracing::info!("YantrikDB server stopped");
 

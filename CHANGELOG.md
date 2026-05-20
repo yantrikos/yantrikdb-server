@@ -5,6 +5,74 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.18] — 2026-05-20
+
+Engine bump to v0.7.19 closes two latent reliability bugs that had
+been silently affecting every deployment. **All operators should
+upgrade.** The previous releases ran without the engine's background
+compactor spawned, which manifested as:
+
+- New deployments locked permanently after the 256th write
+  (`503 ingest queue full (256 pending ops, max=256)`).
+- Established deployments shed memories silently — production trader
+  accumulated 23,043 orphaned memory rows (rows in `memories` table
+  with no corresponding `oplog` entry) over 39 days.
+
+Both root-caused via a 2-core LXC reliability bench on 2026-05-20.
+Full diagnosis + repro in
+[`benchmarks/throughput_2core_lxc/results_2026-05-20.md`](benchmarks/throughput_2core_lxc/results_2026-05-20.md).
+
+### Changed — engine pin v0.7.17 → v0.7.19
+
+The engine ships the two structural fixes; the server change is a
+single call site (`tenant_pool.rs::get_engine` now invokes
+`spawn_all_workers` and stores the returned guard alongside the
+`Arc<YantrikDB>`).
+
+- **`spawn_all_workers` bundle** (v0.7.18): every engine that joins
+  the tenant pool now spawns both the materializer threadpool *and*
+  the compactor in one call. The guards drop alongside the engine
+  Arc when the tenant is evicted, signaling worker shutdown. Thread
+  topology gains `yantrikdb-compa` + `yantrikdb-mater` named workers
+  (visible in `ps -L`).
+
+- **Compensating DELETE on Backpressure** (v0.7.19): when
+  `vec_index.append` returns `Err(Backpressure)`, the engine now
+  rolls back the just-inserted `memories` row before propagating
+  the 503. No more silent orphan accumulation on transient delta
+  saturation.
+
+- **`replication_apply_log` audit table** (v0.7.19, schema v29):
+  separates locally-originated writes from replication-applied
+  writes so operators can run a three-population audit query to
+  detect provenance drift. Existing engines auto-migrate to v29
+  on first open.
+
+### Operational guidance
+
+- Existing memory rows that pre-date v0.7.19 stay as-is; the
+  retroactive backfill SQL is documented in the engine v0.7.19
+  release notes (insert `unknown_path` rows into
+  `replication_apply_log` to register pre-existing memories in the
+  audit query).
+- The compactor is automatic; no operator configuration knob is
+  exposed. Tunable env vars (`YANTRIKDB_DELTA_MAX`,
+  `YANTRIKDB_MAX_DIRTY_AGE_SECS`) remain at engine defaults (256,
+  60s) which suit normal deployments. On 2-core hardware,
+  `DELTA_MAX=64 MAX_DIRTY_AGE_SECS=10` lifts read throughput
+  ~72% at writers=32 with a 40% bonus to writes — see the bench
+  results doc for the empirical sweep.
+
+### Bench results — 2-core LXC, fresh install
+
+| Behavior | Pre-0.8.18 | v0.8.18 |
+|---|---|---|
+| Sustained write throughput at c=4 (HTTP, pre-computed embedding) | locks at 256 writes | **381/s sustained** |
+| Engine ceiling at writers=32 (wedge_repro direct) | n/a (no compactor spawned) | **1115/s** |
+| Orphan_delta (memories - oplog `record_with_rid` applied=1) | 1203 (= 503 count) | **0** |
+| `yantrikdb-compa` thread on `ps -L` | absent | present |
+| `meta.schema_version` on fresh DB | 28 | 29 |
+
 ## [0.8.17] — 2026-05-18
 
 HTTP read endpoints for [wysie](https://github.com/wysie)'s

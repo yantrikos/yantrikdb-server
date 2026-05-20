@@ -8,6 +8,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use yantrikdb::engine::materializer::{
+    recommended_worker_count, spawn_all_workers, AllWorkerGuards,
+};
 use yantrikdb::YantrikDB;
 
 use crate::commit::{ApplyError, EngineResolver, TenantId};
@@ -17,6 +20,12 @@ use crate::embedder::ServerEmbedder;
 
 pub struct TenantPool {
     engines: Mutex<HashMap<i64, Arc<YantrikDB>>>,
+    /// Per-engine background worker guards (materializer + compactor).
+    /// Held for the lifetime of the engine; dropped when the engine is
+    /// evicted from the pool, which signals workers to shut down.
+    /// Without these the engine's delta tier never compacts, and writes
+    /// wedge at `delta_max` (default 256) — see v0.7.18 release notes.
+    worker_guards: Mutex<HashMap<i64, AllWorkerGuards>>,
     data_dir: PathBuf,
     embedding_dim: usize,
     embedder: Option<ServerEmbedder>,
@@ -31,6 +40,7 @@ impl TenantPool {
     ) -> Self {
         Self {
             engines: Mutex::new(HashMap::new()),
+            worker_guards: Mutex::new(HashMap::new()),
             data_dir: config.server.data_dir.clone(),
             embedding_dim: config.embedding.dim,
             embedder,
@@ -84,6 +94,13 @@ impl TenantPool {
         let engine = Arc::new(engine);
         engines.insert(db_record.id, Arc::clone(&engine));
 
+        // v0.7.18: spawn the engine's materializer + compactor workers.
+        // Without these the delta tier never drains and writes wedge at
+        // delta_max (default 256). Bundle returns a guard whose Drop
+        // signals shutdown — store under db_id with engine-lifetime.
+        let guard = spawn_all_workers(&engine, recommended_worker_count());
+        self.worker_guards.lock().insert(db_record.id, guard);
+
         tracing::info!(db_name = %db_record.name, db_id = db_record.id, "loaded engine");
 
         Ok(engine)
@@ -97,6 +114,9 @@ impl TenantPool {
     pub fn evict(&self, db_id: i64) {
         let mut engines = self.engines.lock();
         engines.remove(&db_id);
+        // Drop the worker guard alongside the engine — Drop signals the
+        // materializer + compactor to shut down for this tenant.
+        self.worker_guards.lock().remove(&db_id);
     }
 
     /// Number of loaded engines.

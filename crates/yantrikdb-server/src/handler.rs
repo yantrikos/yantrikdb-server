@@ -149,6 +149,8 @@ pub fn execute_with_guard(
                     namespace.as_deref(),
                     domain.as_deref(),
                     source.as_deref(),
+                    None, // certainty_min — v0.7.20 issue #46; pre-existing behavior = no filter
+                    None, // order — v0.7.20 issue #46; pre-existing behavior = relevance order
                 )?
             } else if namespace.is_some()
                 || domain.is_some()
@@ -170,6 +172,8 @@ pub fn execute_with_guard(
                     namespace.as_deref(),
                     domain.as_deref(),
                     source.as_deref(),
+                    None, // certainty_min — v0.7.20 issue #46; pre-existing behavior = no filter
+                    None, // order — v0.7.20 issue #46; pre-existing behavior = relevance order
                 )?
             } else {
                 db.recall_text(&query, top_k)?

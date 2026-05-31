@@ -5,6 +5,30 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.20] — 2026-05-30
+
+Engine bump to v0.7.20 (in-place `correct()` with revision history, schema v30) and removal of pre-split scaffolding that confused external users.
+
+### Changed — engine pin v0.7.19 → v0.7.20
+
+v0.7.20 ships the `correct()` rewrite: in-place mutation with an audit-trail revision history instead of a forget+remember+supersedes pattern. The signature is breaking (requires `reason`, makes `new_text` optional, drops the inline embedding param), but the server binary doesn't call `correct()` directly — it routes through the engine's HTTP/wire interface — so the pin bump applies without source changes in this crate. Schema v30 (`record_revisions` table) lands on first start; migration is additive and forward-only.
+
+The link-model engine work (v0.7.21 / v0.7.22) is intentionally held one release out per the don't-stack-schema-migrations discipline. v0.7.21's schema v31 + the new MCP link surface land in v0.8.21 after a trader soak week on v30.
+
+### Removed — `crates/yantrikdb-python`
+
+The orphaned `crates/yantrikdb-python` directory has been deleted from the workspace. It was pre-split scaffolding from when engine and server lived in one repo: nothing in the server binary linked it, CI didn't build it, releases didn't publish it, and its `pyproject.toml` still claimed the engine's `yantrikdb` PyPI namespace at the stale v0.4.0.
+
+External users running `pip install git+https://github.com/yantrikos/yantrikdb-server` were hitting a pyo3 0.23 / Python 3.14 build failure inside the orphan (#43, reported by @donbowman). The fix is removal rather than maintenance — `yantrikdb-server` is a Rust HTTP daemon, not a Python package. For Python access to the engine, the canonical paths remain `pip install yantrikdb` (engine) and `pip install yantrikdb-mcp` (MCP server wrapper).
+
+Install paths for the server binary, unchanged:
+
+- `cargo install --git https://github.com/yantrikos/yantrikdb-server`
+- Docker: `ghcr.io/yantrikos/yantrikdb-server`
+- GitHub release binaries (linux-amd64, windows-amd64, macos-arm64, macos-amd64)
+
+Closes #43.
+
 ## [0.8.19] — 2026-05-20
 
 Hotfix for the cluster-mode startup regression in v0.8.18. **Cluster operators must upgrade.** Single-node deployments were unaffected by the v0.8.18 regression.

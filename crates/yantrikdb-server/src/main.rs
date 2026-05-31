@@ -779,9 +779,10 @@ async fn async_main() -> anyhow::Result<()> {
                 yantrikdb::YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), 384)?
             };
 
-            // Set up embedder for re-embedding
+            // Set up embedder for re-embedding. v0.7.20 made set_embedder
+            // fallible (dim validation).
             let embedder = embedder::FastEmbedder::new()?;
-            engine.set_embedder(embedder.boxed());
+            engine.set_embedder(embedder.boxed())?;
 
             let stdin = std::io::BufReader::new(std::io::stdin());
             use std::io::BufRead;

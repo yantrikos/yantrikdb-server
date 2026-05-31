@@ -80,9 +80,12 @@ impl TenantPool {
             YantrikDB::new(db_path.to_str().unwrap_or("yantrik.db"), self.embedding_dim)?
         };
 
-        // Set the shared embedder if available
+        // Set the shared embedder if available. v0.7.20 made set_embedder
+        // fallible — it validates the new embedder's dim matches the engine's
+        // opened dim. Propagate the Err so a configuration mismatch fails
+        // tenant boot cleanly rather than booting with the wrong embedder.
         if let Some(ref emb) = self.embedder {
-            engine.set_embedder(emb.boxed());
+            engine.set_embedder(emb.boxed())?;
         }
 
         // v0.8.9: drop the server-side Mutex<YantrikDB>. YantrikDB is

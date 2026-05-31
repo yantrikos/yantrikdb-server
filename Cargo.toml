@@ -4,7 +4,6 @@ members = [
     "crates/yantrikdb-protocol",
     "crates/yantrikdb-server",
     "crates/yantrikdb-witness",
-    "crates/yantrikdb-python",
     "crates/yql",
 ]
 exclude = [

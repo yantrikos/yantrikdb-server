@@ -3799,7 +3799,17 @@ async fn memory_get(
 
     // Cross-namespace requests get the same 404 as missing rids — we
     // never confirm a memory's existence outside the caller's scope.
-    if memory.namespace != effective_namespace {
+    //
+    // The empty-string namespace is the *write-path default*: `remember`
+    // stores `namespace = ""` when the client omits the field
+    // (http_gateway.rs `remember`, `unwrap_or("")`). Such unscoped rows
+    // live in the caller's own database — already resolved via
+    // `get_database(effective_namespace)` above, which is the isolation
+    // boundary — so they belong to the caller's scope and must be
+    // readable here (this is exactly the rows `/v1/recall` returns).
+    // Only a *different, non-empty* namespace is a genuine cross-namespace
+    // read worth hiding behind a 404.
+    if !memory.namespace.is_empty() && memory.namespace != effective_namespace {
         return Err(api_error(
             StatusCode::NOT_FOUND,
             ApiErrorCode::MemoryNotFound,
@@ -5183,6 +5193,73 @@ mod memory_get_e2e {
         })
         .await
         .unwrap()
+    }
+
+    /// Plant a memory into `db_namespace`'s database but stamp its
+    /// `namespace` *column* with `row_namespace`. Lets a test reproduce the
+    /// production write default, where `/v1/remember` stores `namespace=""`
+    /// when the client omits the field.
+    async fn plant_memory_with_row_namespace(
+        state: std::sync::Arc<crate::server::AppState>,
+        db_namespace: &str,
+        row_namespace: &str,
+        text: &str,
+    ) -> String {
+        let db = {
+            let ctrl = state.control.lock();
+            ctrl.get_database(db_namespace).unwrap().unwrap()
+        };
+        let engine = state.pool.get_engine(&db).unwrap();
+        let text_owned = text.to_string();
+        let ns_owned = row_namespace.to_string();
+        tokio::task::spawn_blocking(move || {
+            let embedding = vec![0.0_f32; 384];
+            engine
+                .record(
+                    &text_owned, "fact", 0.5, 0.0, 86_400.0,
+                    &serde_json::json!({}), &embedding, &ns_owned,
+                    1.0, "general", "test", None,
+                )
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn returns_row_stored_with_empty_default_namespace() {
+        // Regression: `/v1/remember` stores `namespace = ""` when the client
+        // omits the field; `/v1/recall` returns such rows, but the point
+        // read used to 404 because `"" != "acme"`. An unscoped row in the
+        // caller's own database must be readable by rid.
+        let fx = build_fixture("acme");
+        let rid =
+            plant_memory_with_row_namespace(fx.state.clone(), "acme", "", "brand color is blue")
+                .await;
+        let (status, body) =
+            get(fx.state.clone(), &format!("/v1/memory/{rid}"), Some(&fx.raw_token)).await;
+        assert_eq!(
+            status,
+            200,
+            "default-namespace row must be readable by rid, got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["rid"], rid);
+        assert_eq!(v["text"], "brand color is blue");
+    }
+
+    #[tokio::test]
+    async fn still_hides_row_tagged_with_different_nonempty_namespace() {
+        // The relaxation admits ONLY the empty-string default — a row
+        // explicitly tagged with a different, non-empty namespace is still
+        // hidden behind a 404, preserving cross-namespace isolation.
+        let fx = build_fixture("acme");
+        let rid =
+            plant_memory_with_row_namespace(fx.state.clone(), "acme", "other", "secret").await;
+        let (status, _body) =
+            get(fx.state.clone(), &format!("/v1/memory/{rid}"), Some(&fx.raw_token)).await;
+        assert_eq!(status, 404);
     }
 
     #[tokio::test]

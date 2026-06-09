@@ -5,37 +5,84 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.21] — 2026-06-08
+## [0.8.21] — 2026-06-09
 
-Read-only relaxation in `/v1/memory/{rid}` so rows stored with `namespace=""` (the historical write-path default when the client omits the field) are now readable instead of 404. Cross-namespace isolation preserved — rows tagged with a *different, non-empty* namespace still 404.
+Row-tag model canonicalization on the read path. `/v1/memory/{rid}` and `/v1/memories` now treat `namespace` as an optional row-level tag rather than a tenant scope. The database is the isolation boundary; `namespace` is just an organizational filter on top of it.
 
-### Fixed — `/v1/memory/{rid}` returns rows with empty-string namespace
+### Why
 
-The point-read guard used strict equality (`memory.namespace == effective_namespace`), so any row written with `namespace=""` 404'd even though `/v1/recall` returned it. Such rows live in the caller's own database — already resolved via `get_database(effective_namespace)`, which is the real isolation boundary — so they belong to the caller's scope and must be readable.
+Pre-merge validation against trader CT 168 surfaced a real data-model question. The dashboard read endpoints filtered with `memory.namespace == effective_namespace`, where `effective_namespace = principal.tenant_id`. That assumes `namespace` is a tenant scope. The production data says otherwise:
 
-The relaxation admits *only* the empty-string default. A row explicitly tagged with a different, non-empty namespace still returns 404 to preserve cross-namespace isolation. Authored by the autonomous agent on lane-b (CT 167) as part of the agentic experiments program.
+```
+trader/default tenant namespace distribution (real data):
+  skill_substrate         187,932    ← lane-b autonomous workflow
+  comm_substrate            2,642
+  growth_lab_b_algo           658
+  growth_lab_b                440
+  growth_lab_b_grok           101
+  phaseb_C3_seed100_*          12+   (many phaseb_C* variants)
+```
+
+200k+ rows store `namespace` as a row-level tag — `skill_substrate` is the canonical MCP skills namespace, `comm_substrate` is for swarm coordination state, `growth_lab_b_*` are lane-b workspace partitions. None of these match the tenant database name. The strict-equality filter was hiding the bulk of the production data from dashboard reads.
+
+Per yantrikdb-core decision (swarm message `8a97464e`, 2026-06-09): **the database is the tenant boundary; `namespace` is an optional row-level tag.** The original spec was wrong; the validation caught it before merge.
+
+### Fixed — `/v1/memory/{rid}` no longer applies a namespace guard
+
+The cross-namespace 404 check on `memory.namespace != effective_namespace` is removed entirely. The DB lookup (`get_database(effective_namespace)`) is the real isolation boundary — any row located in the caller's database by rid belongs to the caller, regardless of its namespace tag. Lane-b's earlier empty-string stopgap is superseded by this cleaner form.
+
+### Fixed — `/v1/memories` treats `?namespace` as optional tag filter
+
+Previously the endpoint always filtered `WHERE namespace = effective_namespace`, dropping the 200k+ tagged rows. Now:
+
+- **No `?namespace` provided** → list all rows in the caller's database (no tag filter).
+- **`?namespace=skill_substrate` provided** → filter rows tagged `skill_substrate` within the caller's database.
+
+The `db_namespace` (used to route to the tenant DB) and `tag_filter` (used as the optional row filter) are now resolved separately:
+
+| Token type | `?namespace` provided? | `db_namespace` | `tag_filter` |
+|---|---|---|---|
+| Per-tenant `acme` | omitted | `acme` | None |
+| Per-tenant `acme` | `?namespace=skill_substrate` | `acme` | `Some("skill_substrate")` |
+| Per-tenant `acme` | `?namespace=acme` | `acme` | `Some("acme")` |
+| Cluster-wide | required | (= `?namespace`) | (= `?namespace`) |
+
+Per-tenant tokens can now pass any value of `?namespace` as a tag filter without triggering the prior `namespace_not_found` 403. Cross-tenant access remains impossible because routing still happens via the token's `tenant_id`.
+
+### Changed — engine pin v0.7.20 → v0.7.23
+
+`normalize_namespace()` coerces blank/whitespace `namespace` writes to `"default"` at the engine layer. Fully compatible with the row-tag model — a blank tag just becomes the default tag. Also picks up the backpressure session-count fix and the opt-in attribute-value conflict bridge from v0.7.21 / v0.7.22 / v0.7.23.
 
 ### Tests
 
-- `memory_get_e2e::returns_row_stored_with_empty_default_namespace`
-- `memory_get_e2e::still_hides_row_tagged_with_different_nonempty_namespace`
+```
+memory_get_e2e::returns_row_stored_with_empty_default_namespace
+memory_get_e2e::returns_row_with_arbitrary_nonempty_namespace_in_caller_database
+                                                ↑ replaces still_hides_row_tagged_*
+memories_list_e2e::pinned_token_can_use_arbitrary_namespace_as_tag_filter
+                                                ↑ replaces returns_403_when_pinned_token_asks_for_other_namespace
+validate::validate_defaults_when_params_empty           (tag_filter None when no ?namespace)
+validate::validate_accepts_arbitrary_namespace_as_tag_filter_for_pinned_token
+validate::validate_accepts_matching_namespace_query_for_pinned_token
+```
 
-97 http_gateway tests pass.
+**2,090 tests pass across the workspace.** No regressions.
 
-### Scope discussion — what's NOT in this release
+### Notably NOT changed
 
-Pre-merge validation against trader CT 168 revealed a load-bearing data-model question. yantrikdb-core's spec (swarm message `40d15088`, 2026-06-09) proposed a more aggressive fix: stamp the row namespace to match the tenant on write, and reject any cross-namespace body field. That change matches the dashboard's filtering assumption (`effective_namespace == tenant_id`), but it contradicts the actual data pattern used by lane-b's autonomous workflow — trader's `default` tenant has 187,932 rows with `namespace="skill_substrate"`, 2,642 `namespace="comm_substrate"`, plus `growth_lab_b_*` and other custom row tags. Shipping the write-side enforcement would have rejected 403 on every algo `remember()` call and bricked the agentic loop.
+- **No write-path behavior change.** `/v1/remember` and `/v1/remember/batch` continue to accept any `namespace` value (including ""), store it as the row tag, and never reject on namespace mismatch. Algo's autonomous loop is unaffected.
+- **No backfill migration.** The 200k+ tagged rows are correct as-is; they were never broken, the read path was.
+- **`/v1/recall` unchanged.** It never enforced per-row namespace equality.
 
-The broader question — is `namespace` a row-level tag (data shape) or a tenant boundary (dashboard assumption)? — is deferred to v0.8.22 with a proper design discussion.
+### Authorship note
 
-This release ships only the safe, strict-improvement read-side relaxation. No write-side behavior change. No engine pin bump.
+The first iteration of this fix (read-side empty-string stopgap, commit `f4951cb`) was authored by the autonomous agent on lane-b (CT 167) as part of Pranab's agentic-experiments program. The generalization to drop the guard entirely + treat `?namespace` as optional tag filter came from yantrikdb-core's decision after pre-merge validation surfaced the data-model conflict.
 
-### Deferred
+### Deferred to v0.8.22+
 
-- Write-side namespace stamping / pinned-token guard — pending the row-tag-vs-tenant design call
-- Backfill migration for legacy `""` / `"default"` rows
-- `/v1/memories` list to surface empty-namespace rows (requires either OR-filter at the engine layer or server-side merge of two list calls)
-- Link model MCP surface, `/v1/admin/audit/leak_candidates` endpoint, Proposal 5 validation-UX — all carried forward
+- Link model MCP surface — extend `remember` with `links` arg → `record_with_links_partial`, expand_links on `recall`, `link`/`unlink`/`linked_records`, `reify_supersedes_links` admin tool
+- `/v1/admin/audit/leak_candidates` HTTP endpoint
+- Proposal 5 validation-gate repair UX
 
 ## [0.8.20] — 2026-05-30
 

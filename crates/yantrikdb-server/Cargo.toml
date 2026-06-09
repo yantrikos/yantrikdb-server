@@ -32,7 +32,7 @@ path = "src/main.rs"
 #     accumulated over 39 days). Also introduces the v29 schema migration
 #     with the replication_apply_log audit table for the three-population
 #     audit query (locally-originated / replication-applied / true orphan).
-yantrikdb = { version = "0.7.20", git = "https://github.com/yantrikos/yantrikdb.git", branch = "main" }
+yantrikdb = { version = "0.7.23", git = "https://github.com/yantrikos/yantrikdb.git", branch = "main" }
 yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime

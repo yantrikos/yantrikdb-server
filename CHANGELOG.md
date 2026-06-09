@@ -5,6 +5,38 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.21] — 2026-06-08
+
+Read-only relaxation in `/v1/memory/{rid}` so rows stored with `namespace=""` (the historical write-path default when the client omits the field) are now readable instead of 404. Cross-namespace isolation preserved — rows tagged with a *different, non-empty* namespace still 404.
+
+### Fixed — `/v1/memory/{rid}` returns rows with empty-string namespace
+
+The point-read guard used strict equality (`memory.namespace == effective_namespace`), so any row written with `namespace=""` 404'd even though `/v1/recall` returned it. Such rows live in the caller's own database — already resolved via `get_database(effective_namespace)`, which is the real isolation boundary — so they belong to the caller's scope and must be readable.
+
+The relaxation admits *only* the empty-string default. A row explicitly tagged with a different, non-empty namespace still returns 404 to preserve cross-namespace isolation. Authored by the autonomous agent on lane-b (CT 167) as part of the agentic experiments program.
+
+### Tests
+
+- `memory_get_e2e::returns_row_stored_with_empty_default_namespace`
+- `memory_get_e2e::still_hides_row_tagged_with_different_nonempty_namespace`
+
+97 http_gateway tests pass.
+
+### Scope discussion — what's NOT in this release
+
+Pre-merge validation against trader CT 168 revealed a load-bearing data-model question. yantrikdb-core's spec (swarm message `40d15088`, 2026-06-09) proposed a more aggressive fix: stamp the row namespace to match the tenant on write, and reject any cross-namespace body field. That change matches the dashboard's filtering assumption (`effective_namespace == tenant_id`), but it contradicts the actual data pattern used by lane-b's autonomous workflow — trader's `default` tenant has 187,932 rows with `namespace="skill_substrate"`, 2,642 `namespace="comm_substrate"`, plus `growth_lab_b_*` and other custom row tags. Shipping the write-side enforcement would have rejected 403 on every algo `remember()` call and bricked the agentic loop.
+
+The broader question — is `namespace` a row-level tag (data shape) or a tenant boundary (dashboard assumption)? — is deferred to v0.8.22 with a proper design discussion.
+
+This release ships only the safe, strict-improvement read-side relaxation. No write-side behavior change. No engine pin bump.
+
+### Deferred
+
+- Write-side namespace stamping / pinned-token guard — pending the row-tag-vs-tenant design call
+- Backfill migration for legacy `""` / `"default"` rows
+- `/v1/memories` list to surface empty-namespace rows (requires either OR-filter at the engine layer or server-side merge of two list calls)
+- Link model MCP surface, `/v1/admin/audit/leak_candidates` endpoint, Proposal 5 validation-UX — all carried forward
+
 ## [0.8.20] — 2026-05-30
 
 Engine bump to v0.7.20 (in-place `correct()` with revision history, schema v30) and removal of pre-split scaffolding that confused external users.

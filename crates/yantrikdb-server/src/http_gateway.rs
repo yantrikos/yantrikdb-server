@@ -5216,9 +5216,18 @@ mod memory_get_e2e {
             let embedding = vec![0.0_f32; 384];
             engine
                 .record(
-                    &text_owned, "fact", 0.5, 0.0, 86_400.0,
-                    &serde_json::json!({}), &embedding, &ns_owned,
-                    1.0, "general", "test", None,
+                    &text_owned,
+                    "fact",
+                    0.5,
+                    0.0,
+                    86_400.0,
+                    &serde_json::json!({}),
+                    &embedding,
+                    &ns_owned,
+                    1.0,
+                    "general",
+                    "test",
+                    None,
                 )
                 .unwrap()
         })
@@ -5236,8 +5245,12 @@ mod memory_get_e2e {
         let rid =
             plant_memory_with_row_namespace(fx.state.clone(), "acme", "", "brand color is blue")
                 .await;
-        let (status, body) =
-            get(fx.state.clone(), &format!("/v1/memory/{rid}"), Some(&fx.raw_token)).await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}"),
+            Some(&fx.raw_token),
+        )
+        .await;
         assert_eq!(
             status,
             200,
@@ -5257,8 +5270,12 @@ mod memory_get_e2e {
         let fx = build_fixture("acme");
         let rid =
             plant_memory_with_row_namespace(fx.state.clone(), "acme", "other", "secret").await;
-        let (status, _body) =
-            get(fx.state.clone(), &format!("/v1/memory/{rid}"), Some(&fx.raw_token)).await;
+        let (status, _body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}"),
+            Some(&fx.raw_token),
+        )
+        .await;
         assert_eq!(status, 404);
     }
 

@@ -3510,7 +3510,17 @@ fn memory_to_dashboard_row(m: &yantrikdb::Memory) -> Value {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MemoriesListResolved {
-    effective_namespace: String,
+    /// Tenant database name — used by `get_database` to route the request
+    /// to the correct engine. Comes from `principal.tenant_id` for
+    /// per-tenant tokens; cluster-wide tokens must supply `?namespace`
+    /// which is then both the DB selector AND (if pinned) the only
+    /// possible tag filter.
+    db_namespace: String,
+    /// Optional row-level tag filter. Set ONLY when the client explicitly
+    /// provided `?namespace`. When None, list every row in `db_namespace`
+    /// regardless of tag. Per yantrikdb-core decision (swarm 8a97464e,
+    /// 2026-06-09): `namespace` is a row tag, not a tenant scope.
+    tag_filter: Option<String>,
     limit: usize,
     offset: usize,
     sort_by: String,
@@ -3581,10 +3591,33 @@ fn validate_memories_params(
     }
     let offset = params.offset.unwrap_or(0);
 
-    let effective_namespace = access::resolve_namespace(principal, params.namespace.as_deref())?;
+    // Resolve db_namespace (= tenant routing) and tag_filter (= optional
+    // row filter) as separate concerns. Per yantrikdb-core decision
+    // (swarm 8a97464e, 2026-06-09): `namespace` is a row-level tag, not
+    // a tenant scope, so the prior strict-equality check between
+    // principal.tenant_id and `?namespace` was wrong. Per-tenant tokens
+    // can now pass `?namespace=skill_substrate` to filter; cluster-wide
+    // tokens still must pass `?namespace` to select a database.
+    let (db_namespace, tag_filter) = match (&principal.tenant_id, params.namespace.as_deref()) {
+        // Per-tenant token: db is fixed by the token. `?namespace` (if any)
+        // is a tag filter; it does NOT need to match the tenant.
+        (Some(tenant), tag) => (tenant.clone(), tag.map(|s| s.to_string())),
+        // Cluster-wide token: `?namespace` selects the database AND acts
+        // as the tag filter for that listing. Without it we can't route.
+        (None, Some(q)) => (q.to_string(), Some(q.to_string())),
+        (None, None) => {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                ApiErrorCode::InvalidQueryParameter,
+                "namespace is required for cluster-wide tokens",
+            ));
+        }
+    };
+    let _ = access::resolve_namespace; // intentionally bypassed — see above
 
     Ok(MemoriesListResolved {
-        effective_namespace,
+        db_namespace,
+        tag_filter,
         limit,
         offset,
         sort_by: sort_by.to_string(),
@@ -3606,7 +3639,7 @@ async fn memories_list(
 
     let db_record = {
         let ctrl = state.control.lock();
-        ctrl.get_database(&resolved.effective_namespace)
+        ctrl.get_database(&resolved.db_namespace)
             .map_err(|e| {
                 api_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -3618,7 +3651,7 @@ async fn memories_list(
                 api_error(
                     StatusCode::FORBIDDEN,
                     ApiErrorCode::NamespaceNotFound,
-                    format!("namespace not found: {}", resolved.effective_namespace),
+                    format!("namespace not found: {}", resolved.db_namespace),
                 )
             })?
     };
@@ -3633,7 +3666,11 @@ async fn memories_list(
 
     let domain = resolved.domain.clone();
     let memory_type = resolved.memory_type.clone();
-    let effective_namespace = resolved.effective_namespace.clone();
+    // Tag filter is OPTIONAL — None means "list every row in db_namespace
+    // regardless of namespace tag." This is what makes the 200k+ rows
+    // tagged `skill_substrate`/`comm_substrate`/etc. surface for algo's
+    // and lane-b's workflows when the client omits `?namespace`.
+    let tag_filter = resolved.tag_filter.clone();
     let sort_by = resolved.sort_by.clone();
     let limit = resolved.limit;
     let offset = resolved.offset;
@@ -3644,7 +3681,7 @@ async fn memories_list(
             offset,
             domain.as_deref(),
             memory_type.as_deref(),
-            Some(&effective_namespace),
+            tag_filter.as_deref(),
             &sort_by,
         )
     })
@@ -3797,15 +3834,19 @@ async fn memory_get(
         ));
     };
 
-    // Cross-namespace requests get the same 404 as missing rids — we
-    // never confirm a memory's existence outside the caller's scope.
-    if memory.namespace != effective_namespace {
-        return Err(api_error(
-            StatusCode::NOT_FOUND,
-            ApiErrorCode::MemoryNotFound,
-            format!("memory not found: {rid}"),
-        ));
-    }
+    // No per-row namespace check. The database is the isolation
+    // boundary (resolved via `get_database(effective_namespace)` above,
+    // which is gated by the caller's token); `namespace` is an OPTIONAL
+    // row-level TAG within that database, not a tenant scope. Any row
+    // located in the caller's database by rid is the caller's row,
+    // regardless of its namespace tag. Per yantrikdb-core decision
+    // (swarm 8a97464e, 2026-06-09): row-tag is the canonical model.
+    //
+    // Prior code 404'd on `memory.namespace != effective_namespace`, which
+    // hid the 200k+ rows that algo + lane-b store with custom tags like
+    // `skill_substrate`, `comm_substrate`, `growth_lab_b_*`. That guard is
+    // removed entirely; the `effective_namespace` variable is now only
+    // used above for tenant DB routing.
 
     let mut row = memory_to_dashboard_row(&memory);
     // Phase-1 conditional includes: empty arrays. Engine extensions
@@ -4845,7 +4886,9 @@ mod memories_list_tests {
         let p = pinned("acme");
         let params = MemoriesListParams::default();
         let out = validate_memories_params(&p, &params).unwrap();
-        assert_eq!(out.effective_namespace, "acme");
+        assert_eq!(out.db_namespace, "acme");
+        // No `?namespace` provided → no tag filter → list all rows in DB.
+        assert_eq!(out.tag_filter, None);
         assert_eq!(out.limit, MEMORIES_DEFAULT_LIMIT);
         assert_eq!(out.offset, 0);
         assert_eq!(out.sort_by, "created_at");
@@ -4964,16 +5007,20 @@ mod memories_list_tests {
     }
 
     #[test]
-    fn validate_rejects_cross_namespace_query_for_pinned_token() {
-        // resolve_namespace catches this; the validator just plumbs through.
+    fn validate_accepts_arbitrary_namespace_as_tag_filter_for_pinned_token() {
+        // Per yantrikdb-core decision (swarm 8a97464e, 2026-06-09):
+        // `namespace` is a row-level TAG, not a tenant scope. A per-tenant
+        // token can now pass `?namespace=skill_substrate` as a tag filter
+        // — the DB is still routed by `principal.tenant_id`. Prior code
+        // 403'd on mismatch, which was wrong.
         let p = pinned("acme");
         let params = MemoriesListParams {
-            namespace: Some("not-acme".into()),
+            namespace: Some("skill_substrate".into()),
             ..Default::default()
         };
-        let err = validate_memories_params(&p, &params).expect_err("must reject");
-        assert_eq!(err.0, StatusCode::FORBIDDEN);
-        assert_eq!(body_field(&err, "code"), "namespace_not_found");
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.db_namespace, "acme"); // routed by tenant
+        assert_eq!(out.tag_filter.as_deref(), Some("skill_substrate")); // tag filter
     }
 
     #[test]
@@ -4984,7 +5031,11 @@ mod memories_list_tests {
             ..Default::default()
         };
         let out = validate_memories_params(&p, &params).unwrap();
-        assert_eq!(out.effective_namespace, "acme");
+        assert_eq!(out.db_namespace, "acme");
+        // `?namespace=acme` is still treated as a tag filter — explicit
+        // provision means the caller wants to filter by that tag (which
+        // happens to coincide with the tenant name here).
+        assert_eq!(out.tag_filter.as_deref(), Some("acme"));
     }
 }
 
@@ -5056,7 +5107,16 @@ mod memories_list_e2e {
     }
 
     #[tokio::test]
-    async fn returns_403_when_pinned_token_asks_for_other_namespace() {
+    async fn pinned_token_can_use_arbitrary_namespace_as_tag_filter() {
+        // Per yantrikdb-core decision (swarm 8a97464e, 2026-06-09):
+        // `namespace` is a row-level TAG, not a tenant scope. A per-tenant
+        // token's `?namespace=skill_substrate` is a tag filter against the
+        // caller's database (NOT a cross-tenant access attempt). Prior
+        // code 403'd on mismatch with `namespace_not_found`; new behavior
+        // is 200 with the rows tagged `secret` (empty here since none
+        // exist). This unblocks the dashboard's tag-filter UI for the
+        // 200k+ rows on trader's `default` tenant tagged `skill_substrate`,
+        // `comm_substrate`, etc.
         let fx = build_fixture("acme");
         let (status, body) = get(
             fx.state.clone(),
@@ -5064,9 +5124,14 @@ mod memories_list_e2e {
             Some(&fx.raw_token),
         )
         .await;
-        assert_eq!(status, 403);
+        assert_eq!(
+            status,
+            200,
+            "tag-filter request must succeed (empty result), got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["error"]["code"], "namespace_not_found");
+        assert_eq!(v["total"], 0); // no rows tagged "secret" in this tenant
     }
 
     #[tokio::test]
@@ -5183,6 +5248,108 @@ mod memory_get_e2e {
         })
         .await
         .unwrap()
+    }
+
+    /// Plant a memory into `db_namespace`'s database but stamp its
+    /// `namespace` *column* with `row_namespace`. Lets a test reproduce the
+    /// production write default, where `/v1/remember` stores `namespace=""`
+    /// when the client omits the field.
+    async fn plant_memory_with_row_namespace(
+        state: std::sync::Arc<crate::server::AppState>,
+        db_namespace: &str,
+        row_namespace: &str,
+        text: &str,
+    ) -> String {
+        let db = {
+            let ctrl = state.control.lock();
+            ctrl.get_database(db_namespace).unwrap().unwrap()
+        };
+        let engine = state.pool.get_engine(&db).unwrap();
+        let text_owned = text.to_string();
+        let ns_owned = row_namespace.to_string();
+        tokio::task::spawn_blocking(move || {
+            let embedding = vec![0.0_f32; 384];
+            engine
+                .record(
+                    &text_owned,
+                    "fact",
+                    0.5,
+                    0.0,
+                    86_400.0,
+                    &serde_json::json!({}),
+                    &embedding,
+                    &ns_owned,
+                    1.0,
+                    "general",
+                    "test",
+                    None,
+                )
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn returns_row_stored_with_empty_default_namespace() {
+        // Regression: `/v1/remember` stores `namespace = ""` when the client
+        // omits the field; `/v1/recall` returns such rows, but the point
+        // read used to 404 because `"" != "acme"`. An unscoped row in the
+        // caller's own database must be readable by rid.
+        let fx = build_fixture("acme");
+        let rid =
+            plant_memory_with_row_namespace(fx.state.clone(), "acme", "", "brand color is blue")
+                .await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(
+            status,
+            200,
+            "default-namespace row must be readable by rid, got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["rid"], rid);
+        assert_eq!(v["text"], "brand color is blue");
+    }
+
+    #[tokio::test]
+    async fn returns_row_with_arbitrary_nonempty_namespace_in_caller_database() {
+        // Per yantrikdb-core decision (swarm 8a97464e, 2026-06-09):
+        // `namespace` is a row-level TAG, not a tenant scope. ANY row
+        // located in the caller's database by rid is theirs, regardless
+        // of namespace tag. This was historically guarded by a strict
+        // equality check that 404'd rows tagged with cross-cutting
+        // values like `skill_substrate` (200k+ such rows on production
+        // trader). The guard is gone; cross-tenant isolation comes from
+        // the database boundary alone.
+        let fx = build_fixture("acme");
+        let rid = plant_memory_with_row_namespace(
+            fx.state.clone(),
+            "acme",
+            "skill_substrate",
+            "skill row",
+        )
+        .await;
+        let (status, body) = get(
+            fx.state.clone(),
+            &format!("/v1/memory/{rid}"),
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(
+            status,
+            200,
+            "skill_substrate row in caller's database must be readable by rid, got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["rid"], rid);
+        assert_eq!(v["text"], "skill row");
     }
 
     #[tokio::test]

@@ -1754,7 +1754,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -2720,7 +2720,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2757,7 +2757,7 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -4914,8 +4914,8 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb"
-version = "0.7.23"
-source = "git+https://github.com/yantrikos/yantrikdb.git?branch=main#9fe16bf01d8becf7288adaef391514fde28923e3"
+version = "0.7.24"
+source = "git+https://github.com/yantrikos/yantrikdb.git?branch=main#72bd4f79d9acc2cd4c23453cfc817a2eec38da7f"
 dependencies = [
  "aes-gcm",
  "arc-swap",

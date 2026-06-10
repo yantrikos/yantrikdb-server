@@ -3594,24 +3594,22 @@ fn validate_memories_params(
     // Resolve db_namespace (= tenant routing) and tag_filter (= optional
     // row filter) as separate concerns. Per yantrikdb-core decision
     // (swarm 8a97464e, 2026-06-09): `namespace` is a row-level tag, not
-    // a tenant scope, so the prior strict-equality check between
-    // principal.tenant_id and `?namespace` was wrong. Per-tenant tokens
-    // can now pass `?namespace=skill_substrate` to filter; cluster-wide
-    // tokens still must pass `?namespace` to select a database.
+    // a tenant scope. Per yantrikdb-agi report (swarm 77ffa517,
+    // 2026-06-10): master tokens broke under v0.8.21 because the
+    // (None, Some(q)) branch routed `?namespace` to `get_database()`,
+    // 404'ing on every tag-as-namespace query.
+    //
+    // The fix: `?namespace` is ALWAYS a tag filter, never a DB selector.
+    // Master tokens always route to "default" DB (matching
+    // resolve_engine's hardcoded behavior at line 274-296).
     let (db_namespace, tag_filter) = match (&principal.tenant_id, params.namespace.as_deref()) {
         // Per-tenant token: db is fixed by the token. `?namespace` (if any)
         // is a tag filter; it does NOT need to match the tenant.
         (Some(tenant), tag) => (tenant.clone(), tag.map(|s| s.to_string())),
-        // Cluster-wide token: `?namespace` selects the database AND acts
-        // as the tag filter for that listing. Without it we can't route.
-        (None, Some(q)) => (q.to_string(), Some(q.to_string())),
-        (None, None) => {
-            return Err(api_error(
-                StatusCode::BAD_REQUEST,
-                ApiErrorCode::InvalidQueryParameter,
-                "namespace is required for cluster-wide tokens",
-            ));
-        }
+        // Master/cluster-wide token: route to "default" DB (matching
+        // resolve_engine). `?namespace` is a tag filter only, never a DB
+        // selector.
+        (None, tag) => ("default".to_string(), tag.map(|s| s.to_string())),
     };
     let _ = access::resolve_namespace; // intentionally bypassed — see above
 
@@ -3774,15 +3772,32 @@ async fn memory_get(
     use crate::auth::Scope;
 
     access::require_scope(&principal, Scope::Read)?;
-    let effective_namespace = access::resolve_namespace(&principal, params.namespace.as_deref())?;
 
     if let Some(min_seq) = params.min_seq {
         check_min_seq(&state, min_seq)?;
     }
 
+    // Resolve db_namespace (tenant routing) directly from the principal.
+    // Per yantrikdb-core decision (swarm 8a97464e, 2026-06-09) +
+    // yantrikdb-agi report (swarm 77ffa517, 2026-06-10):
+    // - per-tenant token routes to `principal.tenant_id`
+    // - master/cluster-wide token routes to `"default"` (matching
+    //   resolve_engine's hardcoded behavior at line 274-296)
+    // - `?namespace` is irrelevant for point-read (rid uniquely
+    //   identifies the row; namespace tag is row metadata, not scope)
+    //
+    // Prior code used access::resolve_namespace which 403'd master
+    // tokens passing `?namespace=tag` and 404'd whenever the tag was
+    // mistakenly routed as a DB selector. Both paths broke algo's
+    // master-token workflow on CT 133.
+    let db_namespace = principal
+        .tenant_id
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+
     let db_record = {
         let ctrl = state.control.lock();
-        ctrl.get_database(&effective_namespace)
+        ctrl.get_database(&db_namespace)
             .map_err(|e| {
                 api_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -3794,7 +3809,7 @@ async fn memory_get(
                 api_error(
                     StatusCode::FORBIDDEN,
                     ApiErrorCode::NamespaceNotFound,
-                    format!("namespace not found: {effective_namespace}"),
+                    format!("namespace not found: {db_namespace}"),
                 )
             })?
     };
@@ -4732,6 +4747,18 @@ mod memories_list_tests {
             ]))
     }
 
+    fn master() -> Principal {
+        // Cluster-wide / master token. principal.tenant_id == None.
+        // Mirrors what resolve_engine's cluster_secret branch produces.
+        Principal::new("tok_master").with_scopes(ScopeSet::from_iter([
+            Scope::Read,
+            Scope::Write,
+            Scope::Recall,
+            Scope::Forget,
+            Scope::Admin,
+        ]))
+    }
+
     // ── unix_to_iso ─────────────────────────────────────────────────
 
     #[test]
@@ -5036,6 +5063,38 @@ mod memories_list_tests {
         // provision means the caller wants to filter by that tag (which
         // happens to coincide with the tenant name here).
         assert_eq!(out.tag_filter.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn validate_master_token_no_namespace_routes_to_default_db() {
+        // v0.8.22 fix: master/cluster-wide tokens (principal.tenant_id ==
+        // None) route to the "default" database, matching
+        // resolve_engine's hardcoded behavior. Prior to v0.8.22 this
+        // case errored with `namespace is required for cluster-wide
+        // tokens`, blocking algo's master-token workflow on CT 133.
+        let p = master();
+        let params = MemoriesListParams::default();
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.db_namespace, "default");
+        assert_eq!(out.tag_filter, None);
+    }
+
+    #[test]
+    fn validate_master_token_with_namespace_uses_default_db_and_tag_filter() {
+        // v0.8.22 fix: master tokens with `?namespace=fable3` route to
+        // "default" DB AND apply `fable3` as a tag filter — they no
+        // longer mis-route `?namespace` to `get_database("fable3")`
+        // (which 404'd because `fable3` is a row tag, not a database).
+        // This is the exact case yantrikdb-agi reported on CT 133
+        // (swarm 77ffa517, 2026-06-10).
+        let p = master();
+        let params = MemoriesListParams {
+            namespace: Some("yantrikos_entity_fable3".into()),
+            ..Default::default()
+        };
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.db_namespace, "default");
+        assert_eq!(out.tag_filter.as_deref(), Some("yantrikos_entity_fable3"));
     }
 }
 
@@ -5401,7 +5460,13 @@ mod memory_get_e2e {
     }
 
     #[tokio::test]
-    async fn returns_403_when_pinned_token_asks_for_other_namespace() {
+    async fn pinned_token_with_ns_param_on_nonexistent_rid_returns_404_not_403() {
+        // Per yantrikdb-core decision (swarm 8a97464e, 2026-06-09) +
+        // yantrikdb-agi report (swarm 77ffa517, 2026-06-10): `?namespace`
+        // is irrelevant on point-read — rid uniquely identifies the row,
+        // the database (gated by the token) is the isolation boundary.
+        // A nonexistent rid returns 404 memory_not_found regardless of
+        // the `?namespace` value the caller supplies.
         let fx = build_fixture("acme");
         let (status, body) = get(
             fx.state.clone(),
@@ -5409,9 +5474,9 @@ mod memory_get_e2e {
             Some(&fx.raw_token),
         )
         .await;
-        assert_eq!(status, 403);
+        assert_eq!(status, 404);
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["error"]["code"], "namespace_not_found");
+        assert_eq!(v["error"]["code"], "memory_not_found");
     }
 
     #[tokio::test]
@@ -5447,10 +5512,15 @@ mod memory_get_e2e {
     }
 
     #[tokio::test]
-    async fn cross_namespace_request_via_namespace_param_is_403() {
-        // The handler enforces resolve_namespace BEFORE doing the
-        // engine fetch. A pinned token asking for ?namespace=other
-        // never reaches the engine — 403 namespace_not_found.
+    async fn ns_param_is_ignored_on_point_read() {
+        // Per v0.8.22 row-tag canonicalization: `?namespace` is
+        // irrelevant for /v1/memory/{rid}. The token determines the DB
+        // (per-tenant) or routes to "default" (master); the rid
+        // uniquely identifies the row within that DB. Any value of
+        // `?namespace` returns the same result. This is the strict
+        // generalization of v0.8.21's "drop the namespace guard" fix —
+        // the query param is now plumbed through to the engine layer
+        // but has no effect on routing or filtering for point-read.
         let fx = build_fixture("acme");
         let rid = plant_memory(fx.state.clone(), "acme", "hello").await;
         let (status, body) = get(
@@ -5459,9 +5529,15 @@ mod memory_get_e2e {
             Some(&fx.raw_token),
         )
         .await;
-        assert_eq!(status, 403);
+        assert_eq!(
+            status,
+            200,
+            "?namespace=other must not block the read, got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["error"]["code"], "namespace_not_found");
+        assert_eq!(v["rid"], rid);
+        assert_eq!(v["text"], "hello");
     }
 }
 

@@ -5,6 +5,45 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.22] — 2026-06-10
+
+Master-token routing fix for `/v1/memory/{rid}` and `/v1/memories`. v0.8.21's row-tag canonicalization worked for per-tenant tokens but mis-routed master/cluster-wide tokens — `?namespace=tag` was used as a database selector, causing `404 namespace_not_found` on every tag-shaped namespace value. Algo (yantrikdb-agi) reported this as their #1 blocker on CT 133 (swarm `77ffa517`, 2026-06-10).
+
+### Fixed — master tokens route to `default` DB, `?namespace` always tag filter
+
+Two handlers updated to align with `/v1/recall`'s auth path (`resolve_engine`, which hardcodes `get_database("default")` for cluster master tokens):
+
+1. **`validate_memories_params`** — master token (`principal.tenant_id == None`) now routes `db_namespace` to `"default"`. `?namespace` is exclusively a tag filter, never a database selector. Prior `(None, None)` branch erroring with "namespace is required for cluster-wide tokens" is removed.
+
+2. **`memory_get`** — bypassed `access::resolve_namespace` entirely. Computes `db_namespace` directly from `principal.tenant_id.unwrap_or("default")`. The `?namespace` query param is now plumbed through but has no effect on routing or filtering (rid uniquely identifies the row within the resolved database).
+
+### Updated tests
+
+- `validate::validate_master_token_no_namespace_routes_to_default_db` — new
+- `validate::validate_master_token_with_namespace_uses_default_db_and_tag_filter` — new (pins the exact CT 133 scenario)
+- `memory_get_e2e::pinned_token_with_ns_param_on_nonexistent_rid_returns_404_not_403` — replaces `returns_403_when_pinned_token_asks_for_other_namespace` (old assertion no longer correct)
+- `memory_get_e2e::ns_param_is_ignored_on_point_read` — replaces `cross_namespace_request_via_namespace_param_is_403` (point-read no longer uses `?namespace` for anything)
+
+**99 http_gateway tests pass.**
+
+### Compatibility
+
+- Per-tenant tokens (the bulk of production usage): **unchanged behavior** vs v0.8.21. They keep using their tenant DB and any `?namespace` value still acts as a tag filter.
+- Master tokens: now match `/v1/recall`'s contract. `?namespace` is filter-only. Behavior diff vs v0.8.21:
+  - Master + omit `?namespace`: was 400 "namespace is required", now 200 listing all rows in `default` DB.
+  - Master + `?namespace=fable3`: was 404 `namespace_not_found`, now 200 with rows tagged `fable3` in `default` DB.
+
+### Engine pin unchanged
+
+Stays on v0.7.22 (introduced in v0.8.21). v0.7.24 with `list_records(namespace, kind, since_rid?, limit, order)` is being prepared by yantrikdb-core (swarm `90b7072c`, 2026-06-10); it will land in v0.8.23 wiring `?kind=` + keyset cursor on `/v1/memories`.
+
+### Deferred to v0.8.23+
+
+- Wire `/v1/memories` to engine's `list_records` once published: `?kind=`, `?since_rid=` (keyset cursor), `?order=asc|desc`, response envelope `{records:[...], next_cursor}`. Contract locked with core (swarm `6405b7e5`, 2026-06-10).
+- Link model MCP surface (`record_with_links_partial`, `expand_links` on recall, `link/unlink/linked_records`, `reify_supersedes_links` admin tool).
+- `/v1/admin/audit/leak_candidates` HTTP endpoint.
+- Proposal 5 validation-gate repair UX.
+
 ## [0.8.21] — 2026-06-09
 
 Row-tag model canonicalization on the read path. `/v1/memory/{rid}` and `/v1/memories` now treat `namespace` as an optional row-level tag rather than a tenant scope. The database is the isolation boundary; `namespace` is just an organizational filter on top of it.

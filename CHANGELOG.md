@@ -5,6 +5,66 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.23] — 2026-06-10
+
+Structural query primitive on `/v1/memories` — `?kind=`, `?drive_id=`, `?since_rid=` (keyset cursor), `?order=asc|desc` — wired to engine `list_records` (yantrikdb-core v0.7.24). Replaces the fetch-all-then-filter pattern with indexed push-down. Closes algo's perf gap (swarm `c1d810df`, 2026-06-10): "list records of kind X" now uses one SQL plan with indexed VIRTUAL columns instead of a full scan.
+
+### Changed — engine pin v0.7.22 → v0.7.24
+
+v0.7.24 ships:
+- Schema v32: VIRTUAL generated columns `kind = json_extract(metadata,'$.kind')` and `drive_id = json_extract(metadata,'$.drive_id')` with indexes; `json_valid` guard ensures encrypted/malformed metadata resolves to NULL (no migration errors).
+- New `list_records(namespace, kind, drive_id, memory_type, domain, since_rid?, limit, order)` engine method — all filters AND-composed and pushed down to one SQL plan.
+
+Auto-migrates on first open. No backfill. No write-API change.
+
+### Added — `/v1/memories` structural query params
+
+| Param | Behavior |
+|---|---|
+| `?kind=X` | row-level metadata.kind filter (indexed) |
+| `?drive_id=X` | row-level metadata.drive_id filter (indexed) |
+| `?since_rid=R` | keyset cursor (UUIDv7 = lexically chronological) |
+| `?order=asc\|desc` | asc (default, oldest first) or desc (newest first) |
+
+When **any** of the new structural params (`kind`, `drive_id`, `since_rid`, or `order=desc`) is set, the handler routes through `engine.list_records` with response envelope:
+
+```json
+{
+  "records": [ {rid, text, memory_type, importance, metadata: {...}, namespace, ...} ],
+  "next_cursor": "<last_rid>" | null,
+  "limit": N
+}
+```
+
+Without any structural params (legacy/dashboard usage), the existing `engine.list_memories` path is preserved with the `{items, total, limit, offset}` envelope.
+
+### Fixed — record item shape mirrors `/v1/recall`
+
+Records from the new `list_records` path include `metadata` as a **parsed JSON object** (not stringified). Per `yantrikdb-agi`'s shape note (swarm `c1d810df`, 2026-06-10): `/v1/recall` returns parsed `metadata: {...}` but legacy `/v1/memories` returned `metadata_json` as a stringified blob with the parsed `metadata` field null. The new `memory_to_record_item` helper normalizes both stored shapes (Value::String containing JSON, or Value::Object) to a parsed object. Algo's `query_typed()` client can now share its `RecallHit` deserializer with no special-casing.
+
+The legacy `/v1/memories` (no structural params) still emits `metadata_json` for back-compat.
+
+### Tests (4 new, 26 memories_list_tests total)
+
+- `validate::validate_v0823_default_order_is_asc`
+- `validate::validate_v0823_accepts_desc_order`
+- `validate::validate_v0823_rejects_unknown_order`
+- `validate::validate_v0823_kind_drive_id_since_rid_round_trip`
+
+**2,096 workspace tests pass.** No regressions.
+
+### Compatibility
+
+- Legacy clients (no structural params): **unchanged**.
+- `yantrikdb-agi`'s `query_typed()` client: one-commit swap to the new shape.
+- Dashboard: untouched.
+
+### Deferred to v0.8.24+
+
+- Link model MCP surface (`record_with_links_partial`, `expand_links` on recall, `link/unlink/linked_records`, `reify_supersedes_links` admin tool)
+- `/v1/admin/audit/leak_candidates` HTTP endpoint
+- Proposal 5 validation-gate repair UX
+
 ## [0.8.22] — 2026-06-10
 
 Master-token routing fix for `/v1/memory/{rid}` and `/v1/memories`. v0.8.21's row-tag canonicalization worked for per-tenant tokens but mis-routed master/cluster-wide tokens — `?namespace=tag` was used as a database selector, causing `404 namespace_not_found` on every tag-shaped namespace value. Algo (yantrikdb-agi) reported this as their #1 blocker on CT 133 (swarm `77ffa517`, 2026-06-10).

@@ -3464,6 +3464,15 @@ struct MemoriesListParams {
     limit: Option<usize>,
     offset: Option<usize>,
     sort: Option<String>,
+    // v0.8.23: structural query primitive — pushed down to engine.list_records.
+    // `kind` and `drive_id` ride indexed VIRTUAL generated columns over
+    // metadata JSON (engine v0.7.24 schema v32). `since_rid` is a keyset
+    // cursor (UUIDv7 = lexically chronological). `order` is asc (oldest
+    // first, default) or desc (newest first).
+    kind: Option<String>,
+    drive_id: Option<String>,
+    since_rid: Option<String>,
+    order: Option<String>,
 }
 
 fn unix_to_iso(epoch_seconds: f64) -> Option<String> {
@@ -3526,6 +3535,14 @@ struct MemoriesListResolved {
     sort_by: String,
     domain: Option<String>,
     memory_type: Option<String>,
+    /// v0.8.23 structural query primitive params — pushed down to
+    /// engine.list_records (yantrikdb-core v0.7.24).
+    kind: Option<String>,
+    drive_id: Option<String>,
+    since_rid: Option<String>,
+    /// "asc" (oldest first, default) | "desc" (newest first). Validated
+    /// here so callers see a 400 instead of a silent engine fallback.
+    order: String,
 }
 
 fn validate_memories_params(
@@ -3613,6 +3630,17 @@ fn validate_memories_params(
     };
     let _ = access::resolve_namespace; // intentionally bypassed — see above
 
+    // v0.8.23: validate `?order` here so callers see 400 BAD_REQUEST
+    // instead of an engine error. asc (default) | desc.
+    let order = params.order.as_deref().unwrap_or("asc");
+    if order != "asc" && order != "desc" {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidQueryParameter,
+            format!("order=`{order}` is not recognized; allowed: asc | desc"),
+        ));
+    }
+
     Ok(MemoriesListResolved {
         db_namespace,
         tag_filter,
@@ -3621,6 +3649,10 @@ fn validate_memories_params(
         sort_by: sort_by.to_string(),
         domain: params.domain.clone(),
         memory_type: params.memory_type.clone(),
+        kind: params.kind.clone(),
+        drive_id: params.drive_id.clone(),
+        since_rid: params.since_rid.clone(),
+        order: order.to_string(),
     })
 }
 
@@ -3664,15 +3696,68 @@ async fn memories_list(
 
     let domain = resolved.domain.clone();
     let memory_type = resolved.memory_type.clone();
-    // Tag filter is OPTIONAL — None means "list every row in db_namespace
-    // regardless of namespace tag." This is what makes the 200k+ rows
-    // tagged `skill_substrate`/`comm_substrate`/etc. surface for algo's
-    // and lane-b's workflows when the client omits `?namespace`.
     let tag_filter = resolved.tag_filter.clone();
-    let sort_by = resolved.sort_by.clone();
+    let kind = resolved.kind.clone();
+    let drive_id = resolved.drive_id.clone();
+    let since_rid = resolved.since_rid.clone();
+    let order = resolved.order.clone();
     let limit = resolved.limit;
     let offset = resolved.offset;
     let engine_clone = engine.clone();
+
+    // v0.8.23: when ANY new structural-query param is set (`?kind`,
+    // `?drive_id`, `?since_rid`, `?order=desc`), route through engine's
+    // `list_records` (yantrikdb-core v0.7.24) which pushes ALL filters
+    // down to one SQL plan with the new indexed VIRTUAL columns + keyset
+    // cursor on rid. Response: `{records, next_cursor, limit}` with
+    // metadata parsed as JSON (mirrors /v1/recall's item shape so
+    // clients like yantrikdb-agi's `query_typed()` deserialize through
+    // their existing RecallHit type).
+    //
+    // Otherwise (no new params, asc order), keep the legacy
+    // `list_memories` path with `{items, total, limit, offset}` for
+    // backwards compatibility. Both are valid; the dashboard hasn't
+    // been migrated yet.
+    let uses_list_records =
+        kind.is_some() || drive_id.is_some() || since_rid.is_some() || order == "desc";
+
+    if uses_list_records {
+        let res = tokio::task::spawn_blocking(move || {
+            engine_clone.list_records(
+                tag_filter.as_deref(),
+                kind.as_deref(),
+                drive_id.as_deref(),
+                memory_type.as_deref(),
+                domain.as_deref(),
+                since_rid.as_deref(),
+                limit,
+                &order,
+            )
+        })
+        .await
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiErrorCode::InternalError,
+                format!("blocking thread join failed: {e}"),
+            )
+        })?;
+        let (records, next_cursor) = res.map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiErrorCode::InternalError,
+                format!("list_records failed: {e}"),
+            )
+        })?;
+        let items: Vec<Value> = records.iter().map(memory_to_record_item).collect();
+        return Ok(Json(json!({
+            "records": items,
+            "next_cursor": next_cursor,
+            "limit": resolved.limit,
+        })));
+    }
+
+    let sort_by = resolved.sort_by.clone();
     let res = tokio::task::spawn_blocking(move || {
         engine_clone.list_memories(
             limit,
@@ -3706,6 +3791,39 @@ async fn memories_list(
         "offset": resolved.offset,
         "items": items,
     })))
+}
+
+/// v0.8.23: record item shape for the `list_records`-backed
+/// `/v1/memories` response. Mirrors `/v1/recall`'s item structure
+/// exactly — metadata is a PARSED JSON object (not stringified). Per
+/// yantrikdb-agi's request (swarm c1d810df, 2026-06-10): the goal is
+/// that their existing `RecallHit` deserializer drops in unchanged.
+fn memory_to_record_item(m: &yantrikdb::Memory) -> Value {
+    // The engine returns `metadata` as a serde_json::Value, but some
+    // tenants have legacy rows where the value is a Value::String
+    // containing a JSON-encoded blob (the stringified-metadata pattern
+    // yantrikdb-agi flagged in swarm c1d810df). Normalize both shapes
+    // to a parsed object so the client sees `metadata: {...}` regardless
+    // of how the row was originally written.
+    let metadata = match &m.metadata {
+        Value::String(s) if !s.trim().is_empty() => {
+            serde_json::from_str::<Value>(s).unwrap_or_else(|_| m.metadata.clone())
+        }
+        other => other.clone(),
+    };
+    json!({
+        "rid": m.rid,
+        "text": m.text,
+        "memory_type": m.memory_type,
+        "importance": m.importance,
+        "metadata": metadata,
+        "namespace": m.namespace,
+        "created_at": m.created_at,
+        "created_at_iso": unix_to_iso(m.created_at),
+        "certainty": m.certainty,
+        "domain": m.domain,
+        "source": m.source,
+    })
 }
 
 // ── /v1/memory/{rid} — point read (issue #39 Phase 1 task 197) ──────
@@ -5095,6 +5213,65 @@ mod memories_list_tests {
         let out = validate_memories_params(&p, &params).unwrap();
         assert_eq!(out.db_namespace, "default");
         assert_eq!(out.tag_filter.as_deref(), Some("yantrikos_entity_fable3"));
+    }
+
+    // ── v0.8.23 structural-query primitive params ───────────────────
+
+    #[test]
+    fn validate_v0823_default_order_is_asc() {
+        let p = pinned("acme");
+        let params = MemoriesListParams::default();
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.order, "asc");
+        assert!(out.kind.is_none());
+        assert!(out.drive_id.is_none());
+        assert!(out.since_rid.is_none());
+    }
+
+    #[test]
+    fn validate_v0823_accepts_desc_order() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            order: Some("desc".into()),
+            ..Default::default()
+        };
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.order, "desc");
+    }
+
+    #[test]
+    fn validate_v0823_rejects_unknown_order() {
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            order: Some("backwards".into()),
+            ..Default::default()
+        };
+        let err = validate_memories_params(&p, &params).expect_err("must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(body_field(&err, "message")
+            .as_str()
+            .unwrap()
+            .contains("asc | desc"));
+    }
+
+    #[test]
+    fn validate_v0823_kind_drive_id_since_rid_round_trip() {
+        // The validator passes these through unmolested; the handler
+        // routes them down to engine.list_records.
+        let p = pinned("acme");
+        let params = MemoriesListParams {
+            kind: Some("operator_reply_v1".into()),
+            drive_id: Some("019ea-drive".into()),
+            since_rid: Some("019eb-cursor".into()),
+            order: Some("desc".into()),
+            ..Default::default()
+        };
+        let out = validate_memories_params(&p, &params).unwrap();
+        assert_eq!(out.kind.as_deref(), Some("operator_reply_v1"));
+        assert_eq!(out.drive_id.as_deref(), Some("019ea-drive"));
+        assert_eq!(out.since_rid.as_deref(), Some("019eb-cursor"));
+        assert_eq!(out.order, "desc");
+        assert_eq!(out.db_namespace, "acme"); // tenant routing unchanged
     }
 }
 

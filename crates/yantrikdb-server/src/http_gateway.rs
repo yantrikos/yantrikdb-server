@@ -2027,6 +2027,118 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         }
     }
 
+    // RFC 027 / v0.8.24 — autonomous-maintenance metrics. The write-rich/
+    // close-poor dashboard: how often hygiene ran per tenant and what it
+    // closed, plus skip/failure counters and the cycle-duration histogram.
+    {
+        let aggs = crate::metrics::maintenance_aggs_snapshot();
+        if !aggs.is_empty() {
+            out.push_str("# HELP yantrikdb_maintenance_runs_total Maintenance cycles completed\n");
+            out.push_str("# TYPE yantrikdb_maintenance_runs_total counter\n");
+            for (db, a) in &aggs {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_runs_total{{db=\"{db}\"}} {}\n",
+                    a.runs
+                ));
+            }
+            out.push_str(
+                "# HELP yantrikdb_maintenance_conflicts_resolved_total Conflicts auto-resolved by maintenance\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_conflicts_resolved_total counter\n");
+            for (db, a) in &aggs {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_conflicts_resolved_total{{db=\"{db}\"}} {}\n",
+                    a.conflicts_resolved
+                ));
+            }
+            out.push_str(
+                "# HELP yantrikdb_maintenance_triggers_pruned_total Pending triggers expired by maintenance\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_triggers_pruned_total counter\n");
+            for (db, a) in &aggs {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_triggers_pruned_total{{db=\"{db}\"}} {}\n",
+                    a.triggers_pruned
+                ));
+            }
+            out.push_str(
+                "# HELP yantrikdb_maintenance_consolidations_total Consolidations performed by maintenance\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_consolidations_total counter\n");
+            for (db, a) in &aggs {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_consolidations_total{{db=\"{db}\"}} {}\n",
+                    a.consolidations
+                ));
+            }
+            out.push_str(
+                "# HELP yantrikdb_maintenance_entities_linked_total Memory-entity links backfilled by maintenance\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_entities_linked_total counter\n");
+            for (db, a) in &aggs {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_entities_linked_total{{db=\"{db}\"}} {}\n",
+                    a.entities_linked
+                ));
+            }
+            out.push_str(
+                "# HELP yantrikdb_maintenance_relations_upserted_total Co-occurrence edges upserted by maintenance\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_relations_upserted_total counter\n");
+            for (db, a) in &aggs {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_relations_upserted_total{{db=\"{db}\"}} {}\n",
+                    a.relations_upserted
+                ));
+            }
+            out.push_str(
+                "# HELP yantrikdb_maintenance_failures_total Maintenance cycles that returned an error\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_failures_total counter\n");
+            for (db, a) in &aggs {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_failures_total{{db=\"{db}\"}} {}\n",
+                    a.failures
+                ));
+            }
+            out.push_str(
+                "# HELP yantrikdb_maintenance_pass_errors_total Per-pass errors recorded across maintenance cycles\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_pass_errors_total counter\n");
+            for (db, a) in &aggs {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_pass_errors_total{{db=\"{db}\"}} {}\n",
+                    a.pass_errors
+                ));
+            }
+        }
+
+        let skipped = crate::metrics::maintenance_skipped_snapshot();
+        if !skipped.is_empty() {
+            out.push_str(
+                "# HELP yantrikdb_maintenance_runs_skipped_total Maintenance ticks skipped, by reason\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_runs_skipped_total counter\n");
+            for (db, reason, count) in &skipped {
+                out.push_str(&format!(
+                    "yantrikdb_maintenance_runs_skipped_total{{db=\"{db}\",reason=\"{reason}\"}} {count}\n"
+                ));
+            }
+        }
+
+        let (mcount, msum) = crate::metrics::maintenance_duration_totals();
+        if mcount > 0 {
+            out.push_str(
+                "# HELP yantrikdb_maintenance_duration_ms Maintenance-cycle wall-clock duration (ms)\n",
+            );
+            out.push_str("# TYPE yantrikdb_maintenance_duration_ms summary\n");
+            out.push_str(&format!("yantrikdb_maintenance_duration_ms_sum {msum}\n"));
+            out.push_str(&format!(
+                "yantrikdb_maintenance_duration_ms_count {mcount}\n"
+            ));
+        }
+    }
+
     // Append per-handler histograms, lock-wait histograms, request counters
     out.push_str(&crate::metrics::global().render_prometheus());
 
@@ -2523,6 +2635,190 @@ fn require_master_token(state: &AppState, headers: &axum::http::HeaderMap) -> Re
         StatusCode::FORBIDDEN,
         "debug endpoints require the cluster master token",
     ))
+}
+
+/// Whether this node currently accepts writes (leader or standalone).
+/// Mirrors the wire/HTTP write-path gate so state-mutating admin actions
+/// (like a manual maintenance run) don't fork the cluster state machine.
+fn node_accepts_writes(state: &AppState) -> bool {
+    if let Some(ref assembly) = state.raft {
+        let m = assembly.raft.metrics().borrow().clone();
+        return matches!(m.state, openraft::ServerState::Leader);
+    }
+    if let Some(ref cluster) = state.cluster {
+        return cluster.state.accepts_writes();
+    }
+    true
+}
+
+#[derive(serde::Deserialize)]
+struct MaintenanceTenantQuery {
+    /// Restrict the action to a single named tenant (database). When absent,
+    /// the action covers every database.
+    tenant: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct MaintenanceRunBody {
+    /// Run the heavy split-oversized-episodes pass (default false).
+    #[serde(default)]
+    split_oversized: bool,
+    /// Run the heavy tool-call-artifact repair pass (default false).
+    #[serde(default)]
+    repair_artifacts: bool,
+}
+
+/// Resolve the set of (db_id, name, engine) the maintenance action targets.
+/// `?tenant=<name>` selects one; absent selects all databases. Loads each
+/// engine (and starts its workers) as a side effect.
+fn resolve_maintenance_targets(
+    state: &AppState,
+    tenant: Option<&str>,
+) -> Result<Vec<(i64, String, EngineHandle)>, AppError> {
+    let records = {
+        let control = state.control.lock();
+        if let Some(name) = tenant {
+            let rec = control
+                .get_database(name)
+                .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .ok_or_else(|| {
+                    app_error(
+                        StatusCode::NOT_FOUND,
+                        format!("database '{name}' not found"),
+                    )
+                })?;
+            vec![rec]
+        } else {
+            control
+                .list_databases()
+                .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        }
+    };
+    let mut out = Vec::with_capacity(records.len());
+    for rec in records {
+        let engine = state
+            .pool
+            .get_engine(&rec)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        state
+            .workers
+            .start_for_database(rec.id, rec.name.clone(), std::sync::Arc::clone(&engine));
+        out.push((rec.id, rec.name, engine));
+    }
+    Ok(out)
+}
+
+/// POST /v1/admin/maintenance/run — RFC 027 / v0.8.24. Operator-triggered
+/// maintenance cycle. Master-token gated. `?tenant=<name>` runs one tenant;
+/// absent runs all. Optional body enables the heavy opt-in passes.
+///
+/// Cluster-safe: refuses to run on a node that does not accept writes
+/// (follower/learner), because `run_maintenance_cycle` mutates state and would
+/// fork the state machine. Hit the leader instead.
+async fn admin_maintenance_run(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<MaintenanceTenantQuery>,
+    body: Option<Json<MaintenanceRunBody>>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("admin_maintenance_run");
+    require_master_token(&state, &headers)?;
+
+    if !node_accepts_writes(&state) {
+        return Err(app_error(
+            StatusCode::CONFLICT,
+            "this node does not accept writes (follower/learner); \
+             run maintenance on the leader",
+        ));
+    }
+
+    let opts = body.map(|b| b.0).unwrap_or_default();
+    let targets = resolve_maintenance_targets(&state, params.tenant.as_deref())?;
+
+    let mut results = Vec::with_capacity(targets.len());
+    for (_db_id, name, engine) in targets {
+        let cfg = yantrikdb::MaintenanceCycleConfig {
+            split_oversized: opts.split_oversized,
+            repair_artifacts: opts.repair_artifacts,
+            ..Default::default()
+        };
+        let start = std::time::Instant::now();
+        let outcome = tokio::task::spawn_blocking(move || engine.run_maintenance_cycle(&cfg))
+            .await
+            .map_err(|e| {
+                app_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("join error: {e}"),
+                )
+            })?;
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        match outcome {
+            Ok(report) => {
+                let conflicts_resolved = report
+                    .conflicts
+                    .as_ref()
+                    .map(|c| c.auto_resolved)
+                    .unwrap_or(0);
+                let triggers_pruned = report
+                    .triggers
+                    .as_ref()
+                    .map(|t| t.expired_overdue + t.expired_over_cap)
+                    .unwrap_or(0);
+                crate::metrics::record_maintenance_cycle(
+                    &name,
+                    duration_ms,
+                    report.think_consolidations.unwrap_or(0) as u64,
+                    conflicts_resolved as u64,
+                    triggers_pruned as u64,
+                    report.entities_linked.unwrap_or(0) as u64,
+                    report.relations_upserted.unwrap_or(0) as u64,
+                    report.errors.len() as u64,
+                );
+                results.push(json!({
+                    "tenant": name,
+                    "duration_ms": duration_ms,
+                    "report": serde_json::to_value(&report).unwrap_or(Value::Null),
+                }));
+            }
+            Err(e) => {
+                crate::metrics::record_maintenance_failed(&name);
+                results.push(json!({ "tenant": name, "error": e.to_string() }));
+            }
+        }
+    }
+
+    Ok(Json(json!({ "ran": results.len(), "results": results })))
+}
+
+/// GET /v1/admin/maintenance/status — RFC 027 / v0.8.24. Master-token gated.
+/// Returns the last persisted maintenance-cycle summary per tenant plus worker
+/// liveness and this node's write-acceptance state.
+async fn admin_maintenance_status(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<MaintenanceTenantQuery>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("admin_maintenance_status");
+    require_master_token(&state, &headers)?;
+
+    let targets = resolve_maintenance_targets(&state, params.tenant.as_deref())?;
+    let mut tenants = Vec::with_capacity(targets.len());
+    for (_db_id, name, engine) in targets {
+        let last = engine.last_maintenance_cycle().ok().flatten();
+        let parsed = last
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Value>(s).ok());
+        tenants.push(json!({
+            "tenant": name,
+            "last_maintenance_cycle": parsed,
+        }));
+    }
+
+    Ok(Json(json!({
+        "active_workers": state.workers.active_count(),
+        "accepts_writes": node_accepts_writes(&state),
+        "tenants": tenants,
+    })))
 }
 
 async fn debug_history(
@@ -4059,6 +4355,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster/remove", post(cluster_remove))
         .route("/v1/admin/control-snapshot", get(control_snapshot))
         .route("/v1/admin/snapshot", post(admin_snapshot))
+        // RFC 027 / v0.8.24 — autonomous-maintenance operator surface.
+        .route("/v1/admin/maintenance/run", post(admin_maintenance_run))
+        .route(
+            "/v1/admin/maintenance/status",
+            get(admin_maintenance_status),
+        )
         // RFC 008 Warrant Flow substrate
         .route("/v1/claim_with_lineage", post(ingest_claim_with_lineage))
         .route("/v1/mobility", get(get_mobility))
@@ -4654,11 +4956,35 @@ pub(crate) mod e2e_test_support {
     /// - no cluster, no openraft, no control runtime — Phase 1 read
     ///   endpoints don't need them and stubs avoid spawning runtimes.
     pub fn build_fixture(tenant_namespace: &str) -> E2eFixture {
+        build_fixture_impl(tenant_namespace, None)
+    }
+
+    /// Build a fixture with a cluster context configured — for testing the
+    /// cluster-safety gates on the maintenance admin endpoints (RFC 027).
+    /// `role` drives write-acceptance (Single→Standalone accepts; Voter→
+    /// Follower rejects); `secret` becomes the cluster master token.
+    pub fn build_fixture_with_cluster(
+        tenant_namespace: &str,
+        role: crate::config::NodeRole,
+        secret: &str,
+    ) -> E2eFixture {
+        build_fixture_impl(tenant_namespace, Some((role, secret.to_string())))
+    }
+
+    fn build_fixture_impl(
+        tenant_namespace: &str,
+        cluster: Option<(crate::config::NodeRole, String)>,
+    ) -> E2eFixture {
         let tmp = tempfile::tempdir().expect("tempdir");
         let data_dir = tmp.path().to_path_buf();
 
         let mut cfg = crate::config::ServerConfig::default();
         cfg.server.data_dir = data_dir.clone();
+        if let Some((role, ref secret)) = cluster {
+            cfg.cluster.node_id = 1;
+            cfg.cluster.role = role;
+            cfg.cluster.cluster_secret = Some(secret.clone());
+        }
 
         // control DB + one tenant + one token
         let control_path = data_dir.join("control.db");
@@ -4674,20 +5000,41 @@ pub(crate) mod e2e_test_support {
         let control = Arc::new(Mutex::new(control));
 
         let pool = Arc::new(crate::tenant_pool::TenantPool::new(&cfg, None, None));
-        let workers = crate::background::WorkerRegistry::new(&cfg.background);
+        let workers = crate::background::WorkerRegistry::new(
+            &cfg.background,
+            &cfg.maintenance,
+            crate::background::WriteAcceptanceGate::standalone(),
+        );
         let admission = crate::admission::AdmissionState::new(Default::default());
         let commit_log: Arc<dyn crate::commit::MutationCommitter> =
             Arc::new(crate::commit::LocalSqliteCommitter::open_in_memory().expect("commit log"));
         let jobs: Arc<dyn crate::jobs::JobQueue> =
             Arc::new(crate::jobs::LocalSqliteJobQueue::open_in_memory().expect("jobs queue"));
-        let auth_provider: Arc<dyn crate::auth::AuthProvider> =
-            Arc::new(ControlDbAuthProvider::new(Arc::clone(&control), None));
+        let cluster_secret = cluster.as_ref().map(|(_, s)| s.clone());
+        let auth_provider: Arc<dyn crate::auth::AuthProvider> = Arc::new(
+            ControlDbAuthProvider::new(Arc::clone(&control), cluster_secret),
+        );
+
+        let cluster_ctx = cluster.map(|(role, _)| {
+            let node_state = Arc::new(
+                crate::cluster::NodeState::new(1, role, data_dir.join("raft.json"))
+                    .expect("node state"),
+            );
+            let peers = Arc::new(crate::cluster::PeerRegistry::new(&cfg.cluster.peers));
+            Arc::new(crate::cluster::ClusterContext::new(
+                cfg.cluster.clone(),
+                node_state,
+                peers,
+                Arc::clone(&pool),
+                Some(Arc::clone(&control)),
+            ))
+        });
 
         let state = Arc::new(AppState {
             control,
             pool,
             workers,
-            cluster: None,
+            cluster: cluster_ctx,
             inflight: std::sync::atomic::AtomicU32::new(0),
             admission,
             control_runtime: None,
@@ -4723,6 +5070,33 @@ pub(crate) mod e2e_test_support {
             builder = builder.header("authorization", format!("Bearer {tok}"));
         }
         let req = builder.body(axum::body::Body::empty()).unwrap();
+        let res = app.oneshot(req).await.expect("oneshot");
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 1024 * 1024)
+            .await
+            .expect("body bytes");
+        (status, bytes)
+    }
+
+    /// Helper: POST (empty JSON body) against the production router.
+    pub async fn post(
+        state: Arc<AppState>,
+        path: &str,
+        bearer: Option<&str>,
+    ) -> (axum::http::StatusCode, axum::body::Bytes) {
+        use axum::body::to_bytes;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = super::router(state);
+        let mut builder = Request::builder()
+            .uri(path)
+            .method("POST")
+            .header("content-type", "application/json");
+        if let Some(tok) = bearer {
+            builder = builder.header("authorization", format!("Bearer {tok}"));
+        }
+        let req = builder.body(axum::body::Body::from("{}")).unwrap();
         let res = app.oneshot(req).await.expect("oneshot");
         let status = res.status();
         let bytes = to_bytes(res.into_body(), 1024 * 1024)
@@ -4845,6 +5219,105 @@ mod identity_scope_e2e {
         assert!(
             !s.contains(&fx.raw_token),
             "raw bearer token leaked into response body"
+        );
+    }
+}
+
+#[cfg(test)]
+mod maintenance_e2e {
+    use super::e2e_test_support::{build_fixture, build_fixture_with_cluster, get, post};
+    use crate::config::NodeRole;
+
+    #[tokio::test]
+    async fn status_requires_bearer() {
+        let fx = build_fixture("acme");
+        let (status, _) = get(fx.state.clone(), "/v1/admin/maintenance/status", None).await;
+        assert_eq!(status, 401);
+    }
+
+    #[tokio::test]
+    async fn status_rejects_non_master_token() {
+        // Single-node, no cluster secret → master-token gate denies any token.
+        let fx = build_fixture("acme");
+        let (status, _) = get(
+            fx.state.clone(),
+            "/v1/admin/maintenance/status",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 403);
+    }
+
+    #[tokio::test]
+    async fn run_rejects_non_master_token() {
+        let fx = build_fixture("acme");
+        let (status, _) = post(
+            fx.state.clone(),
+            "/v1/admin/maintenance/run",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 403);
+    }
+
+    #[tokio::test]
+    async fn status_ok_with_master_token() {
+        let fx = build_fixture_with_cluster("acme", NodeRole::Single, "test-master");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/admin/maintenance/status",
+            Some("test-master"),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // Standalone (Single role) accepts writes.
+        assert_eq!(v["accepts_writes"], true);
+        assert!(v["tenants"].is_array(), "status must list tenants");
+    }
+
+    #[tokio::test]
+    async fn run_ok_on_write_accepting_node() {
+        // Standalone accepts writes → maintenance runs and returns a report
+        // per tenant. The cycle is idempotent on an empty engine.
+        let fx = build_fixture_with_cluster("acme", NodeRole::Single, "test-master");
+        let (status, body) = post(
+            fx.state.clone(),
+            "/v1/admin/maintenance/run",
+            Some("test-master"),
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["ran"].as_u64().unwrap() >= 1, "should run >=1 tenant");
+        let results = v["results"].as_array().expect("results array");
+        assert!(!results.is_empty());
+        assert!(results[0]["tenant"].is_string());
+    }
+
+    #[tokio::test]
+    async fn run_refused_on_follower_is_cluster_safe() {
+        // THE cluster-safety invariant (RFC 027): a follower must NOT run
+        // maintenance — it mutates state and would fork the state machine.
+        // Voter role starts as Follower → does not accept writes → 409.
+        let fx = build_fixture_with_cluster("acme", NodeRole::Voter, "test-master");
+        let (status, body) = post(
+            fx.state.clone(),
+            "/v1/admin/maintenance/run",
+            Some("test-master"),
+        )
+        .await;
+        assert_eq!(
+            status,
+            409,
+            "follower must refuse maintenance; body: {}",
+            String::from_utf8_lossy(&body)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let msg = v["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            msg.contains("does not accept writes"),
+            "409 must explain the write-acceptance gate; got: {msg}"
         );
     }
 }

@@ -1839,9 +1839,10 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         tracing::warn!("encryption: disabled — set [encryption] to enable at-rest encryption");
     }
 
-    // Create tenant pool and background worker registry
+    // Create tenant pool. The background worker registry is built later
+    // (just before AppState) so its maintenance loop can capture the live
+    // cluster write-acceptance gate (RFC 027 cluster-safety invariant).
     let pool = Arc::new(TenantPool::new(&cfg, embedder, master_key));
-    let workers = background::WorkerRegistry::new(&cfg.background);
     let control = Arc::new(Mutex::new(control));
 
     // v0.8.8: eager engine warm-up. A database server should serve queries
@@ -2173,6 +2174,27 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                 control.clone(),
                 cfg.cluster.cluster_secret.clone(),
             ));
+
+        // RFC 027 cluster-safety: the maintenance loop must only mutate state
+        // where writes are accepted (standalone or leader), else it forks the
+        // state machine. Build a live gate mirroring the wire/HTTP write path:
+        // openraft leader → raft-lite accepts_writes() → standalone-always.
+        let write_gate = {
+            let raft = raft_assembly.clone();
+            let cluster = cluster_ctx.clone();
+            background::WriteAcceptanceGate::from_fn(move || {
+                if let Some(ref assembly) = raft {
+                    let m = assembly.raft.metrics().borrow().clone();
+                    return matches!(m.state, openraft::ServerState::Leader);
+                }
+                if let Some(ref c) = cluster {
+                    return c.state.accepts_writes();
+                }
+                true
+            })
+        };
+        let workers =
+            background::WorkerRegistry::new(&cfg.background, &cfg.maintenance, write_gate);
 
         let state = Arc::new(AppState {
             control,

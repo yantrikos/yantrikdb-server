@@ -23,3 +23,25 @@ data_dir = "/var/lib/yantrikdb"
 #     dim = 384
 strategy = "bundled"
 dim = 64
+
+# RFC 027 / v0.8.24 — the sleep cycle. The server drives the engine's
+# autonomous maintenance (conflict burn-down, trigger prune, importance
+# recalibration, entity backfill, auto-relate) on a per-tenant timer so closing
+# loops is structural, not voluntary. All values below are defaults — this
+# block is shown for discoverability; omitting it gives identical behavior.
+[maintenance]
+enabled = true              # master switch
+interval_secs = 600         # cadence per tenant (10 minutes)
+initial_delay_secs = 120    # base delay before first cycle (+ per-tenant jitter)
+# Cluster safety: maintenance mutates state, so it runs ONLY where writes are
+# accepted (standalone or the current leader); followers skip. Set false only
+# as an operator escape hatch (unsafe on multi-voter clusters).
+pause_during_replication_catchup = true
+# Heavy corpus-rewriting passes — opt-in (off by default keeps a routine cycle
+# cheap). The scheduled loop honors these; the admin /run endpoint takes them
+# per-request in its body.
+run_split_oversized = false
+run_repair_artifacts = false
+max_pending_triggers = 64   # cap for the trigger-prune pass
+max_auto_relate_edges = 500 # cap on edges upserted per auto-relate pass
+split_min_chars = 1500      # min plaintext length for the split pass

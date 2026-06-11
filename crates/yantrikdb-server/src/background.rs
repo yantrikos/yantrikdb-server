@@ -12,14 +12,60 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use yantrikdb::types::ThinkConfig;
-use yantrikdb::YantrikDB;
+use yantrikdb::{MaintenanceCycleConfig, YantrikDB};
 
-use crate::config::BackgroundSection;
+use crate::config::{BackgroundSection, MaintenanceSection};
+
+/// Live check of whether this node should run state-mutating maintenance.
+///
+/// RFC 027 cluster-safety invariant: `run_maintenance_cycle()` mutates state
+/// (resolves conflicts, prunes triggers, recalibrates importance, upserts
+/// edges). Running it independently on a follower would fork the state
+/// machine — the v0.8.18 class of bug. So maintenance runs **only where writes
+/// are accepted** (standalone, or the current leader); the mutations then
+/// propagate through the same replication path as every other write.
+///
+/// The gate is polled every tick because the role changes on failover. It
+/// mirrors the exact write-acceptance logic the wire/HTTP write path uses
+/// (openraft leader → raft-lite `accepts_writes()` → standalone-always).
+#[derive(Clone)]
+pub struct WriteAcceptanceGate {
+    inner: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl WriteAcceptanceGate {
+    /// Standalone / single-node: always accepts writes.
+    pub fn standalone() -> Self {
+        Self {
+            inner: Arc::new(|| true),
+        }
+    }
+
+    /// Build from a live predicate (closure over the raft/cluster handles).
+    pub fn from_fn(f: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self { inner: Arc::new(f) }
+    }
+
+    /// Whether this node currently accepts writes (leader or standalone).
+    pub fn accepts_writes(&self) -> bool {
+        (self.inner)()
+    }
+}
+
+impl std::fmt::Debug for WriteAcceptanceGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WriteAcceptanceGate(accepts={})", self.accepts_writes())
+    }
+}
 
 /// Manages background worker tasks per database.
 pub struct WorkerRegistry {
     workers: Mutex<HashMap<i64, DatabaseWorkers>>,
     config: BackgroundSection,
+    /// RFC 027 / v0.8.24: autonomous-maintenance cadence config.
+    maintenance: MaintenanceSection,
+    /// Cluster write-acceptance gate for the maintenance loop.
+    write_gate: WriteAcceptanceGate,
 }
 
 struct DatabaseWorkers {
@@ -32,10 +78,16 @@ struct DatabaseWorkers {
 }
 
 impl WorkerRegistry {
-    pub fn new(config: &BackgroundSection) -> Self {
+    pub fn new(
+        config: &BackgroundSection,
+        maintenance: &MaintenanceSection,
+        write_gate: WriteAcceptanceGate,
+    ) -> Self {
         Self {
             workers: Mutex::new(HashMap::new()),
             config: config.clone(),
+            maintenance: maintenance.clone(),
+            write_gate,
         }
     }
 
@@ -125,6 +177,29 @@ impl WorkerRegistry {
             let id = db_id;
             handles.push(tokio::spawn(async move {
                 null_embedding_check_loop(engine, interval, token, name, id).await;
+            }));
+        }
+
+        // RFC 027 / v0.8.24: the sleep cycle. Drive the engine's
+        // run_maintenance_cycle() on a per-tenant timer so closing loops
+        // (conflict burn-down, trigger prune, importance recalibration, entity
+        // backfill, auto-relate) is structural, not voluntary. Cluster-safe:
+        // runs only where writes are accepted (see WriteAcceptanceGate).
+        if self.maintenance.enabled && self.maintenance.interval_secs > 0 {
+            let interval = Duration::from_secs(self.maintenance.interval_secs);
+            // Per-tenant jitter on the initial delay so N tenants don't fire
+            // their first (and subsequent aligned) cycles in lockstep. Derive
+            // it deterministically from db_id — no RNG needed, and stable
+            // across restarts for reproducible scheduling.
+            let jitter = Duration::from_secs((db_id.unsigned_abs() % 60) + 1);
+            let initial_delay = Duration::from_secs(self.maintenance.initial_delay_secs) + jitter;
+            let engine = Arc::clone(&engine);
+            let token = cancel.clone();
+            let name = db_name.clone();
+            let mcfg = self.maintenance.clone();
+            let gate = self.write_gate.clone();
+            handles.push(tokio::spawn(async move {
+                maintenance_loop(engine, interval, initial_delay, token, name, mcfg, gate).await;
             }));
         }
 
@@ -603,6 +678,149 @@ async fn wal_checkpoint_loop(
     }
 }
 
+/// Translate the server-side [`MaintenanceSection`] into the engine's
+/// [`MaintenanceCycleConfig`]. The light idempotent passes are always on; the
+/// heavy corpus-rewriting passes (split, repair) are gated by config.
+pub fn maintenance_cycle_config(m: &MaintenanceSection) -> MaintenanceCycleConfig {
+    MaintenanceCycleConfig {
+        run_think: true,
+        burn_down_conflicts: true,
+        prune_triggers: true,
+        max_pending_triggers: m.max_pending_triggers,
+        recalibrate_importance: true,
+        backfill_entities: true,
+        auto_relate: true,
+        max_auto_relate_edges: m.max_auto_relate_edges,
+        split_oversized: m.run_split_oversized,
+        split_min_chars: m.split_min_chars,
+        repair_artifacts: m.run_repair_artifacts,
+    }
+}
+
+/// The sleep cycle (RFC 027 / v0.8.24). Drives `run_maintenance_cycle()` on a
+/// per-tenant timer, gated for cluster safety (write-acceptance) and load
+/// (backpressure). Idempotent: a missed or double-run tick converges.
+#[allow(clippy::too_many_arguments)]
+async fn maintenance_loop(
+    engine: Arc<YantrikDB>,
+    interval: Duration,
+    initial_delay: Duration,
+    cancel: CancellationToken,
+    db_name: String,
+    cfg: MaintenanceSection,
+    write_gate: WriteAcceptanceGate,
+) {
+    // Initial (jittered) delay — let the engine settle and avoid a startup
+    // stampede across tenants.
+    tokio::select! {
+        _ = tokio::time::sleep(initial_delay) => {}
+        _ = cancel.cancelled() => return,
+    }
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = cancel.cancelled() => {
+                tracing::debug!(db = %db_name, "maintenance worker shutting down");
+                return;
+            }
+        }
+
+        // Cluster-safety gate: only mutate state where writes are accepted
+        // (standalone or leader). On a follower this would fork the state
+        // machine. `pause_during_replication_catchup = false` is an operator
+        // escape hatch that disables the gate (unsafe on clusters).
+        if cfg.pause_during_replication_catchup && !write_gate.accepts_writes() {
+            crate::metrics::record_maintenance_skipped(&db_name, "not_write_accepting");
+            tracing::debug!(
+                db = %db_name,
+                "maintenance: node does not accept writes (follower/learner) — skipping tick"
+            );
+            continue;
+        }
+
+        // Backpressure gate: hygiene is load-bound work. Reuse the existing
+        // enrichment-pressure rule — if the engine is behind on its delta
+        // tier, skip this tick rather than compound the pressure.
+        let cfg_for_blocking = cfg.clone();
+        let result = tokio::task::spawn_blocking({
+            let engine = Arc::clone(&engine);
+            let db_name = db_name.clone();
+            move || {
+                let db = engine.as_ref();
+                let pending = db.count_pending_ops().unwrap_or(0).max(0) as u64;
+                let threshold = effective_enrichment_threshold(db, None);
+                if pending > threshold {
+                    crate::metrics::record_maintenance_skipped(&db_name, "backpressure");
+                    tracing::debug!(
+                        db = %db_name,
+                        pending,
+                        threshold,
+                        "maintenance: engine under pressure — skipping tick"
+                    );
+                    return None;
+                }
+
+                let _hold_timer = crate::metrics::LockHoldTimer::start("worker_maintenance");
+                let start = std::time::Instant::now();
+                let engine_cfg = maintenance_cycle_config(&cfg_for_blocking);
+                match db.run_maintenance_cycle(&engine_cfg) {
+                    Ok(report) => Some((report, start.elapsed().as_secs_f64() * 1000.0)),
+                    Err(e) => {
+                        crate::metrics::record_maintenance_failed(&db_name);
+                        tracing::error!(db = %db_name, error = %e, "maintenance cycle failed");
+                        None
+                    }
+                }
+            }
+        })
+        .await;
+
+        if let Ok(Some((report, duration_ms))) = result {
+            let conflicts_resolved = report
+                .conflicts
+                .as_ref()
+                .map(|c| c.auto_resolved)
+                .unwrap_or(0);
+            let triggers_pruned = report
+                .triggers
+                .as_ref()
+                .map(|t| t.expired_overdue + t.expired_over_cap)
+                .unwrap_or(0);
+            crate::metrics::record_maintenance_cycle(
+                &db_name,
+                duration_ms,
+                report.think_consolidations.unwrap_or(0) as u64,
+                conflicts_resolved as u64,
+                triggers_pruned as u64,
+                report.entities_linked.unwrap_or(0) as u64,
+                report.relations_upserted.unwrap_or(0) as u64,
+                report.errors.len() as u64,
+            );
+            // Only log when the cycle did real work or hit a pass error.
+            let did_work = report.think_consolidations.unwrap_or(0) > 0
+                || conflicts_resolved > 0
+                || triggers_pruned > 0
+                || report.relations_upserted.unwrap_or(0) > 0
+                || report.entities_linked.unwrap_or(0) > 0
+                || !report.errors.is_empty();
+            if did_work {
+                tracing::info!(
+                    db = %db_name,
+                    duration_ms = duration_ms as u64,
+                    consolidations = report.think_consolidations.unwrap_or(0),
+                    conflicts_resolved,
+                    triggers_pruned,
+                    entities_linked = report.entities_linked.unwrap_or(0),
+                    relations_upserted = report.relations_upserted.unwrap_or(0),
+                    pass_errors = report.errors.len(),
+                    "maintenance cycle complete"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,5 +872,66 @@ mod tests {
         // Pin the constant. Future-debugging readers benefit from
         // the explicit value showing up in test output.
         assert_eq!(ENRICHMENT_PAUSE_THRESHOLD_FLOOR, 50);
+    }
+
+    // ── RFC 027 / v0.8.24 maintenance ───────────────────────────────
+
+    #[test]
+    fn maintenance_config_maps_section_defaults() {
+        // Default section → light passes on, heavy passes off, engine caps.
+        let section = MaintenanceSection::default();
+        let cfg = maintenance_cycle_config(&section);
+        assert!(cfg.run_think);
+        assert!(cfg.burn_down_conflicts);
+        assert!(cfg.prune_triggers);
+        assert!(cfg.recalibrate_importance);
+        assert!(cfg.backfill_entities);
+        assert!(cfg.auto_relate);
+        // Heavy passes opt-in — off by default so a routine cycle stays cheap.
+        assert!(!cfg.split_oversized);
+        assert!(!cfg.repair_artifacts);
+        assert_eq!(cfg.max_pending_triggers, 64);
+        assert_eq!(cfg.max_auto_relate_edges, 500);
+        assert_eq!(cfg.split_min_chars, 1500);
+    }
+
+    #[test]
+    fn maintenance_config_honors_heavy_pass_optin() {
+        let section = MaintenanceSection {
+            run_split_oversized: true,
+            run_repair_artifacts: true,
+            max_pending_triggers: 16,
+            max_auto_relate_edges: 100,
+            split_min_chars: 2000,
+            ..MaintenanceSection::default()
+        };
+        let cfg = maintenance_cycle_config(&section);
+        assert!(cfg.split_oversized);
+        assert!(cfg.repair_artifacts);
+        assert_eq!(cfg.max_pending_triggers, 16);
+        assert_eq!(cfg.max_auto_relate_edges, 100);
+        assert_eq!(cfg.split_min_chars, 2000);
+    }
+
+    #[test]
+    fn write_gate_standalone_always_accepts() {
+        // Single-node: maintenance always runs.
+        assert!(WriteAcceptanceGate::standalone().accepts_writes());
+    }
+
+    #[test]
+    fn write_gate_reflects_live_predicate() {
+        // The cluster-safety invariant: the gate is polled live, so a
+        // follower→leader transition flips it. Simulate with a toggle.
+        let leader = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate = {
+            let leader = Arc::clone(&leader);
+            WriteAcceptanceGate::from_fn(move || leader.load(std::sync::atomic::Ordering::Relaxed))
+        };
+        // Follower: maintenance must NOT run (would fork the state machine).
+        assert!(!gate.accepts_writes());
+        // Promoted to leader: now it runs.
+        leader.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(gate.accepts_writes());
     }
 }

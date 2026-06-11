@@ -23,6 +23,11 @@ pub struct ServerConfig {
     pub encryption: EncryptionSection,
     pub embedding: EmbeddingSection,
     pub background: BackgroundSection,
+    /// RFC 027 / v0.8.24: autonomous-hygiene cadence. The server drives the
+    /// engine's `run_maintenance_cycle()` on a per-tenant schedule so closing
+    /// loops (conflict burn-down, trigger prune, importance recalibration,
+    /// entity backfill, auto-relate) is structural, not voluntary.
+    pub maintenance: MaintenanceSection,
     pub limits: LimitsSection,
     pub cluster: ClusterSection,
     /// RFC 014-A: cluster-transport mTLS. Optional in legacy cluster
@@ -206,6 +211,55 @@ pub struct BackgroundSection {
     /// a function of wall-clock time, not engine load).
     #[serde(default)]
     pub enrichment_pause_threshold: Option<u64>,
+}
+
+/// RFC 027 / v0.8.24 — the sleep cycle. The server drives the engine's
+/// `run_maintenance_cycle()` on a per-tenant timer so the close mechanisms
+/// the engine already has (conflict burn-down, trigger prune, importance
+/// recalibration, entity backfill, auto-relate) run structurally, with no
+/// agent in the loop. Defaults are on + light: an existing deployment gains
+/// hygiene on upgrade with no config change, and the heavy corpus-rewriting
+/// passes stay opt-in.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct MaintenanceSection {
+    /// Master switch. Default `true` — hygiene is the point.
+    pub enabled: bool,
+    /// Cadence per tenant, in seconds. Default 600 (10 minutes).
+    pub interval_secs: u64,
+    /// Base delay before a tenant's first cycle, in seconds. Per-tenant jitter
+    /// is added on top so N tenants don't stampede on startup. Default 120.
+    pub initial_delay_secs: u64,
+    /// Skip a tick if this node is catching up replication (openraft mode).
+    /// Default `true` — don't pile maintenance mutations onto a node that is
+    /// still applying the backlog.
+    pub pause_during_replication_catchup: bool,
+    /// Heavy pass: split oversized episodic dumps into atomic facts. Opt-in.
+    pub run_split_oversized: bool,
+    /// Heavy pass: repair leaked tool-call artifacts in the corpus. Opt-in.
+    pub run_repair_artifacts: bool,
+    /// Cap for the trigger prune (engine default 64).
+    pub max_pending_triggers: usize,
+    /// Cap on edges upserted per auto-relate pass (engine default 500).
+    pub max_auto_relate_edges: usize,
+    /// Minimum plaintext length for the split pass (engine default 1500).
+    pub split_min_chars: usize,
+}
+
+impl Default for MaintenanceSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_secs: 600,
+            initial_delay_secs: 120,
+            pause_during_replication_catchup: true,
+            run_split_oversized: false,
+            run_repair_artifacts: false,
+            max_pending_triggers: 64,
+            max_auto_relate_edges: 500,
+            split_min_chars: 1500,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

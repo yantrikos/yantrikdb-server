@@ -5,6 +5,49 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.24] — 2026-06-11
+
+**The active memory server begins — autonomous hygiene (RFC 027, pillar 1: time).** The server now drives the engine's maintenance cycle on a per-tenant schedule, so closing loops (conflict burn-down, trigger prune, importance recalibration, entity backfill, auto-relate) is **structural, not voluntary**. The engine deliberately owns no timer ("a storage engine scheduling itself is the wrong boundary"); the server is the host that decides cadence. Addresses the write-rich/close-poor diagnosis: hygiene becomes a property of the deployment, not of client discipline.
+
+### Changed — engine pin v0.7.24 → v0.8.0
+
+Engine v0.8.0 ("World's Best Memory System") is additive and backward-compatible (schema via `CREATE TABLE IF NOT EXISTS`; new public API only). v0.8.24 consumes its `run_maintenance_cycle(&MaintenanceCycleConfig) → MaintenanceCycleReport` and `last_maintenance_cycle()` surface. No wire-protocol change; `/v1/recall`, `/v1/remember`, `/v1/memories` unchanged.
+
+### Added — `[maintenance]` config block
+
+```toml
+[maintenance]
+enabled = true              # master switch (default on)
+interval_secs = 600         # per-tenant cadence (10 min)
+initial_delay_secs = 120    # base delay before first cycle (+ per-tenant jitter)
+pause_during_replication_catchup = true  # skip when this node doesn't accept writes
+run_split_oversized = false # heavy pass — opt-in
+run_repair_artifacts = false# heavy pass — opt-in
+max_pending_triggers = 64
+max_auto_relate_edges = 500
+split_min_chars = 1500
+```
+
+Defaults are **on + light**, so existing deployments gain hygiene on upgrade with no config change; the heavy corpus-rewriting passes stay opt-in.
+
+### Added — `MaintenanceWorker` (per-tenant sleep cycle)
+
+Joins the existing `WorkerRegistry`. Each tenant's loop, after a jittered initial delay:
+- **Cluster-safety gate** — runs `run_maintenance_cycle()` only where writes are accepted (standalone or the current leader). On a follower/learner it skips, because the cycle mutates state and would otherwise fork the state machine (the v0.8.18 class of bug). Mutations propagate through the normal replication path.
+- **Backpressure gate** — reuses the enrichment-pressure rule; skips a tick when the engine is behind on its delta tier.
+- Runs on `spawn_blocking`; idempotent (a missed or double-run tick converges).
+
+### Added — admin endpoints (master-token gated)
+
+| Endpoint | Behavior |
+|---|---|
+| `POST /v1/admin/maintenance/run` | Operator-triggered cycle. `?tenant=<name>` for one, else all. Optional body `{split_oversized, repair_artifacts}` enables heavy passes. **Refuses with 409 on a node that doesn't accept writes** (hit the leader). |
+| `GET /v1/admin/maintenance/status` | Per-tenant last-cycle summary (from `last_maintenance_cycle()`), worker liveness, and this node's write-acceptance state. |
+
+### Added — maintenance metrics (`/metrics`)
+
+Per-tenant counters: `yantrikdb_maintenance_runs_total`, `_conflicts_resolved_total`, `_triggers_pruned_total`, `_consolidations_total`, `_entities_linked_total`, `_relations_upserted_total`, `_failures_total`, `_pass_errors_total`; `_runs_skipped_total{reason}` (`not_write_accepting` / `backpressure`); and the `_duration_ms` summary. The write-rich/close-poor dashboard.
+
 ## [0.8.23] — 2026-06-10
 
 Structural query primitive on `/v1/memories` — `?kind=`, `?drive_id=`, `?since_rid=` (keyset cursor), `?order=asc|desc` — wired to engine `list_records` (yantrikdb-core v0.7.24). Replaces the fetch-all-then-filter pattern with indexed push-down. Closes algo's perf gap (swarm `c1d810df`, 2026-06-10): "list records of kind X" now uses one SQL plan with indexed VIRTUAL columns instead of a full scan.

@@ -161,6 +161,30 @@ pub struct MetricsStore {
     /// "is the threshold tuned right" — without this the operator is
     /// guessing.
     enrichment_pending_at_pause: Mutex<HistogramData>,
+
+    /// RFC 027 / v0.8.24 — per-tenant maintenance-cycle aggregates. The
+    /// write-rich/close-poor dashboard: how often hygiene ran and what it
+    /// closed. Keyed by db name.
+    maintenance_aggs: Mutex<HashMap<String, MaintenanceAgg>>,
+    /// Counter: maintenance ticks skipped, keyed by (db, reason). Reasons:
+    /// `not_write_accepting` (follower/learner) and `backpressure`.
+    maintenance_skipped: Mutex<HashMap<(String, &'static str), u64>>,
+    /// Histogram: maintenance-cycle wall-clock duration in milliseconds.
+    maintenance_duration_ms: Mutex<HistogramData>,
+}
+
+/// RFC 027 / v0.8.24 — running totals for one tenant's maintenance loop.
+#[derive(Default, Clone)]
+pub struct MaintenanceAgg {
+    pub runs: u64,
+    pub failures: u64,
+    pub consolidations: u64,
+    pub conflicts_resolved: u64,
+    pub triggers_pruned: u64,
+    pub entities_linked: u64,
+    pub relations_upserted: u64,
+    pub pass_errors: u64,
+    pub last_duration_ms: f64,
 }
 
 impl MetricsStore {
@@ -193,6 +217,9 @@ impl MetricsStore {
             enrichment_paused: Mutex::new(HashMap::new()),
             enrichment_resumed: Mutex::new(HashMap::new()),
             enrichment_pending_at_pause: Mutex::new(HistogramData::new()),
+            maintenance_aggs: Mutex::new(HashMap::new()),
+            maintenance_skipped: Mutex::new(HashMap::new()),
+            maintenance_duration_ms: Mutex::new(HistogramData::new()),
         }
     }
 
@@ -520,6 +547,69 @@ pub fn record_enrichment_paused(db_name: &str, pending: u64) {
 pub fn record_enrichment_resumed(db_name: &str) {
     let mut map = global().enrichment_resumed.lock();
     *map.entry(db_name.to_string()).or_insert(0) += 1;
+}
+
+/// RFC 027 / v0.8.24 — record one completed maintenance cycle. Primitive
+/// args (not `&MaintenanceCycleReport`) so this module stays a leaf, matching
+/// [`record_openraft_gauges`]. The caller extracts the counts from the report.
+#[allow(clippy::too_many_arguments)]
+pub fn record_maintenance_cycle(
+    db_name: &str,
+    duration_ms: f64,
+    consolidations: u64,
+    conflicts_resolved: u64,
+    triggers_pruned: u64,
+    entities_linked: u64,
+    relations_upserted: u64,
+    pass_errors: u64,
+) {
+    {
+        let mut map = global().maintenance_aggs.lock();
+        let agg = map.entry(db_name.to_string()).or_default();
+        agg.runs += 1;
+        agg.consolidations += consolidations;
+        agg.conflicts_resolved += conflicts_resolved;
+        agg.triggers_pruned += triggers_pruned;
+        agg.entities_linked += entities_linked;
+        agg.relations_upserted += relations_upserted;
+        agg.pass_errors += pass_errors;
+        agg.last_duration_ms = duration_ms;
+    }
+    global().maintenance_duration_ms.lock().observe(duration_ms);
+}
+
+/// RFC 027 — record a maintenance tick that was skipped. `reason` is a
+/// static label: `not_write_accepting` or `backpressure`.
+pub fn record_maintenance_skipped(db_name: &str, reason: &'static str) {
+    let mut map = global().maintenance_skipped.lock();
+    *map.entry((db_name.to_string(), reason)).or_insert(0) += 1;
+}
+
+/// RFC 027 — record a maintenance cycle that returned an error (the whole
+/// `run_maintenance_cycle` call failed, distinct from per-pass errors).
+pub fn record_maintenance_failed(db_name: &str) {
+    let mut map = global().maintenance_aggs.lock();
+    map.entry(db_name.to_string()).or_default().failures += 1;
+}
+
+/// Snapshot of per-tenant maintenance aggregates. For `/metrics` rendering.
+pub fn maintenance_aggs_snapshot() -> Vec<(String, MaintenanceAgg)> {
+    let map = global().maintenance_aggs.lock();
+    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// Snapshot of maintenance skip counts per (db, reason). For `/metrics`.
+pub fn maintenance_skipped_snapshot() -> Vec<(String, &'static str, u64)> {
+    let map = global().maintenance_skipped.lock();
+    map.iter()
+        .map(|((db, reason), v)| (db.clone(), *reason, *v))
+        .collect()
+}
+
+/// Snapshot of the maintenance-duration histogram totals (count, sum_ms).
+pub fn maintenance_duration_totals() -> (u64, f64) {
+    let h = global().maintenance_duration_ms.lock();
+    (h.count, h.sum)
 }
 
 /// Snapshot of enrichment pause counts per db. For `/metrics` rendering.

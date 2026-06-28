@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-server"
-version = "0.8.24"
+version = "0.8.25"
 edition = "2021"
 description = "YantrikDB database server — multi-tenant cognitive memory with wire protocol, HTTP gateway, replication, auto-failover, and at-rest encryption"
 license = "AGPL-3.0-only"
@@ -17,10 +17,12 @@ name = "yantrikdb"
 path = "src/main.rs"
 
 [dependencies]
-# Engine v0.8.0 — the "World's Best Memory System" program. Additive and
-# backward-compatible with the v0.7.x line (schema additions via CREATE TABLE
-# IF NOT EXISTS; new public API only). v0.8.24 pins it to drive the autonomous
-# maintenance cycle from the server host:
+# Engine v0.9.0 — "close the memory gaps" (tiering, demand, conversation,
+# tasks). Additive and backward-compatible (validated: cargo check --workspace
+# --tests clean + full suite 2106 green on the v0.8.0→v0.9.0 bump). v0.8.25
+# wires its session-lifecycle surface (session_digest, draft_memories_from_
+# summary); the new demand/conversation/tasks surfaces are sequenced for later
+# epics. Continues to drive the autonomous maintenance cycle from the host:
 #   - run_maintenance_cycle(&MaintenanceCycleConfig) -> MaintenanceCycleReport:
 #     the unified "sleep cycle" — think (consolidation + conflict scan +
 #     trigger expiry) → entity backfill → auto-relate → conflict burn-down →
@@ -33,7 +35,7 @@ path = "src/main.rs"
 #     wired by v0.8.25 (RFC 023 / #56).
 # Carries forward the v0.7.18 compactor + v0.7.19 orphan-rollback reliability
 # arc that every deployment since v0.8.18 depends on.
-yantrikdb = { version = "0.8.0", git = "https://github.com/yantrikos/yantrikdb.git", branch = "main" }
+yantrikdb = { version = "0.9.0", git = "https://github.com/yantrikos/yantrikdb.git", branch = "main" }
 yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime

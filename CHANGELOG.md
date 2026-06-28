@@ -5,6 +5,26 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.25] — 2026-06-28
+
+**Session lifecycle (RFC 027, pillar 2: the server owns the agent's wake/sleep ritual).** Plus the engine bump to v0.9.0. The server now offers a one-call boot briefing and end-of-session capture, so continuity is ambient rather than dependent on a fresh agent's query-writing skill — the structural fix for substrate-underuse drift.
+
+### Changed — engine pin v0.8.0 → v0.9.0
+
+Engine v0.9.0 ("close the memory gaps" — tiering, demand, conversation, tasks) is additive and backward-compatible. Validated on the bump: `cargo check --workspace --tests` clean + full suite **2,106 tests, 0 failures**. v0.8.25 wires its session-lifecycle surface (`session_digest`, `draft_memories_from_summary`); the new demand (`knowledge_gaps`), conversation (working-memory ring), and tasks surfaces are sequenced for later epics. v0.9.0 also fixes the pyo3 worker-pool wedge at `delta_max=256`.
+
+### Added — `GET /v1/session/digest`
+
+One-call boot briefing (tenant-scoped). Returns the narrative chain head + live high-importance decisions + open conflicts + pending triggers + the last maintenance summary, assembled from existing engine primitives. Query params: `?namespace=` (narrative chain), `?max_decisions=` (8), `?max_conflicts=` (5), `?max_triggers=` (5), `?snippet_chars=` (240). Replaces "N recalls a fresh agent may forget to make" with one cheap call.
+
+### Added — `POST /v1/session/end`
+
+End-of-session capture (tenant-scoped). Body `{summary, namespace?, domain?}` → segments the summary into atomic, provisional candidate facts via `draft_memories_from_summary`, returns `{drafted: [rids], count}`. Sessions stop leaving no trace. **Cluster-safe**: a direct engine write, so it returns 409 on a node that doesn't accept writes (run on the leader).
+
+### Trust metadata on recall hits
+
+Confirmed end-to-end: the engine stamps trust signals (⚠ aged-and-rarely-confirmed, ⚠ superseded-by-newer-record) into each recall hit's `why_retrieved`, and `/v1/recall` already surfaces that array — so staleness is visible at the moment of use with no client change.
+
 ## [0.8.24] — 2026-06-11
 
 **The active memory server begins — autonomous hygiene (RFC 027, pillar 1: time).** The server now drives the engine's maintenance cycle on a per-tenant schedule, so closing loops (conflict burn-down, trigger prune, importance recalibration, entity backfill, auto-relate) is **structural, not voluntary**. The engine deliberately owns no timer ("a storage engine scheduling itself is the wrong boundary"); the server is the host that decides cadence. Addresses the write-rich/close-poor diagnosis: hygiene becomes a property of the deployment, not of client discipline.

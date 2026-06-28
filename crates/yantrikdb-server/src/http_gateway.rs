@@ -2821,6 +2821,120 @@ async fn admin_maintenance_status(
     })))
 }
 
+#[derive(serde::Deserialize)]
+struct SessionDigestParams {
+    /// Append-only identity/narrative chain to read the head of (optional).
+    namespace: Option<String>,
+    max_decisions: Option<usize>,
+    max_conflicts: Option<usize>,
+    max_triggers: Option<usize>,
+    snippet_chars: Option<usize>,
+}
+
+/// GET /v1/session/digest — RFC 027 / v0.8.25 (pillar 2: lifecycle).
+///
+/// One-call boot briefing the host injects at session start: narrative chain
+/// head + live high-importance decisions + open conflicts + pending triggers +
+/// the last maintenance summary. Structurally fixes substrate-underuse drift —
+/// one cheap call replaces N recalls a fresh agent may not think to make.
+/// Tenant-scoped (engine resolved from the bearer token).
+async fn session_digest(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<SessionDigestParams>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("session_digest");
+    let (_db_id, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let cfg = yantrikdb::SessionDigestConfig {
+        narrative_namespace: params.namespace,
+        max_decisions: params.max_decisions.unwrap_or(8),
+        max_conflicts: params.max_conflicts.unwrap_or(5),
+        max_triggers: params.max_triggers.unwrap_or(5),
+        snippet_chars: params.snippet_chars.unwrap_or(240),
+    };
+    let digest = tokio::task::spawn_blocking(move || engine.session_digest(&cfg))
+        .await
+        .map_err(|e| {
+            app_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("join error: {e}"),
+            )
+        })?
+        .map_err(|e| {
+            app_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("session_digest failed: {e}"),
+            )
+        })?;
+    Ok(Json(serde_json::to_value(digest).unwrap_or(Value::Null)))
+}
+
+#[derive(serde::Deserialize)]
+struct SessionEndBody {
+    /// Free-text session summary to segment into atomic candidate facts.
+    summary: String,
+    /// Row-tag namespace to file the drafted facts under (default "default").
+    namespace: Option<String>,
+    /// Domain for the drafted facts (default "general").
+    domain: Option<String>,
+}
+
+/// POST /v1/session/end — RFC 027 / v0.8.25 (pillar 2: lifecycle).
+///
+/// End-of-session capture: segments a session summary into atomic, provisional
+/// candidate facts via the engine's `draft_memories_from_summary`, so sessions
+/// stop leaving no trace. Tenant-scoped. Cluster-safe: this is a direct engine
+/// write, so it refuses (409) on a node that does not accept writes — run it on
+/// the leader.
+async fn session_end_capture(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<SessionEndBody>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("session_end_capture");
+    let (_db_id, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    if !node_accepts_writes(&state) {
+        return Err(app_error(
+            StatusCode::CONFLICT,
+            "this node does not accept writes (follower/learner); \
+             session capture must run on the leader",
+        ));
+    }
+    if body.summary.trim().is_empty() {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "summary must not be empty",
+        ));
+    }
+    let namespace = body.namespace.unwrap_or_else(|| "default".to_string());
+    let domain = body.domain.unwrap_or_else(|| "general".to_string());
+    let summary = body.summary;
+    let drafted = tokio::task::spawn_blocking(move || {
+        engine.draft_memories_from_summary(&summary, &namespace, &domain)
+    })
+    .await
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("join error: {e}"),
+        )
+    })?
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("draft_memories_from_summary failed: {e}"),
+        )
+    })?;
+    let count = drafted.len();
+    Ok(Json(json!({ "drafted": drafted, "count": count })))
+}
+
 async fn debug_history(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -4325,6 +4439,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/remember/batch", post(remember_batch))
         .route("/v1/recall", post(recall))
         .route("/v1/forget", post(forget))
+        // RFC 027 / v0.8.25 (pillar 2: lifecycle) — session boot + capture.
+        .route("/v1/session/digest", get(session_digest))
+        .route("/v1/session/end", post(session_end_capture))
         // RFC 022 §1 (v0.8.11): first-class skill primitives. Thin wrappers
         // over /v1/remember + /v1/recall + scan-and-filter (v0.8.11) or
         // /v1/lookup (v0.8.12+). Schema-validated, no semantic ontology.
@@ -5104,6 +5221,36 @@ pub(crate) mod e2e_test_support {
             .expect("body bytes");
         (status, bytes)
     }
+
+    /// Helper: POST a specific JSON body against the production router.
+    pub async fn post_body(
+        state: Arc<AppState>,
+        path: &str,
+        bearer: Option<&str>,
+        json_body: &str,
+    ) -> (axum::http::StatusCode, axum::body::Bytes) {
+        use axum::body::to_bytes;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = super::router(state);
+        let mut builder = Request::builder()
+            .uri(path)
+            .method("POST")
+            .header("content-type", "application/json");
+        if let Some(tok) = bearer {
+            builder = builder.header("authorization", format!("Bearer {tok}"));
+        }
+        let req = builder
+            .body(axum::body::Body::from(json_body.to_string()))
+            .unwrap();
+        let res = app.oneshot(req).await.expect("oneshot");
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 1024 * 1024)
+            .await
+            .expect("body bytes");
+        (status, bytes)
+    }
 }
 
 #[cfg(test)]
@@ -5318,6 +5465,87 @@ mod maintenance_e2e {
         assert!(
             msg.contains("does not accept writes"),
             "409 must explain the write-acceptance gate; got: {msg}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod session_lifecycle_e2e {
+    use super::e2e_test_support::{build_fixture, build_fixture_with_cluster, get, post_body};
+    use crate::config::NodeRole;
+
+    #[tokio::test]
+    async fn digest_requires_bearer() {
+        let fx = build_fixture("acme");
+        let (status, _) = get(fx.state.clone(), "/v1/session/digest", None).await;
+        assert_eq!(status, 401);
+    }
+
+    #[tokio::test]
+    async fn digest_ok_for_tenant_token() {
+        // Boot briefing on an empty corpus: 200 with the digest shape
+        // (empty decisions/conflicts/triggers, zero counts).
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/session/digest", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // Shape contract the host injects at boot.
+        assert!(v.get("top_decisions").is_some());
+        assert!(v.get("open_conflict_count").is_some());
+        assert!(v.get("pending_trigger_count").is_some());
+        assert_eq!(v["open_conflict_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn end_requires_bearer() {
+        let fx = build_fixture("acme");
+        let (status, _) = post_body(
+            fx.state.clone(),
+            "/v1/session/end",
+            None,
+            r#"{"summary":"x"}"#,
+        )
+        .await;
+        assert_eq!(status, 401);
+    }
+
+    #[tokio::test]
+    async fn end_rejects_empty_summary() {
+        let fx = build_fixture("acme");
+        let (status, _) = post_body(
+            fx.state.clone(),
+            "/v1/session/end",
+            Some(&fx.raw_token),
+            r#"{"summary":"   "}"#,
+        )
+        .await;
+        assert_eq!(status, 400);
+    }
+
+    #[tokio::test]
+    async fn end_refused_on_follower_is_cluster_safe() {
+        // Cluster-safety: end-of-session capture is a direct engine write, so
+        // a follower (Voter→Follower, not write-accepting) must refuse (409)
+        // rather than fork the state machine.
+        let fx = build_fixture_with_cluster("acme", NodeRole::Voter, "test-master");
+        let (status, body) = post_body(
+            fx.state.clone(),
+            "/v1/session/end",
+            Some(&fx.raw_token),
+            r#"{"summary":"a meaningful session summary worth capturing"}"#,
+        )
+        .await;
+        assert_eq!(
+            status,
+            409,
+            "follower must refuse capture; body: {}",
+            String::from_utf8_lossy(&body)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let msg = v["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            msg.contains("does not accept writes"),
+            "409 must explain the write gate; got: {msg}"
         );
     }
 }

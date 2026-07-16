@@ -5,6 +5,25 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.26] — 2026-07-15
+
+**Engine pin v0.9.0 → v0.9.4** (latest tagged release) + per-tenant digest isolation. A stability-and-correctness bump: four engine releases of fixes we were behind on, plus one small additive server feature.
+
+### Changed — engine pin v0.9.0 → v0.9.4
+
+Now pinned by **tag** (`v0.9.4`) rather than tracking `branch=main`, so the dependency is reproducible and immune to main drifting into the untagged v0.10 work (the single-origin provenance gate + schema v37, which we'll adopt once core tags v0.10.0 and we validate its REST-contract changes: `correct`→200, reembed-deferral→409). The v0.9.1→v0.9.4 line brings:
+
+- **v0.9.1** — `set_embedder_named` fix with the worker pool running
+- **v0.9.2** — NaN-safe recall
+- **v0.9.3** — contract gate, isolation repair, 7.4× distance path
+- **v0.9.4** — cold-tier recall decompression fix
+
+These are behavioral/internal; they take effect through the existing recall/write paths with no API change. Validated: `cargo check --workspace --tests` clean + full suite **2,111 tests, 0 failures**.
+
+### Added — `?scope=` on `GET /v1/session/digest`
+
+Exposes v0.9.3's digest isolation scope: `?scope=<namespace>` filters the digest's content aggregates (top decisions, open conflicts + count) to one namespace, so a host composing one digest per tenant never mixes another tenant's memories in. Omit for the original whole-DB behavior. The existing `?namespace=` (narrative chain head) is unchanged — this is purely additive. (Pending triggers remain global; the engine scopes those in the v0.10 program.)
+
 ## [0.8.25] — 2026-06-28
 
 **Session lifecycle (RFC 027, pillar 2: the server owns the agent's wake/sleep ritual).** Plus the engine bump to v0.9.0. The server now offers a one-call boot briefing and end-of-session capture, so continuity is ambient rather than dependent on a fresh agent's query-writing skill — the structural fix for substrate-underuse drift.

@@ -2825,6 +2825,12 @@ async fn admin_maintenance_status(
 struct SessionDigestParams {
     /// Append-only identity/narrative chain to read the head of (optional).
     namespace: Option<String>,
+    /// v0.9.3 isolation scope (engine v0.9.4): filter the digest's content
+    /// aggregates (top decisions, open conflicts + count) to this namespace,
+    /// so a host composing one digest per tenant never mixes another tenant's
+    /// memories in. Omit for whole-DB (single-tenant) behavior. Pending
+    /// triggers remain global regardless (engine limitation).
+    scope: Option<String>,
     max_decisions: Option<usize>,
     max_conflicts: Option<usize>,
     max_triggers: Option<usize>,
@@ -2850,6 +2856,7 @@ async fn session_digest(
     )?;
     let cfg = yantrikdb::SessionDigestConfig {
         narrative_namespace: params.namespace,
+        namespace: params.scope,
         max_decisions: params.max_decisions.unwrap_or(8),
         max_conflicts: params.max_conflicts.unwrap_or(5),
         max_triggers: params.max_triggers.unwrap_or(5),

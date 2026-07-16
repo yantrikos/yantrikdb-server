@@ -2822,6 +2822,152 @@ async fn admin_maintenance_status(
 }
 
 #[derive(serde::Deserialize)]
+struct CurrentParams {
+    /// The append-only chain namespace whose head (current value) to read.
+    namespace: String,
+}
+
+/// GET /v1/current — RFC 027 / v0.8.27 (pillar 3: trust on the wire).
+///
+/// **The structural current-value read.** Returns the head of an append-only
+/// chain namespace — the record that is *current*, not the record that is most
+/// similar. This is the one query class similarity search cannot answer at any
+/// retrieval budget: stale records are often *more* similar than the current
+/// one, so recall-with-bigger-k never converges on "what is true now" (measured
+/// 0.00 for RAG at k=8/20/50, vs 0.78–1.00 for the substrate's revision chain).
+/// `chain_head` resolves it in one exact read instead of a probabilistic guess.
+///
+/// 200 with the head record, or 404 when the chain is empty/unknown.
+/// Tenant-scoped (engine resolved from the bearer token).
+async fn current_value(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<CurrentParams>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("current_value");
+    let (_db_id, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    if params.namespace.trim().is_empty() {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "namespace must not be empty",
+        ));
+    }
+    let ns = params.namespace.clone();
+    let head = tokio::task::spawn_blocking(move || engine.chain_head(&ns))
+        .await
+        .map_err(|e| {
+            app_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("join error: {e}"),
+            )
+        })?
+        .map_err(|e| {
+            app_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("chain_head failed: {e}"),
+            )
+        })?;
+    match head {
+        Some(m) => Ok(Json(json!({
+            "found": true,
+            "namespace": params.namespace,
+            "record": memory_to_record_item(&m),
+        }))),
+        None => Err(crate::api::errors::api_error(
+            StatusCode::NOT_FOUND,
+            crate::api::errors::ApiErrorCode::Generic,
+            format!("no chain head for namespace '{}'", params.namespace),
+        )),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct GapsParams {
+    /// Restrict to one namespace. Omit for the whole tenant DB.
+    namespace: Option<String>,
+    /// Only surface queries asked at least this many times (default 2 — a
+    /// repeated ask is a pattern, a one-off is noise).
+    min_count: Option<u64>,
+    /// Only surface queries whose mean best-hit score is at or below this
+    /// (default 0.5 — i.e. we answered it poorly).
+    max_avg_top_score: Option<f64>,
+    limit: Option<usize>,
+}
+
+/// GET /v1/insights/gaps — RFC 027 / v0.8.27. **The substrate's known unknowns.**
+///
+/// Every recall logs query demand; this surfaces the queries that are asked
+/// *often* and answered *badly*. Most memory systems can only tell an agent
+/// what they know — this tells it what it keeps failing to answer, which is the
+/// signal an agent can actually act on (go learn X). Pairs with
+/// `/v1/session/digest?include_gaps=true` to close the loop at boot.
+///
+/// Tenant-scoped. Read-only (safe on any node, no write gate).
+async fn insights_gaps(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<GapsParams>,
+) -> AppResult {
+    let _timer = crate::metrics::HandlerTimer::new("insights_gaps");
+    let (_db_id, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let gaps = fetch_knowledge_gaps(
+        engine,
+        params.namespace.clone(),
+        params.min_count.unwrap_or(2),
+        params.max_avg_top_score.unwrap_or(0.5),
+        params.limit.unwrap_or(10),
+    )
+    .await?;
+    Ok(Json(json!({ "count": gaps.len(), "gaps": gaps })))
+}
+
+/// Shared by `/v1/insights/gaps` and the digest's `?include_gaps=true`.
+/// Returns the gaps as JSON values so both call sites emit one shape.
+async fn fetch_knowledge_gaps(
+    engine: EngineHandle,
+    namespace: Option<String>,
+    min_count: u64,
+    max_avg_top_score: f64,
+    limit: usize,
+) -> Result<Vec<Value>, AppError> {
+    let gaps = tokio::task::spawn_blocking(move || {
+        engine.knowledge_gaps(namespace.as_deref(), min_count, max_avg_top_score, limit)
+    })
+    .await
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("join error: {e}"),
+        )
+    })?
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("knowledge_gaps failed: {e}"),
+        )
+    })?;
+    Ok(gaps
+        .into_iter()
+        .map(|g| {
+            json!({
+                "query": g.query,
+                "count": g.count,
+                "avg_top_score": g.avg_top_score,
+                "avg_results": g.avg_results,
+                "last_seen": g.last_seen,
+                "last_seen_iso": unix_to_iso(g.last_seen),
+            })
+        })
+        .collect())
+}
+
+#[derive(serde::Deserialize)]
 struct SessionDigestParams {
     /// Append-only identity/narrative chain to read the head of (optional).
     namespace: Option<String>,
@@ -2835,6 +2981,11 @@ struct SessionDigestParams {
     max_conflicts: Option<usize>,
     max_triggers: Option<usize>,
     snippet_chars: Option<usize>,
+    /// v0.8.27: fold the substrate's known-unknowns into the boot briefing.
+    /// Off by default so the digest stays the cheap call it was designed to be.
+    include_gaps: Option<bool>,
+    /// Cap for the folded-in gaps (default 5 — the digest is token-budgeted).
+    max_gaps: Option<usize>,
 }
 
 /// GET /v1/session/digest — RFC 027 / v0.8.25 (pillar 2: lifecycle).
@@ -2844,6 +2995,11 @@ struct SessionDigestParams {
 /// the last maintenance summary. Structurally fixes substrate-underuse drift —
 /// one cheap call replaces N recalls a fresh agent may not think to make.
 /// Tenant-scoped (engine resolved from the bearer token).
+///
+/// v0.8.27: `?include_gaps=true` folds the substrate's known-unknowns into the
+/// briefing, which turns the digest from *informative* into *actionable* — the
+/// agent wakes up knowing not just what it knows, but what it keeps failing to
+/// answer. Opt-in so the default digest stays cheap.
 async fn session_digest(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -2854,6 +3010,11 @@ async fn session_digest(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
+    // Gap scope follows the digest's content-isolation scope so a per-tenant
+    // digest reports that tenant's gaps, not the whole DB's.
+    let gap_scope = params.scope.clone();
+    let include_gaps = params.include_gaps.unwrap_or(false);
+    let max_gaps = params.max_gaps.unwrap_or(5);
     let cfg = yantrikdb::SessionDigestConfig {
         narrative_namespace: params.namespace,
         namespace: params.scope,
@@ -2862,6 +3023,7 @@ async fn session_digest(
         max_triggers: params.max_triggers.unwrap_or(5),
         snippet_chars: params.snippet_chars.unwrap_or(240),
     };
+    let engine_for_gaps = std::sync::Arc::clone(&engine);
     let digest = tokio::task::spawn_blocking(move || engine.session_digest(&cfg))
         .await
         .map_err(|e| {
@@ -2876,7 +3038,14 @@ async fn session_digest(
                 format!("session_digest failed: {e}"),
             )
         })?;
-    Ok(Json(serde_json::to_value(digest).unwrap_or(Value::Null)))
+    let mut body = serde_json::to_value(digest).unwrap_or(Value::Null);
+    if include_gaps {
+        let gaps = fetch_knowledge_gaps(engine_for_gaps, gap_scope, 2, 0.5, max_gaps).await?;
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("knowledge_gaps".into(), Value::Array(gaps));
+        }
+    }
+    Ok(Json(body))
 }
 
 #[derive(serde::Deserialize)]
@@ -4449,6 +4618,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         // RFC 027 / v0.8.25 (pillar 2: lifecycle) — session boot + capture.
         .route("/v1/session/digest", get(session_digest))
         .route("/v1/session/end", post(session_end_capture))
+        // RFC 027 / v0.8.27 — structural current-value read + known-unknowns.
+        .route("/v1/current", get(current_value))
+        .route("/v1/insights/gaps", get(insights_gaps))
         // RFC 022 §1 (v0.8.11): first-class skill primitives. Thin wrappers
         // over /v1/remember + /v1/recall + scan-and-filter (v0.8.11) or
         // /v1/lookup (v0.8.12+). Schema-validated, no semantic ontology.
@@ -5554,6 +5726,103 @@ mod session_lifecycle_e2e {
             msg.contains("does not accept writes"),
             "409 must explain the write gate; got: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod current_and_gaps_e2e {
+    use super::e2e_test_support::{build_fixture, get};
+
+    #[tokio::test]
+    async fn current_requires_bearer() {
+        let fx = build_fixture("acme");
+        let (status, _) = get(fx.state.clone(), "/v1/current?namespace=chain", None).await;
+        assert_eq!(status, 401);
+    }
+
+    #[tokio::test]
+    async fn current_requires_namespace_param() {
+        // namespace is required — a bare /v1/current is a client error, not a
+        // whole-DB scan.
+        let fx = build_fixture("acme");
+        let (status, _) = get(fx.state.clone(), "/v1/current", Some(&fx.raw_token)).await;
+        assert!(
+            status == 400 || status == 422,
+            "missing required namespace should be a 4xx, got {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn current_404s_on_empty_chain() {
+        // Empty corpus → no chain head. 404 (not 200-with-null) so clients can
+        // branch on "there is no current value" without inspecting the body.
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/current?namespace=nonexistent_chain",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 404, "body: {}", String::from_utf8_lossy(&body));
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no chain head"));
+    }
+
+    #[tokio::test]
+    async fn gaps_requires_bearer() {
+        let fx = build_fixture("acme");
+        let (status, _) = get(fx.state.clone(), "/v1/insights/gaps", None).await;
+        assert_eq!(status, 401);
+    }
+
+    #[tokio::test]
+    async fn gaps_ok_empty_on_fresh_corpus() {
+        // No recalls logged yet → no demand → no gaps. Shape must still be the
+        // stable {count, gaps:[]} envelope.
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/insights/gaps", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["count"], 0);
+        assert!(v["gaps"].is_array());
+    }
+
+    #[tokio::test]
+    async fn digest_omits_gaps_by_default() {
+        // The default digest stays the cheap call — no gaps key unless asked.
+        let fx = build_fixture("acme");
+        let (status, body) = get(fx.state.clone(), "/v1/session/digest", Some(&fx.raw_token)).await;
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            v.get("knowledge_gaps").is_none(),
+            "gaps must be opt-in, not in the default digest"
+        );
+    }
+
+    #[tokio::test]
+    async fn digest_includes_gaps_when_requested() {
+        // ?include_gaps=true folds the known-unknowns in — the active-learning
+        // loop. Empty corpus → present but empty.
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/session/digest?include_gaps=true",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            v.get("knowledge_gaps").is_some(),
+            "include_gaps=true must add the knowledge_gaps key"
+        );
+        assert!(v["knowledge_gaps"].is_array());
+        // Digest's own shape still intact alongside the folded-in gaps.
+        assert!(v.get("top_decisions").is_some());
     }
 }
 

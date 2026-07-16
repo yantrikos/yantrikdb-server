@@ -5,6 +5,28 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.27] — 2026-07-16
+
+**The two capabilities that were dark.** The engine could already do both of these; neither was reachable over HTTP. A pinned engine with unwired capability is dark capability — an agent cannot call what isn't exposed. This release exposes them, and wires them together into a loop.
+
+### Added — `GET /v1/current` (the structural current-value read)
+
+Returns the **head of an append-only chain namespace** via engine `chain_head()` — the record that is *current*, not the record that is most *similar*.
+
+This is the one query class similarity search cannot answer at any retrieval budget: stale records are frequently *more* similar to a query than the current one, so recall-with-bigger-k never converges on "what is true now." Our own cross-corpus k-sweep measured RAG at **0.00 on current-value at k=8, 20, and 50**, versus **0.78–1.00** for the substrate's revision chain. `chain_head` resolves it in one exact read instead of a probabilistic guess. It was the most defensible thing we'd measured, and until now it had no HTTP surface.
+
+`?namespace=<chain>` (required). 200 with the head record, 404 when the chain is empty/unknown. Tenant-scoped.
+
+### Added — `GET /v1/insights/gaps` (the substrate's known unknowns)
+
+Every recall logs query demand; this surfaces the queries asked **often** and answered **badly** via engine `knowledge_gaps()`. Most memory systems can only report what they know — this reports what the substrate keeps *failing* to answer, which is the signal an agent can act on.
+
+Params: `?namespace=` (omit for whole DB), `?min_count=` (default 2 — a repeated ask is a pattern, a one-off is noise), `?max_avg_top_score=` (default 0.5 — i.e. answered poorly), `?limit=` (default 10). Each gap carries `{query, count, avg_top_score, avg_results, last_seen, last_seen_iso}`. Read-only.
+
+### Added — `GET /v1/session/digest?include_gaps=true` (closing the loop)
+
+Folds the known-unknowns into the boot briefing, which turns the digest from **informative** into **actionable**: the agent wakes up knowing not just what it knows, but what it keeps failing to answer — and can go fill the gap. Gap scope follows the digest's `?scope=` isolation, so a per-tenant digest reports that tenant's gaps. Opt-in (`?max_gaps=`, default 5) so the default digest stays the cheap, token-budgeted call it was designed to be.
+
 ## [0.8.26] — 2026-07-15
 
 **Engine pin v0.9.0 → v0.9.4** (latest tagged release) + per-tenant digest isolation. A stability-and-correctness bump: four engine releases of fixes we were behind on, plus one small additive server feature.

@@ -1,27 +1,29 @@
-//! Deterministic election simulator — the Gate A proof harness (RFC 028 v2 §11).
+//! Deterministic replica simulator — the Gate A proof harness (RFC 028 v2 §11).
 //!
 //! Chaos is a detector; this is closer to a proof. The simulator drives
-//! [`ElectionCore`] instances through seeded schedules with message
-//! drops/reorders, partitions, and — the important part — **crash injection at
-//! the persist boundary**, then checks the Gate A invariants over the entire
-//! observable history:
+//! [`ReplicaCore`] instances through seeded schedules with message drops,
+//! reorders, partitions, and crash injection at the persist boundary, then
+//! checks the Gate A invariants over the entire observable history:
 //!
 //! - **I1 (vote safety, R2):** across the whole run, including every
-//!   crash/restart, no node's SENT grant messages name two different
-//!   candidates in one term.
-//! - **I3 (suffix protection, R3):** no voter ever grants a candidate whose
-//!   last log position is less up to date than the voter's own at grant time.
-//! - **Single leader per term:** at most one `BecameLeader` per term, ever.
+//!   crash/restart, no node's SENT grants name two candidates in one term.
+//! - **I2 (authority safety, R1):** a global committed-entry ledger — once
+//!   ANY node applies entry `e` at index `i`, no node may ever apply a
+//!   different entry at `i`. Two leaders acking conflicting writes as
+//!   durable would trip this immediately.
+//! - **I3 (suffix protection, R3):** every sent grant went to a candidate
+//!   whose advertised log was at least as up to date as the voter's.
+//! - **Single leader per term**, ever.
 //!
 //! Crash modeling is exact: a crash discards the in-memory core (with any
 //! pending persist and its withheld messages) and restarts from the last
-//! hard state the sim's "disk" accepted. The three interesting boundaries:
-//! before persist (held messages never sent — safe), after persist / before
-//! flush (vote durable, response lost — liveness only), after flush (normal).
+//! `(hard, log)` snapshot the sim's "disk" accepted. Boundaries: 0 = before
+//! persist (held messages never sent — safe), 1 = after persist / before
+//! flush (durable state kept, responses lost — liveness only).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use super::election::{Effect, ElectionCore, Message, Role};
+use super::replica::{Effect, LogEntry, Message, ReplicaCore, Role, NOOP_PAYLOAD};
 use super::types::{HardState, LogPosition, NodeId, Term};
 
 /// Tiny deterministic PRNG (xorshift64*) — no external deps, fully seeded.
@@ -54,9 +56,11 @@ struct InFlight {
 
 /// One simulated node: the core (None while crashed) + its durable "disk".
 struct SimNode {
-    core: Option<ElectionCore>,
-    disk: HardState,
-    last_log: LogPosition,
+    core: Option<ReplicaCore>,
+    disk_hard: HardState,
+    disk_log: Vec<LogEntry>,
+    /// Highest index this node has applied (ledgered via CommitAdvanced).
+    applied: u64,
 }
 
 struct Sim {
@@ -64,41 +68,49 @@ struct Sim {
     voters: BTreeSet<NodeId>,
     net: VecDeque<InFlight>,
     rng: Rng,
-    /// Partition: pairs that cannot exchange messages.
+    /// Partition: unordered pairs that cannot exchange messages.
     cut: BTreeSet<(NodeId, NodeId)>,
     // ── invariant ledgers (observable history) ────────────────────
-    /// (voter, term) → set of candidates the voter's SENT grants named.
+    /// (voter, term) → candidates named by the voter's SENT grants.
     grants_sent: BTreeMap<(NodeId, Term), BTreeSet<NodeId>>,
-    /// term → set of nodes that became leader in that term.
+    /// term → nodes that became leader in that term.
     leaders: BTreeMap<Term, BTreeSet<NodeId>>,
-    /// I3 ledger: recorded at grant-send time: (voter_last_log, candidate_last_log).
+    /// I2: index → the one entry ever applied there, by anyone.
+    committed_at: BTreeMap<u64, LogEntry>,
+    /// I3: (candidate, term) → last_log advertised in its VoteRequests.
+    advertised: BTreeMap<(NodeId, Term), LogPosition>,
+    /// I3 ledger: (voter_last_log_at_send, candidate_advertised).
     freshness_at_grant: Vec<(LogPosition, LogPosition)>,
-    /// Candidate → last_log advertised (fixed per test; lets the checker
-    /// recover the candidate's position from a grant message).
-    advertised: BTreeMap<NodeId, LogPosition>,
 }
 
 impl Sim {
-    fn new(node_logs: &[(u64, LogPosition)], seed: u64, use_pre_vote: bool) -> Self {
+    /// `start_term` seeds every node's durable term so pre-seeded log entry
+    /// terms stay coherent with the entry-term ≤ current-term invariant.
+    fn new(
+        node_logs: &[(u64, Vec<LogEntry>)],
+        start_term: u64,
+        seed: u64,
+        use_pre_vote: bool,
+    ) -> Self {
         let voters: BTreeSet<NodeId> = node_logs.iter().map(|(id, _)| NodeId(*id)).collect();
+        let hard = HardState {
+            current_term: Term(start_term),
+            voted_for: None,
+        };
         let mut nodes = BTreeMap::new();
         for (id, log) in node_logs {
             let nid = NodeId(*id);
-            let disk = HardState::default();
-            let core = ElectionCore::new(nid, voters.clone(), disk, *log, use_pre_vote);
+            let core = ReplicaCore::new(nid, voters.clone(), hard, log.clone(), use_pre_vote);
             nodes.insert(
                 nid,
                 SimNode {
                     core: Some(core),
-                    disk,
-                    last_log: *log,
+                    disk_hard: hard,
+                    disk_log: log.clone(),
+                    applied: 0,
                 },
             );
         }
-        let advertised = node_logs
-            .iter()
-            .map(|(id, log)| (NodeId(*id), *log))
-            .collect();
         Sim {
             nodes,
             voters,
@@ -107,26 +119,30 @@ impl Sim {
             cut: BTreeSet::new(),
             grants_sent: BTreeMap::new(),
             leaders: BTreeMap::new(),
+            committed_at: BTreeMap::new(),
+            advertised: BTreeMap::new(),
             freshness_at_grant: Vec::new(),
-            advertised,
         }
     }
 
-    /// Run one node's effect batch: persist to "disk", flush the gate,
-    /// enqueue sends, record ledgers. `crash_at` injects a crash at a
+    /// Run one node's effect batch. `crash_at` injects a crash at a persist
     /// boundary: 0 = before persist, 1 = after persist / before flush.
     fn run_effects(&mut self, id: NodeId, effects: Vec<Effect>, crash_at: Option<u8>) {
         let mut queue: VecDeque<Effect> = effects.into();
         while let Some(eff) = queue.pop_front() {
             match eff {
-                Effect::PersistHardState(hs) => {
+                Effect::Persist { hard, log } => {
                     if crash_at == Some(0) {
-                        self.crash(id); // pending + held messages evaporate
+                        self.crash(id);
                         return;
                     }
-                    self.nodes.get_mut(&id).unwrap().disk = hs; // durable now
+                    {
+                        let node = self.nodes.get_mut(&id).unwrap();
+                        node.disk_hard = hard;
+                        node.disk_log = log;
+                    }
                     if crash_at == Some(1) {
-                        self.crash(id); // vote durable, response lost — safe
+                        self.crash(id);
                         return;
                     }
                     let flushed = self
@@ -136,7 +152,7 @@ impl Sim {
                         .core
                         .as_mut()
                         .unwrap()
-                        .hard_state_persisted();
+                        .state_persisted();
                     for f in flushed {
                         queue.push_back(f);
                     }
@@ -153,27 +169,66 @@ impl Sim {
                     self.leaders.entry(term).or_default().insert(id);
                 }
                 Effect::SteppedDown { .. } => {}
+                Effect::CommitAdvanced { to } => self.ledger_commit(id, to),
             }
         }
     }
 
-    /// Ledger every SENT message (the observable history the invariants
-    /// quantify over), then put it on the wire.
-    fn record_and_route(&mut self, from: NodeId, to: NodeId, msg: Message) {
-        if let Message::VoteResponse {
-            term,
-            granted: true,
-        } = &msg
-        {
-            // The grant names the peer it is addressed to (the candidate).
-            self.grants_sent
-                .entry((from, *term))
-                .or_default()
-                .insert(to);
-            let voter_log = self.nodes[&from].last_log;
-            if let Some(cand_log) = self.advertised.get(&to) {
-                self.freshness_at_grant.push((voter_log, *cand_log));
+    /// I2 — the authority-safety ledger. Applying is reading the node's own
+    /// log over the newly committed range; the global map enforces that no
+    /// index is ever applied with two different entries, by anyone.
+    fn ledger_commit(&mut self, id: NodeId, to: u64) {
+        let from = self.nodes[&id].applied + 1;
+        for i in from..=to {
+            let e = *self.nodes[&id]
+                .core
+                .as_ref()
+                .expect("commit on live node")
+                .entry(i)
+                .expect("committed index must be in log");
+            match self.committed_at.get(&i) {
+                None => {
+                    self.committed_at.insert(i, e);
+                }
+                Some(prev) => assert_eq!(
+                    *prev, e,
+                    "AUTHORITY SAFETY VIOLATED: index {i} applied with two \
+                     different entries ({prev:?} vs {e:?}, second by {id:?})"
+                ),
             }
+        }
+        let node = self.nodes.get_mut(&id).unwrap();
+        node.applied = node.applied.max(to);
+    }
+
+    /// Ledger every SENT message, then put it on the wire.
+    fn record_and_route(&mut self, from: NodeId, to: NodeId, msg: Message) {
+        match &msg {
+            Message::VoteRequest {
+                term,
+                candidate,
+                last_log,
+            } => {
+                self.advertised.insert((*candidate, *term), *last_log);
+            }
+            Message::VoteResponse {
+                term,
+                granted: true,
+            } => {
+                self.grants_sent
+                    .entry((from, *term))
+                    .or_default()
+                    .insert(to);
+                let voter_log = self.nodes[&from]
+                    .core
+                    .as_ref()
+                    .map(|c| c.last_log())
+                    .unwrap_or(LogPosition::ZERO);
+                if let Some(cand) = self.advertised.get(&(to, *term)) {
+                    self.freshness_at_grant.push((voter_log, *cand));
+                }
+            }
+            _ => {}
         }
         self.net.push_back(InFlight { from, to, msg });
     }
@@ -183,21 +238,45 @@ impl Sim {
     }
 
     fn restart(&mut self, id: NodeId, use_pre_vote: bool) {
+        let voters = self.voters.clone();
         let node = self.nodes.get_mut(&id).unwrap();
-        let core = ElectionCore::new(
+        // ONLY what was durably persisted survives. `applied` is clamped to
+        // the durable log (the state machine re-applies deterministically;
+        // the I2 ledger verifies every re-application is identical).
+        node.core = Some(ReplicaCore::new(
             id,
-            self.voters.clone(),
-            node.disk, // ONLY what was durably persisted survives
-            node.last_log,
+            voters,
+            node.disk_hard,
+            node.disk_log.clone(),
             use_pre_vote,
-        );
-        node.core = Some(core);
+        ));
+        node.applied = node.applied.min(node.disk_log.len() as u64);
     }
 
     fn timeout(&mut self, id: NodeId, crash_at: Option<u8>) {
         if let Some(core) = self.nodes.get_mut(&id).unwrap().core.as_mut() {
             let effects = core.on_election_timeout();
             self.run_effects(id, effects, crash_at);
+        }
+    }
+
+    fn propose(&mut self, id: NodeId, payload: u64) -> bool {
+        let Some(core) = self.nodes.get_mut(&id).unwrap().core.as_mut() else {
+            return false;
+        };
+        match core.propose(payload) {
+            Some(effects) => {
+                self.run_effects(id, effects, None);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn heartbeat(&mut self, id: NodeId) {
+        if let Some(core) = self.nodes.get_mut(&id).unwrap().core.as_mut() {
+            let effects = core.tick_heartbeat();
+            self.run_effects(id, effects, None);
         }
     }
 
@@ -209,13 +288,13 @@ impl Sim {
         };
         let key = (m.from.min(m.to), m.from.max(m.to));
         if self.cut.contains(&key) {
-            return true; // dropped by partition
+            return true;
         }
         let Some(node) = self.nodes.get_mut(&m.to) else {
             return true;
         };
         let Some(core) = node.core.as_mut() else {
-            return true; // crashed receiver drops the message
+            return true;
         };
         let effects = core.on_message(m.from, m.msg, false);
         self.run_effects(m.to, effects, crash_at);
@@ -226,9 +305,15 @@ impl Sim {
         while self.deliver_one(None) {}
     }
 
+    fn current_leader(&self) -> Option<NodeId> {
+        self.nodes
+            .iter()
+            .find(|(_, n)| n.core.as_ref().is_some_and(|c| c.role() == Role::Leader))
+            .map(|(id, _)| *id)
+    }
+
     // ── invariant checkers ────────────────────────────────────────
 
-    /// Gate A #1 / R2: per (voter, term), all sent grants name ONE candidate.
     fn check_vote_safety(&self) {
         for ((voter, term), cands) in &self.grants_sent {
             assert!(
@@ -238,7 +323,6 @@ impl Sim {
         }
     }
 
-    /// Gate A #3 / R3: every grant went to a candidate at least as up to date.
     fn check_suffix_protection(&self) {
         for (voter_log, cand_log) in &self.freshness_at_grant {
             assert!(
@@ -249,10 +333,30 @@ impl Sim {
         }
     }
 
-    /// At most one leader per term, across the whole run.
     fn check_single_leader_per_term(&self) {
         for (term, ls) in &self.leaders {
             assert!(ls.len() <= 1, "TWO LEADERS IN {term:?}: {ls:?}");
+        }
+    }
+
+    /// I2 is asserted incrementally in `ledger_commit`; this re-validates
+    /// that every live node's log agrees with the committed ledger over its
+    /// applied prefix (a truncation below commit would surface here).
+    fn check_committed_prefix_integrity(&self) {
+        for (id, node) in &self.nodes {
+            let Some(core) = node.core.as_ref() else {
+                continue;
+            };
+            for i in 1..=node.applied {
+                if let Some(expected) = self.committed_at.get(&i) {
+                    let actual = core.entry(i);
+                    assert_eq!(
+                        actual,
+                        Some(expected),
+                        "COMMITTED PREFIX DAMAGED on {id:?} at index {i}"
+                    );
+                }
+            }
         }
     }
 
@@ -260,17 +364,34 @@ impl Sim {
         self.check_vote_safety();
         self.check_suffix_protection();
         self.check_single_leader_per_term();
+        self.check_committed_prefix_integrity();
     }
 }
 
-// ── tests ──────────────────────────────────────────────────────────
+// ── helpers ────────────────────────────────────────────────────────
 
-const L0: LogPosition = LogPosition { term: 0, index: 0 };
+fn entries(terms: &[u64]) -> Vec<LogEntry> {
+    terms
+        .iter()
+        .enumerate()
+        .map(|(i, t)| LogEntry {
+            term: Term(*t),
+            payload: 1000 + i as u64, // distinct, non-NOOP payloads
+        })
+        .collect()
+}
 
-/// Baseline: a healthy 3-node cluster elects exactly one leader.
+fn empty() -> Vec<LogEntry> {
+    Vec::new()
+}
+
+// ── tests: Phase A1 invariants (carried forward) ───────────────────
+
+/// Baseline: a healthy 3-node cluster elects exactly one leader, and the
+/// election no-op commits across the cluster.
 #[test]
 fn three_nodes_elect_exactly_one_leader() {
-    let mut sim = Sim::new(&[(1, L0), (2, L0), (3, L0)], 42, true);
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 42, true);
     sim.timeout(NodeId(1), None);
     sim.drain();
     sim.check_all();
@@ -280,70 +401,63 @@ fn three_nodes_elect_exactly_one_leader() {
         "exactly one leadership event expected, got {:?}",
         sim.leaders
     );
+    // The winner's no-op reached commit.
+    assert_eq!(
+        sim.committed_at.get(&1).map(|e| e.payload),
+        Some(NOOP_PAYLOAD)
+    );
 }
 
-/// R2, crash BEFORE persist: the vote decision (and its held response) must
-/// evaporate — after restart the node may vote differently, but the original
-/// grant never left the node, so no double grant is observable.
+/// R2, crash BEFORE persist: the vote decision (and its held response)
+/// evaporates — the original grant never left the node.
 #[test]
 fn r2_crash_before_persist_never_leaks_the_grant() {
-    let mut sim = Sim::new(&[(1, L0), (2, L0), (3, L0)], 7, false);
-    // Candidate 1 campaigns; node 3 receives the request and crashes at the
-    // persist boundary (before durability).
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 7, false);
     sim.timeout(NodeId(1), None);
-    // route: find the VoteRequest to node 3 and deliver it with crash_at=0.
-    // Deliver messages one at a time; inject the crash on node 3's handling.
-    let mut delivered_to_3 = false;
+    let mut injected = false;
     while !sim.net.is_empty() {
-        let peek_to = sim.net.front().unwrap().to;
-        let inject = if peek_to == NodeId(3) && !delivered_to_3 {
-            delivered_to_3 = true;
+        let to = sim.net.front().unwrap().to;
+        let inject = if to == NodeId(3) && !injected {
+            injected = true;
             Some(0u8)
         } else {
             None
         };
         sim.deliver_one(inject);
     }
-    // Node 3 restarts from disk — which never recorded the vote.
     sim.restart(NodeId(3), false);
-    assert_eq!(sim.nodes[&NodeId(3)].disk, HardState::default());
-    // A competing candidate 2 campaigns in the SAME term (term 1) and node 3
-    // may now grant it — legal, because the first grant never left the node.
+    assert_eq!(sim.nodes[&NodeId(3)].disk_hard, HardState::default());
     sim.timeout(NodeId(2), None);
     sim.drain();
-    sim.check_all(); // vote-safety ledger proves no double grant was SENT
+    sim.check_all();
 }
 
 /// R2, crash AFTER persist but before the response flushes: the vote is
-/// durable, the response is lost. After restart the node must REFUSE a
-/// different candidate in the same term — the persisted vote binds it.
+/// durable, the response lost. The restarted node must refuse a different
+/// candidate in the same term.
 #[test]
 fn r2_crash_after_persist_binds_the_restarted_node() {
-    let mut sim = Sim::new(&[(1, L0), (2, L0), (3, L0)], 9, false);
-    sim.timeout(NodeId(1), None); // candidate 1, term 1
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 9, false);
+    sim.timeout(NodeId(1), None);
     let mut injected = false;
     while !sim.net.is_empty() {
-        let peek_to = sim.net.front().unwrap().to;
-        let inject = if peek_to == NodeId(3) && !injected {
+        let to = sim.net.front().unwrap().to;
+        let inject = if to == NodeId(3) && !injected {
             injected = true;
-            Some(1u8) // crash after persist, before flush
+            Some(1u8)
         } else {
             None
         };
         sim.deliver_one(inject);
     }
-    // The vote for candidate 1 IS on node 3's disk; the response was lost.
     assert_eq!(
-        sim.nodes[&NodeId(3)].disk,
+        sim.nodes[&NodeId(3)].disk_hard,
         HardState {
             current_term: Term(1),
             voted_for: Some(NodeId(1)),
         }
     );
     sim.restart(NodeId(3), false);
-    // Competing candidate 2 campaigns in the same term 1... its own campaign
-    // takes it to term 2 actually — so drive the SAME-term request manually:
-    // deliver a raw VoteRequest for term 1 from node 2 to node 3.
     let effects = sim
         .nodes
         .get_mut(&NodeId(3))
@@ -356,13 +470,12 @@ fn r2_crash_after_persist_binds_the_restarted_node() {
             Message::VoteRequest {
                 term: Term(1),
                 candidate: NodeId(2),
-                last_log: L0,
+                last_log: LogPosition::ZERO,
             },
             false,
         );
     sim.run_effects(NodeId(3), effects, None);
     sim.drain();
-    // Ledger: node 3's term-1 grants must name at most candidate 1.
     let grants = sim
         .grants_sent
         .get(&(NodeId(3), Term(1)))
@@ -375,27 +488,23 @@ fn r2_crash_after_persist_binds_the_restarted_node() {
     sim.check_all();
 }
 
-/// R3: a candidate with a stale log (lower last term, even with a longer
-/// index) must be refused by voters holding fresher entries — the
-/// possibly-committed suffix survives the election.
+/// R3: a candidate with a stale log (lower last term, longer index) must be
+/// refused by voters holding fresher entries.
 #[test]
 fn r3_stale_log_candidate_is_refused_by_fresher_voters() {
-    // Node 2 and 3 hold an entry at (term 2, idx 5) — possibly committed.
-    // Node 1's log ends at (term 1, idx 9): longer, but staler.
-    let fresh = LogPosition { term: 2, index: 5 };
-    let stale = LogPosition { term: 1, index: 9 };
-    let mut sim = Sim::new(&[(1, stale), (2, fresh), (3, fresh)], 21, false);
-    sim.timeout(NodeId(1), None); // stale candidate campaigns
+    // Nodes 2 and 3 hold a possibly-committed (term 2) suffix; node 1 has a
+    // longer but staler (all term 1) log. Everyone starts at term 2.
+    let stale = entries(&[1, 1, 1, 1, 1, 1, 1, 1, 1]); // last = (1, 9)
+    let fresh = entries(&[1, 1, 1, 1, 2]); // last = (2, 5)
+    let mut sim = Sim::new(&[(1, stale), (2, fresh.clone()), (3, fresh)], 2, 21, false);
+    sim.timeout(NodeId(1), None);
     sim.drain();
     sim.check_all();
-    // The stale candidate must NOT have become leader: 2 and 3 refuse it,
-    // and its self-vote alone is not a quorum.
     assert!(
         sim.leaders.values().all(|s| !s.contains(&NodeId(1))),
         "stale-log candidate won an election: {:?}",
         sim.leaders
     );
-    // And a fresh candidate CAN win afterwards.
     sim.timeout(NodeId(2), None);
     sim.drain();
     sim.check_all();
@@ -406,16 +515,14 @@ fn r3_stale_log_candidate_is_refused_by_fresher_voters() {
     );
 }
 
-/// Partition + heal: a minority-side candidate must not win; after heal the
-/// cluster converges on one leader per term (no dual leadership ever).
+/// Partition + heal: a minority candidate cannot win; heal converges.
 #[test]
 fn partition_minority_cannot_elect_and_heal_converges() {
-    let mut sim = Sim::new(&[(1, L0), (2, L0), (3, L0)], 63, false);
-    // Partition node 1 away from 2 and 3.
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 63, false);
     sim.cut.insert((NodeId(1), NodeId(2)));
     sim.cut.insert((NodeId(1), NodeId(3)));
-    sim.timeout(NodeId(1), None); // minority campaign — must fail
-    sim.timeout(NodeId(2), None); // majority campaign — must succeed
+    sim.timeout(NodeId(1), None);
+    sim.timeout(NodeId(2), None);
     sim.drain();
     sim.check_all();
     assert!(
@@ -423,32 +530,168 @@ fn partition_minority_cannot_elect_and_heal_converges() {
         "partitioned minority elected itself: {:?}",
         sim.leaders
     );
-    // Heal and drain remaining traffic: invariants must still hold.
     sim.cut.clear();
     sim.drain();
     sim.check_all();
 }
 
-/// Randomized soak: seeded schedules with random timeouts, crashes at random
-/// boundaries, restarts, and message shuffling. The invariants must hold for
-/// every seed. (Gate A's "deterministic simulation" in miniature — the full
-/// schedule explorer grows with the log layer in Phase A1b.)
+/// Pre-vote probing by an isolated node must not advance its durable term.
+#[test]
+fn pre_vote_probe_never_burns_terms() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 5, true);
+    sim.cut.insert((NodeId(1), NodeId(2)));
+    sim.cut.insert((NodeId(1), NodeId(3)));
+    for _ in 0..25 {
+        sim.timeout(NodeId(1), None);
+        sim.drain();
+    }
+    assert_eq!(sim.nodes[&NodeId(1)].disk_hard.current_term, Term(0));
+    sim.check_all();
+}
+
+// ── tests: Phase A1b — replication + authority safety ──────────────
+
+/// Proposed entries reach commit on every node; the committed ledger holds
+/// exactly the proposed payloads in order after the election no-op.
+#[test]
+fn replication_commits_across_cluster() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 11, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    let leader = sim.current_leader().expect("leader elected");
+    for p in [101, 102, 103] {
+        assert!(sim.propose(leader, p), "propose on leader");
+    }
+    sim.drain();
+    sim.heartbeat(leader); // share final commit index
+    sim.drain();
+    sim.check_all();
+    // Index 1 = no-op, 2..=4 = payloads, committed everywhere.
+    assert_eq!(sim.committed_at.get(&2).map(|e| e.payload), Some(101));
+    assert_eq!(sim.committed_at.get(&3).map(|e| e.payload), Some(102));
+    assert_eq!(sim.committed_at.get(&4).map(|e| e.payload), Some(103));
+    for (id, node) in &sim.nodes {
+        assert!(node.applied >= 4, "{id:?} applied only to {}", node.applied);
+    }
+}
+
+/// R1 — the stale-leader scenario, end to end: a partitioned leader keeps
+/// proposing but can never commit (no quorum of durable acks); the majority
+/// elects a new leader and commits different entries at the same indices;
+/// on heal the stale leader is term-fenced, steps down, and its tentative
+/// suffix is truncated in favor of canonical history. The authority ledger
+/// proves the stale proposals were never applied anywhere.
+#[test]
+fn r1_stale_leader_cannot_commit_and_gets_fenced() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 17, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    assert_eq!(sim.current_leader(), Some(NodeId(1)));
+    let applied_before = sim.nodes[&NodeId(1)].applied;
+
+    // Partition the leader away; it keeps accepting proposals (tentative).
+    sim.cut.insert((NodeId(1), NodeId(2)));
+    sim.cut.insert((NodeId(1), NodeId(3)));
+    assert!(sim.propose(NodeId(1), 201));
+    assert!(sim.propose(NodeId(1), 202));
+    sim.drain();
+    // No quorum → no commit advance on the stale leader.
+    assert_eq!(
+        sim.nodes[&NodeId(1)].applied,
+        applied_before,
+        "stale leader advanced commit without a quorum"
+    );
+
+    // Majority side elects a new leader and commits different entries.
+    sim.timeout(NodeId(2), None);
+    sim.drain();
+    assert!(sim.propose(NodeId(2), 301));
+    sim.drain();
+
+    // Heal: the stale leader gets fenced and adopts canonical history.
+    sim.cut.clear();
+    sim.heartbeat(NodeId(2));
+    sim.drain();
+    sim.heartbeat(NodeId(2));
+    sim.drain();
+    sim.check_all();
+
+    // The stale proposals were never applied by anyone.
+    assert!(
+        sim.committed_at
+            .values()
+            .all(|e| e.payload != 201 && e.payload != 202),
+        "stale leader's tentative writes leaked into committed history"
+    );
+    // Node 1 now holds the canonical entry (truncated + replaced).
+    let committed_301 = sim
+        .committed_at
+        .iter()
+        .find(|(_, e)| e.payload == 301)
+        .map(|(i, _)| *i)
+        .expect("301 committed");
+    let n1 = sim.nodes[&NodeId(1)].core.as_ref().unwrap();
+    assert_eq!(n1.entry(committed_301).map(|e| e.payload), Some(301));
+    assert_eq!(sim.current_leader(), Some(NodeId(2)));
+}
+
+/// A follower that crashes before persisting appended entries loses them,
+/// restarts behind, and is caught up by the leader's heartbeat protocol.
+#[test]
+fn follower_catchup_after_crash() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 29, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    // Propose; crash node 3 at the persist boundary (entries lost).
+    assert!(sim.propose(NodeId(1), 401));
+    let mut injected = false;
+    while !sim.net.is_empty() {
+        let to = sim.net.front().unwrap().to;
+        let inject = if to == NodeId(3) && !injected {
+            injected = true;
+            Some(0u8)
+        } else {
+            None
+        };
+        sim.deliver_one(inject);
+    }
+    // Quorum still commits via nodes 1+2.
+    assert!(sim.committed_at.values().any(|e| e.payload == 401));
+    // Node 3 restarts behind; heartbeats catch it up.
+    sim.restart(NodeId(3), false);
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.check_all();
+    let n3 = &sim.nodes[&NodeId(3)];
+    assert!(
+        n3.applied >= 2,
+        "restarted follower failed to catch up (applied {})",
+        n3.applied
+    );
+}
+
+/// Seeded soak: random elections, proposals, heartbeats, crashes at random
+/// persist boundaries, restarts, partitions — every invariant holds for
+/// every seed.
 #[test]
 fn seeded_soak_invariants_hold() {
-    for seed in 1..40u64 {
-        let mut sim = Sim::new(&[(1, L0), (2, L0), (3, L0)], seed, seed % 2 == 0);
-        for _step in 0..200 {
+    for seed in 1..30u64 {
+        let mut sim = Sim::new(
+            &[(1, empty()), (2, empty()), (3, empty())],
+            0,
+            seed,
+            seed % 2 == 0,
+        );
+        let mut payload = 100;
+        for _step in 0..300 {
             let ids = [NodeId(1), NodeId(2), NodeId(3)];
-            match sim.rng.next() % 10 {
+            match sim.rng.next() % 12 {
                 0 => {
                     let id = ids[sim.rng.pick(3)];
-                    let alive = sim.nodes[&id].core.is_some();
-                    if alive {
-                        let inject = if sim.rng.chance(20) {
-                            Some((sim.rng.next() % 2) as u8)
-                        } else {
-                            None
-                        };
+                    if sim.nodes[&id].core.is_some() {
+                        let inject = sim.rng.chance(20).then(|| (sim.rng.next() % 2) as u8);
                         sim.timeout(id, inject);
                     }
                 }
@@ -465,35 +708,36 @@ fn seeded_soak_invariants_hold() {
                         sim.restart(id, pv);
                     }
                 }
+                3 => {
+                    // Propose on whoever believes it is leader (may be a
+                    // stale leader — exactly the point).
+                    let id = ids[sim.rng.pick(3)];
+                    payload += 1;
+                    let _ = sim.propose(id, payload);
+                }
+                4 => {
+                    let id = ids[sim.rng.pick(3)];
+                    sim.heartbeat(id);
+                }
+                5 => {
+                    // Toggle a partition edge.
+                    let a = ids[sim.rng.pick(3)];
+                    let b = ids[sim.rng.pick(3)];
+                    if a != b {
+                        let key = (a.min(b), a.max(b));
+                        if !sim.cut.remove(&key) {
+                            sim.cut.insert(key);
+                        }
+                    }
+                }
                 _ => {
-                    let inject = if sim.rng.chance(10) {
-                        Some((sim.rng.next() % 2) as u8)
-                    } else {
-                        None
-                    };
+                    let inject = sim.rng.chance(10).then(|| (sim.rng.next() % 2) as u8);
                     sim.deliver_one(inject);
                 }
             }
         }
+        sim.cut.clear();
         sim.drain();
-        sim.check_all(); // must hold for EVERY seed
+        sim.check_all();
     }
-}
-
-/// Liveness note (not a Gate A safety invariant, but worth pinning): pre-vote
-/// probing by an isolated node must not advance its persisted term — the .140
-/// flapping lesson.
-#[test]
-fn pre_vote_probe_never_burns_terms() {
-    let mut sim = Sim::new(&[(1, L0), (2, L0), (3, L0)], 5, true);
-    // Isolate node 1 fully, then let it probe repeatedly.
-    sim.cut.insert((NodeId(1), NodeId(2)));
-    sim.cut.insert((NodeId(1), NodeId(3)));
-    for _ in 0..25 {
-        sim.timeout(NodeId(1), None);
-        sim.drain();
-    }
-    // Its durable term must be untouched: pre-vote is stateless.
-    assert_eq!(sim.nodes[&NodeId(1)].disk.current_term, Term(0));
-    sim.check_all();
 }

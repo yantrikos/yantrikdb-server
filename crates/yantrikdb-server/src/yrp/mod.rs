@@ -8,26 +8,26 @@
 //! payloads, engine-checkpoint snapshots, quarantine-not-wedge recovery,
 //! quorum-managed incarnations) layer on top in later phases.
 //!
-//! Phase A1 (this module): the **election safety core** as *pure logic* — no
-//! I/O, no clocks, no tasks. A driver (production runtime or the deterministic
-//! simulator in tests) feeds events in and executes the returned effects. The
-//! pure shape is what makes Gate A provable: the simulator can crash a node at
-//! any effect boundary and assert the invariants hold.
+//! Phase A1 (merged): the election safety core as *pure logic* — no I/O, no
+//! clocks, no tasks. Phase A1b (this revision): the canonical prefix log —
+//! append continuity, conflict truncation, per-write quorum confirmation,
+//! and the current-term commit rule — in the same pure state machine
+//! ([`replica::ReplicaCore`]). A driver (production runtime or the
+//! deterministic simulator in tests) feeds events in and executes the
+//! returned effects; the pure shape is what makes Gate A provable.
 //!
-//! Gate A invariants covered here (RFC 028 v2 §11):
-//! 1. **Vote safety** — no node votes for two candidates in one term,
-//!    including across crash/restart (review scenario R2).
-//! 3. **Possibly-committed-suffix protection** — election freshness uses
-//!    Raft's last-`(term, index)` rule, never a scalar watermark (R3).
-//!
-//! The structural trick for R2: [`election::ElectionCore`] *cannot* produce a
-//! granted-vote response directly. Deciding to grant returns a
-//! [`election::Effect::PersistHardState`]; only when the driver confirms
-//! durability via [`election::ElectionCore::hard_state_persisted`] does the
-//! response message materialize. Persist-before-respond is enforced by the
-//! API's shape, not by driver discipline.
+//! Gate A invariants covered (RFC 028 v2 §11):
+//! 1. **Vote safety** (R2) — structural: granted votes only leave the node
+//!    via [`replica::ReplicaCore::state_persisted`].
+//! 2. **Authority safety** (R1) — per-write quorum confirmation: an entry
+//!    commits only when a quorum has durably accepted it (acceptor acks are
+//!    persist-gated), and only under the leader's current term; stale
+//!    leaders are term-fenced at every acceptor. The sim proves it with a
+//!    global committed-entry-uniqueness ledger.
+//! 3. **Possibly-committed-suffix protection** (R3) — Raft last-`(term,
+//!    index)` election freshness, never a watermark.
 
-pub mod election;
+pub mod replica;
 pub mod types;
 
 #[cfg(test)]

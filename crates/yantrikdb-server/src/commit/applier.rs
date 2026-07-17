@@ -327,11 +327,20 @@ fn apply_to_engine(
             let created_at = created_at_unix_micros.unwrap_or(0);
             let model = embedding_model.as_deref().unwrap_or("default");
 
-            // engine.record_with_rid signature (engine 0.6.7):
-            //   (rid, text, memory_type, importance, valence, half_life,
-            //    metadata, embedding, namespace, certainty, domain,
-            //    source, emotional_state, created_at_unix_micros,
-            //    extracted_entities, embedding_model, seq: Option<u64>)
+            // engine.record_with_rid signature (engine v0.10):
+            //   (..., seq: Option<u64>, admission: WriteAdmission)
+            //
+            // `WriteAdmission::Admitted` is REQUIRED here and is the whole
+            // reason the arg exists (yantrikdb-core 4a.6b). This is the
+            // consensus-committed apply path: the op was already provenance-
+            // gated once at the leader's ORIGIN ingress before it entered the
+            // raft log. Passing `Origin` would re-gate it on *every* node, so
+            // each follower would reject the leader's committed write; our
+            // contract turns that into `EngineFailure` (not idempotent-ok),
+            // which halts the node's apply path — a cluster-wide wedge, not a
+            // soft failure. `Admitted` says "already admitted upstream, do not
+            // re-gate". A genuine ORIGIN write (a new write, not a replicated
+            // apply) must NOT use this path.
             engine
                 .record_with_rid(
                     rid,
@@ -351,6 +360,7 @@ fn apply_to_engine(
                     &entities_ref,
                     model,
                     Some(log_index),
+                    yantrikdb::provenance::WriteAdmission::Admitted,
                 )
                 .map_err(|e| ApplyError::EngineFailure {
                     message: format!("record_with_rid({rid}): {e}"),

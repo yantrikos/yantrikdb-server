@@ -5,6 +5,28 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.28] — 2026-07-17
+
+**Engine v0.10.0 adoption.** First leg of the coordinated core→server→mcp→dogfood v0.10 release train. Pinned to the **v0.10.0 tag** (immutable ref — a version string can't distinguish the tag from the RC that self-reports the same version; the release-train lesson made concrete).
+
+### Changed — engine pin v0.9.4 → v0.10.0
+
+Validated against the v0.10.0 tag: full suite green. Four v0.10 breaks handled:
+
+- **`record_with_rid` now takes `admission: WriteAdmission`.** The raft applier passes `WriteAdmission::Admitted` — the consensus-committed apply path was already provenance-gated once at the leader's origin ingress; re-gating it on every follower (`Origin`) would make each reject the leader's committed write and halt the node (a cluster-wide wedge). `Admitted` is the correct, required choice at this one call site.
+- **`OplogEntry.embedding` (v0.10 Item 3).** `entry_to_wire` now populates the embedding bytes (flipped from the placeholder `None` shipped in v0.8.x wire-format v2), and `wire_to_entry` carries them onto the follower — so a text-changing `correct` applies the origin's identical vector instead of re-embedding (which diverges by model version / quantization).
+- **`recall` + `SessionDigestConfig` gained `include_superseded`** — see below.
+
+### Added — `include_superseded` (current-value-by-default, opt-in history)
+
+v0.10 makes recall **exclude superseded records by default** — the supersession-aware behavior we benchmarked (RAG 0.00 vs substrate 0.78–1.00 on current-value). Now wired end-to-end:
+
+- **`POST /v1/recall`** accepts `"include_superseded": <bool>` (default `false`). Threaded through `Command::Recall` → `db.recall` at every call site.
+- **`GET /v1/session/digest?include_superseded=true`** re-admits superseded records into the content aggregates. Default `false` — a boot briefing must report only *current* decisions; quoting a superseded decision back at a waking agent would mislead it.
+- `true` at either surface is for history/archaeology.
+
+Behavioral note for consumers: an unchanged caller now sees **current-value-only** results by default. This is the intended, benchmarked default; opt into the prior all-records behavior with `include_superseded: true`.
+
 ## [0.8.27] — 2026-07-16
 
 **The two capabilities that were dark.** The engine could already do both of these; neither was reachable over HTTP. A pinned engine with unwired capability is dark capability — an agent cannot call what isn't exposed. This release exposes them, and wires them together into a loop.

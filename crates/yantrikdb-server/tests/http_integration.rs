@@ -432,8 +432,9 @@ async fn handle_recall(
             body.get("namespace").and_then(|v| v.as_str()),
             body.get("domain").and_then(|v| v.as_str()),
             body.get("source").and_then(|v| v.as_str()),
-            None, // certainty_min — v0.7.20 issue #46
-            None, // order — v0.7.20 issue #46
+            None,  // certainty_min — v0.7.20 issue #46
+            None,  // order — v0.7.20 issue #46
+            false, // include_superseded — v0.10
         )
         .map_err(|e| {
             (

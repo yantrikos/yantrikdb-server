@@ -426,6 +426,11 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut payload = json!({
         "status": "ok",
         "engines_loaded": state.pool.loaded_count(),
+        // Issue #58 (agreement #6): probeable capabilities so clients can
+        // feature-probe instead of discovering support by silent field
+        // drops. mcp/hermes flip their client-side key refusals to
+        // forwards when they see "idempotency_key" here.
+        "capabilities": ["idempotency_key"],
     });
     if let Some(view) = cluster_state_view(&state) {
         // PR 6.9: payload gains last_log_index, last_applied_index,
@@ -721,6 +726,25 @@ async fn remember(
     });
     let embedding = resolve_embedding(state.as_ref(), &text, client_supplied).await?;
 
+    // Issue #58: keyed writes route through the engine's atomic
+    // claim-coupled path instead of the commit_log mutation. Inside
+    // `record_with_idempotency` the claim and the row commit in ONE engine
+    // transaction (v0.10 T07) — which is exactly the "claim is
+    // origin-ingress AND commit-coupled" contract RFC 028 §7 requires. The
+    // RFC-010 mutation path cannot carry that coupling yet (the applier's
+    // `record_with_rid` has no claim parameter), so in cluster mode the key
+    // is REFUSED loudly (agreement #6: an ignored key converts
+    // "exactly-once" into "maybe-twice" invisibly — the worst failure mode
+    // this feature exists to kill). YRP Phase B moves the claim into the
+    // replicated log per RFC 028 §7.
+    if let Some(key) = body
+        .get("idempotency_key")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+    {
+        return remember_with_idempotency(&state, engine, body, text, embedding, key).await;
+    }
+
     // RFC 010 PR-6.4: route through commit_log instead of calling
     // engine.record() directly. Single-node mode: LocalSqliteSubmitter
     // applies inline. Cluster mode: RaftCommitter routes through
@@ -795,6 +819,218 @@ async fn remember(
         "rid": rid,
         "log_index": receipt.log_index,
     })))
+}
+
+/// Issue #58: the keyed `/v1/remember` path — engine-atomic claim + row.
+///
+/// Response contract (converged with yantrikdb-mcp + yantrikdb-hermes-plugin
+/// in issue #58; hermes's byte-identical-across-backends argument won the
+/// 200-vs-4xx question):
+/// - fresh write            → 200 `{rid}`
+/// - same key + same text   → 200 `{rid}` (the ORIGINAL rid, zero writes —
+///   the silent-HIT principle; indistinguishable from fresh by design)
+/// - same key + diff text   → 200 `{stored:false, idempotency_conflict:true,
+///   rid:<existing>}` — a claim-resolution RESULT, not a protocol error
+/// - invalid key            → 400 (empty/whitespace/over-long — a caller bug)
+/// - cluster mode           → 501 (refused until YRP Phase B couples the
+///   claim into the replicated log; agreement #6 — never silently drop)
+async fn remember_with_idempotency(
+    state: &Arc<AppState>,
+    engine: EngineHandle,
+    body: Value,
+    text: String,
+    embedding: Option<Vec<f32>>,
+    key: String,
+) -> AppResult {
+    if cluster_state_view(state).is_some() {
+        return Err(app_error(
+            StatusCode::NOT_IMPLEMENTED,
+            "idempotency_key is not yet supported in cluster mode: the \
+             replicated apply path cannot couple the claim to the commit \
+             (issue #58 / RFC 028 §7). Retry without the key, or run \
+             single-node.",
+        ));
+    }
+    let memory_type: String = body
+        .get("memory_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("semantic")
+        .into();
+    let importance = body
+        .get("importance")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5);
+    let valence = body.get("valence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let half_life = body
+        .get("half_life")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(168.0);
+    let metadata = body.get("metadata").cloned().unwrap_or(json!({}));
+    let namespace: String = body
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .into();
+    let certainty = body
+        .get("certainty")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0);
+    let domain: String = body
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .into();
+    let source: String = body
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("user")
+        .into();
+    let emotional_state: Option<String> = body
+        .get("emotional_state")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let outcome = tokio::task::spawn_blocking(move || match embedding {
+        Some(emb) => engine.record_with_idempotency(
+            &text,
+            &memory_type,
+            importance,
+            valence,
+            half_life,
+            &metadata,
+            &emb,
+            &namespace,
+            certainty,
+            &domain,
+            &source,
+            emotional_state.as_deref(),
+            Some(&key),
+        ),
+        // No embedder + no client vector: the engine's text path applies
+        // its own embedding policy, identical to the unkeyed route.
+        None => engine.record_text_with_idempotency(
+            &text,
+            &memory_type,
+            importance,
+            valence,
+            half_life,
+            &metadata,
+            &namespace,
+            certainty,
+            &domain,
+            &source,
+            emotional_state.as_deref(),
+            Some(&key),
+        ),
+    })
+    .await
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("join error: {e}"),
+        )
+    })?;
+
+    match outcome {
+        Ok(rid) => Ok(Json(json!({ "rid": rid }))),
+        Err(yantrikdb::YantrikDbError::IdempotencyConflict { existing_rid, .. }) => {
+            Ok(Json(json!({
+                "stored": false,
+                "idempotency_conflict": true,
+                "rid": existing_rid,
+            })))
+        }
+        Err(yantrikdb::YantrikDbError::InvalidIdempotencyKey { reason }) => Err(app_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid idempotency_key: {reason}"),
+        )),
+        Err(e) => Err(app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("engine error: {e}"),
+        )),
+    }
+}
+
+/// Issue #58: keyed `/v1/remember/batch` — the engine's atomic batch path.
+/// Claims + rows commit in one transaction; a key conflict fails the WHOLE
+/// batch (all-or-nothing), returning the same 200-conflict shape as the
+/// single-item path. Cluster mode refuses (same reasoning as
+/// [`remember_with_idempotency`]).
+async fn remember_batch_with_idempotency(
+    state: &Arc<AppState>,
+    engine: EngineHandle,
+    memories: Vec<crate::command::RememberInput>,
+    item_keys: Vec<Option<String>>,
+) -> AppResult {
+    if cluster_state_view(state).is_some() {
+        return Err(app_error(
+            StatusCode::NOT_IMPLEMENTED,
+            "idempotency_key is not yet supported in cluster mode: the \
+             replicated apply path cannot couple the claim to the commit \
+             (issue #58 / RFC 028 §7). Retry without keys, or run \
+             single-node.",
+        ));
+    }
+    // The engine batch API requires concrete vectors; by this point every
+    // item either shipped one or was pre-embedded. A remaining None means
+    // the server has no embedder — refuse honestly rather than land a
+    // NULL-embedding row behind a dedup claim.
+    let mut inputs = Vec::with_capacity(memories.len());
+    for (i, (m, key)) in memories.into_iter().zip(item_keys).enumerate() {
+        let Some(embedding) = m.embedding else {
+            return Err(app_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "memories[{i}]: keyed batches require embeddings \
+                     (configure a server embedder or supply 'embedding')"
+                ),
+            ));
+        };
+        inputs.push(yantrikdb::types::RecordInput {
+            text: m.text,
+            memory_type: m.memory_type,
+            importance: m.importance,
+            valence: m.valence,
+            half_life: m.half_life,
+            metadata: m.metadata,
+            embedding,
+            namespace: m.namespace,
+            certainty: m.certainty,
+            domain: m.domain,
+            source: m.source,
+            emotional_state: m.emotional_state,
+            idempotency_key: key,
+        });
+    }
+    let outcome = tokio::task::spawn_blocking(move || engine.record_batch(&inputs))
+        .await
+        .map_err(|e| {
+            app_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("join error: {e}"),
+            )
+        })?;
+    match outcome {
+        Ok(rids) => {
+            let count = rids.len();
+            Ok(Json(json!({ "rids": rids, "count": count })))
+        }
+        Err(yantrikdb::YantrikDbError::IdempotencyConflict { existing_rid, .. }) => {
+            Ok(Json(json!({
+                "stored": false,
+                "idempotency_conflict": true,
+                "rid": existing_rid,
+            })))
+        }
+        Err(yantrikdb::YantrikDbError::InvalidIdempotencyKey { reason }) => Err(app_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid idempotency_key: {reason}"),
+        )),
+        Err(e) => Err(app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("engine error: {e}"),
+        )),
+    }
 }
 
 /// Issue #19 helper: resolve the embedding for a `/v1/remember`-style
@@ -906,7 +1142,23 @@ async fn remember_batch(
     }
 
     let mut memories = Vec::with_capacity(memories_arr.len());
+    // Issue #58: per-item idempotency keys, positionally aligned with
+    // `memories`. A batch-level key derives per-item as "{key}:{index}" —
+    // the convention yantrikdb-mcp and yantrikdb-hermes-plugin already
+    // shipped; mirroring it means retries dedupe identically across all
+    // three surfaces. An explicit per-item key wins over the derivation.
+    let mut item_keys: Vec<Option<String>> = Vec::with_capacity(memories_arr.len());
+    let batch_key: Option<String> = body
+        .get("idempotency_key")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     for (i, m) in memories_arr.iter().enumerate() {
+        item_keys.push(
+            m.get("idempotency_key")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| batch_key.as_ref().map(|k| format!("{k}:{i}"))),
+        );
         let text = m
             .get("text")
             .and_then(|v| v.as_str())
@@ -1013,6 +1265,15 @@ async fn remember_batch(
                 }
             }
         }
+    }
+
+    // Issue #58: any key present routes the WHOLE batch through the
+    // engine's atomic batch path (claims + rows in one transaction,
+    // all-or-nothing on conflict — the embedded semantics mcp/hermes
+    // locked). Mixed keyed/unkeyed items ride together; unkeyed items
+    // simply carry no claim.
+    if item_keys.iter().any(|k| k.is_some()) {
+        return remember_batch_with_idempotency(&state, engine, memories, item_keys).await;
     }
 
     // RFC 010 PR-6.4: route every batch entry through commit_log. Each

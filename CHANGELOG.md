@@ -5,6 +5,12 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] — 2026-07-18
+
+**`idempotency_key` on `/v1/remember` + `/v1/remember/batch`** (issue #58, converged with yantrikdb-mcp + yantrikdb-hermes-plugin). Keyed writes commit claim + row in one engine transaction (v0.10 T07 — the RFC 028 §7 origin-ingress-and-commit-coupled contract). Same key + same payload → 200 with the original rid, zero writes; same key + divergent payload → 200 `{stored:false, idempotency_conflict:true, rid}`; invalid key → 400. Batch: per-item keys + batch-level `{key}:{index}` derivation (the shipped mcp/hermes convention), all-or-nothing on conflict. `/v1/health` advertises `capabilities: ["idempotency_key"]` for feature-probing. Cluster mode refuses keyed writes with 501 until YRP Phase B couples claims into the replicated log (agreement #6 — never silently drop a dedup guarantee). Additive only — unkeyed callers unchanged.
+
+Also on main since 0.10.0: **YRP Gate A complete** (RFC 028 v2, PRs #57/#59/#60) — the native replication safety core (election + log replication + fail-closed quarantine/rejoin) as pure sim-proven logic; not yet wired into the runtime.
+
 ## [0.10.0] — 2026-07-18
 
 **Version realignment + engine v0.10.0 adoption.** From this release, `yantrikdb-server` versions align with the engine generation: the ecosystem ships **core 0.10.0 + server 0.10.0 + mcp** on one coordinated train, so "the v0.10 generation" is unambiguous across all three repos. The server's independent 0.8.x line ends at 0.8.27; the briefly-tagged `v0.8.28` (same code, pre-realignment number, never deployed) is superseded by this tag.

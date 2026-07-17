@@ -200,3 +200,191 @@ mod helper {
         SimpleControlDb { conn }
     }
 }
+
+// ── Issue #58: /v1/remember idempotency_key contract (engine semantics the
+// gateway maps 1:1 — same-key+same-payload = original rid + zero writes;
+// same-key+divergent-payload = typed IdempotencyConflict carrying the
+// existing rid (gateway → 200 {stored:false, idempotency_conflict:true,
+// rid}); batch per-item keys are all-or-nothing on conflict; invalid keys
+// are refused loudly, never coerced. ──
+
+fn idem_test_db() -> (TempDir, yantrikdb::YantrikDB) {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("idem.db");
+    let db = yantrikdb::YantrikDB::new(db_path.to_str().unwrap(), 8).unwrap();
+    (tmp, db)
+}
+
+fn idem_vec() -> Vec<f32> {
+    (0..8).map(|i| ((i as f32) * 0.3).sin()).collect()
+}
+
+#[test]
+fn idempotency_same_key_same_payload_returns_original_rid_zero_writes() {
+    let (_tmp, db) = idem_test_db();
+    let emb = idem_vec();
+    let meta = serde_json::json!({});
+    let rid1 = db
+        .record_with_idempotency(
+            "keyed fact",
+            "semantic",
+            0.5,
+            0.0,
+            168.0,
+            &meta,
+            &emb,
+            "ns",
+            1.0,
+            "work",
+            "user",
+            None,
+            Some("key-1"),
+        )
+        .unwrap();
+    let rid2 = db
+        .record_with_idempotency(
+            "keyed fact",
+            "semantic",
+            0.5,
+            0.0,
+            168.0,
+            &meta,
+            &emb,
+            "ns",
+            1.0,
+            "work",
+            "user",
+            None,
+            Some("key-1"),
+        )
+        .unwrap();
+    assert_eq!(rid1, rid2, "retry must return the ORIGINAL rid");
+    let stats = db.stats(None).unwrap();
+    assert_eq!(
+        stats.active_memories, 1,
+        "idempotent retry must write nothing"
+    );
+}
+
+#[test]
+fn idempotency_same_key_divergent_payload_conflicts_with_existing_rid() {
+    let (_tmp, db) = idem_test_db();
+    let emb = idem_vec();
+    let meta = serde_json::json!({});
+    let rid1 = db
+        .record_with_idempotency(
+            "original text",
+            "semantic",
+            0.5,
+            0.0,
+            168.0,
+            &meta,
+            &emb,
+            "ns",
+            1.0,
+            "work",
+            "user",
+            None,
+            Some("key-2"),
+        )
+        .unwrap();
+    let err = db
+        .record_with_idempotency(
+            "DIFFERENT text",
+            "semantic",
+            0.5,
+            0.0,
+            168.0,
+            &meta,
+            &emb,
+            "ns",
+            1.0,
+            "work",
+            "user",
+            None,
+            Some("key-2"),
+        )
+        .unwrap_err();
+    match err {
+        yantrikdb::YantrikDbError::IdempotencyConflict { existing_rid, .. } => {
+            assert_eq!(existing_rid, rid1, "conflict must carry the existing rid");
+        }
+        other => panic!("expected IdempotencyConflict, got: {other}"),
+    }
+    let stats = db.stats(None).unwrap();
+    assert_eq!(stats.active_memories, 1, "conflict must write nothing");
+}
+
+#[test]
+fn idempotency_batch_per_item_keys_all_or_nothing() {
+    let (_tmp, db) = idem_test_db();
+    let emb = idem_vec();
+    let mk = |text: &str, key: Option<&str>| yantrikdb::types::RecordInput {
+        text: text.into(),
+        memory_type: "semantic".into(),
+        importance: 0.5,
+        valence: 0.0,
+        half_life: 168.0,
+        metadata: serde_json::json!({}),
+        embedding: emb.clone(),
+        namespace: "ns".into(),
+        certainty: 1.0,
+        domain: "work".into(),
+        source: "user".into(),
+        emotional_state: None,
+        idempotency_key: key.map(String::from),
+    };
+    // First batch: two keyed items (the "{caller_key}:{index}" derivation
+    // the gateway applies for a batch-level key produces exactly this).
+    let rids1 = db
+        .record_batch(&[mk("item a", Some("bk:0")), mk("item b", Some("bk:1"))])
+        .unwrap();
+    assert_eq!(rids1.len(), 2);
+    // Full retry: same rids back, zero new rows.
+    let rids2 = db
+        .record_batch(&[mk("item a", Some("bk:0")), mk("item b", Some("bk:1"))])
+        .unwrap();
+    assert_eq!(rids1, rids2, "batch retry must return original rids");
+    assert_eq!(db.stats(None).unwrap().active_memories, 2);
+    // Divergent payload under a claimed key fails the WHOLE batch.
+    let err = db
+        .record_batch(&[mk("item a", Some("bk:0")), mk("MUTATED b", Some("bk:1"))])
+        .unwrap_err();
+    assert!(
+        matches!(err, yantrikdb::YantrikDbError::IdempotencyConflict { .. }),
+        "expected IdempotencyConflict, got: {err}"
+    );
+    assert_eq!(
+        db.stats(None).unwrap().active_memories,
+        2,
+        "failed batch must be all-or-nothing"
+    );
+}
+
+#[test]
+fn idempotency_invalid_key_is_refused_loudly() {
+    let (_tmp, db) = idem_test_db();
+    let emb = idem_vec();
+    let meta = serde_json::json!({});
+    let err = db
+        .record_with_idempotency(
+            "text",
+            "semantic",
+            0.5,
+            0.0,
+            168.0,
+            &meta,
+            &emb,
+            "ns",
+            1.0,
+            "work",
+            "user",
+            None,
+            Some("   "),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, yantrikdb::YantrikDbError::InvalidIdempotencyKey { .. }),
+        "whitespace key must be refused, not coerced: {err}"
+    );
+}

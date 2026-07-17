@@ -28,6 +28,18 @@ pub fn entry_to_wire(e: &OplogEntry) -> OplogEntryWire {
         embedding_hash: e.embedding_hash.clone(),
         origin_actor: e.origin_actor.clone(),
         format_version: yantrikdb_protocol::messages::OPLOG_FORMAT_VERSION,
+        // Oplog format v2 (engine v0.10 Item 3): carries the origin's exact
+        // embedding bytes for a text-changing `correct`, so the follower
+        // applies the identical vector instead of re-embedding (which diverges
+        // by model version / quantization).
+        //
+        // `None` here is correct *for the current engine pin only*: v0.9.4's
+        // `OplogEntry` has no `embedding` field to source from. The wire can
+        // already carry it, so a v2 peer decodes it today and no second
+        // format bump is needed later; populating it from `e.embedding` is a
+        // one-line change that lands with the v0.10 pin (see branch
+        // test/engine-v0.10-19df24c, which wires + round-trip-tests it).
+        embedding: None,
     }
 }
 

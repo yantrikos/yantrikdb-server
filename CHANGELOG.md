@@ -5,9 +5,11 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.28] — 2026-07-17
+## [0.10.0] — 2026-07-18
 
-**Engine v0.10.0 adoption.** First leg of the coordinated core→server→mcp→dogfood v0.10 release train. Pinned to the **v0.10.0 tag** (immutable ref — a version string can't distinguish the tag from the RC that self-reports the same version; the release-train lesson made concrete).
+**Version realignment + engine v0.10.0 adoption.** From this release, `yantrikdb-server` versions align with the engine generation: the ecosystem ships **core 0.10.0 + server 0.10.0 + mcp** on one coordinated train, so "the v0.10 generation" is unambiguous across all three repos. The server's independent 0.8.x line ends at 0.8.27; the briefly-tagged `v0.8.28` (same code, pre-realignment number, never deployed) is superseded by this tag.
+
+This is the first leg of the coordinated core→server→mcp→dogfood v0.10 release train. Pinned to the engine's **v0.10.0 tag** (immutable ref — a version string can't distinguish the tag from an RC that self-reports the same version; the release-train lesson made concrete).
 
 ### Changed — engine pin v0.9.4 → v0.10.0
 

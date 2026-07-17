@@ -29,6 +29,7 @@ mod socratic;
 mod tenant_pool;
 mod tls;
 mod version;
+mod yrp;
 
 use parking_lot::Mutex;
 use std::path::PathBuf;

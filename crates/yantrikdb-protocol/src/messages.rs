@@ -520,7 +520,21 @@ pub struct ErrorResponse {
 /// Version history:
 ///   1 — initial (v0.5.0 through v0.5.10). Payload is free-form JSON per
 ///       op_type. No format constraints beyond valid JSON.
-pub const OPLOG_FORMAT_VERSION: u32 = 1;
+///   2 — adds `embedding` (engine v0.10 Item 3). Carries the origin's exact
+///       embedding bytes for a text-changing `correct` so a follower applies
+///       the identical vector instead of re-embedding (which diverges by
+///       model version / quantization). Additive + `serde(default)`, so a v1
+///       entry decodes as `embedding: None`.
+///
+/// NOTE (honest limitation): nothing currently *validates* `format_version` —
+/// it is stamped by `entry_to_wire` and read by no one, and there is no
+/// migration registry. So this bump documents the change but enforces nothing:
+/// a v1 peer receiving a v2 entry decodes it fine (serde ignores unknown
+/// fields) and silently drops `embedding`, which re-opens the exact divergence
+/// Item 3 closes. The Item 3 guarantee therefore only holds when BOTH ends run
+/// v2+. A reader-side version gate is the follow-up if we ever run mixed-
+/// version peer sync for real.
+pub const OPLOG_FORMAT_VERSION: u32 = 2;
 
 /// Wire protocol version. Bumped when the handshake, frame format, or oplog
 /// entry encoding changes in a backward-incompatible way.
@@ -597,6 +611,19 @@ pub struct OplogEntryWire {
     /// field default to 0, treated as version 1. See OPLOG_FORMAT_VERSION.
     #[serde(default)]
     pub format_version: u32,
+    /// Format v2 (engine v0.10 Item 3): the origin's exact embedding bytes for
+    /// a text-changing `correct` op, so a follower applies the identical vector
+    /// rather than re-embedding it — re-embedding diverges by model version /
+    /// quantization, which is precisely the failure this closes.
+    ///
+    /// `Some` only on text-changing corrections; `None` for every other op.
+    /// Encrypted under the origin DEK — usable on a same-DEK follower, which is
+    /// the assumption the encrypted-replication path already makes for
+    /// text/metadata. Mirrors `yantrikdb::OplogEntry::embedding`.
+    ///
+    /// `serde(default)` keeps v1 entries decodable (→ `None`).
+    #[serde(default)]
+    pub embedding: Option<Vec<u8>>,
 }
 
 /// Push ops to a peer (used by primary → secondary push).
@@ -699,4 +726,98 @@ pub mod error_codes {
     pub const NO_QUORUM: u16 = 6002; // Cluster lost quorum
     pub const CLUSTER_SECRET_MISMATCH: u16 = 6003;
     pub const PEER_TERM_MISMATCH: u16 = 6004;
+}
+
+#[cfg(test)]
+mod oplog_wire_v2_tests {
+    use super::*;
+
+    fn v2_entry(embedding: Option<Vec<u8>>) -> OplogEntryWire {
+        OplogEntryWire {
+            op_id: "op-1".into(),
+            op_type: "correct".into(),
+            timestamp: 1.0,
+            target_rid: Some("rid-1".into()),
+            payload: serde_json::json!({"text": "corrected"}),
+            actor_id: "actor-a".into(),
+            hlc: vec![1, 2, 3],
+            embedding_hash: Some(vec![9, 9]),
+            origin_actor: "origin-a".into(),
+            format_version: OPLOG_FORMAT_VERSION,
+            embedding,
+        }
+    }
+
+    /// Oplog format v2 (engine v0.10 Item 3). The guarantee: the origin's exact
+    /// embedding bytes reach the follower so it applies the identical vector
+    /// instead of re-embedding — re-embedding diverges by model version /
+    /// quantization, which is the failure this closes.
+    ///
+    /// Assert the CONTENT survives the serde boundary, not merely that the
+    /// struct compiles: a dropped field compiles perfectly and voids the
+    /// guarantee silently, which is exactly how this gap hid before.
+    #[test]
+    fn embedding_bytes_survive_serde_roundtrip() {
+        let bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let wire = v2_entry(Some(bytes.clone()));
+
+        let json = serde_json::to_string(&wire).expect("serialize");
+        // Must be the exact key. A bare `contains("embedding")` is satisfied by
+        // the pre-existing `embedding_hash` field, so it would pass even if
+        // `embedding` were serde-skipped — a false-positive guard on precisely
+        // the regression this test exists to catch (caught in review by
+        // yantrikdb-core).
+        assert!(
+            json.contains("\"embedding\":"),
+            "v2 wire encoding must carry the `embedding` key itself \
+             (not just `embedding_hash`); got: {json}"
+        );
+
+        let decoded: OplogEntryWire = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            decoded.embedding,
+            Some(bytes),
+            "embedding bytes must survive the peer-sync serde hop"
+        );
+    }
+
+    /// Non-correct ops carry no embedding. `None` must stay `None` — not
+    /// become an empty vec, which means something different downstream.
+    #[test]
+    fn absent_embedding_stays_none() {
+        let json = serde_json::to_string(&v2_entry(None)).expect("serialize");
+        let decoded: OplogEntryWire = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded.embedding, None);
+    }
+
+    /// Backward compat: a v1 peer's entry has no `embedding` key at all. It
+    /// must still decode (serde default -> None) rather than fail the whole
+    /// sync batch.
+    #[test]
+    fn v1_entry_without_embedding_field_still_decodes() {
+        let v1_json = serde_json::json!({
+            "op_id": "op-1",
+            "op_type": "record",
+            "timestamp": 1.0,
+            "target_rid": "rid-1",
+            "payload": {"text": "hi"},
+            "actor_id": "actor-a",
+            "hlc": [1, 2, 3],
+            "embedding_hash": null,
+            "origin_actor": "origin-a",
+            "format_version": 1
+        })
+        .to_string();
+
+        let decoded: OplogEntryWire =
+            serde_json::from_str(&v1_json).expect("v1 entry must decode under the v2 schema");
+        assert_eq!(decoded.embedding, None);
+        assert_eq!(decoded.format_version, 1);
+    }
+
+    /// Pin the version constant: v2 is the format that carries `embedding`.
+    #[test]
+    fn oplog_format_version_is_2() {
+        assert_eq!(OPLOG_FORMAT_VERSION, 2);
+    }
 }

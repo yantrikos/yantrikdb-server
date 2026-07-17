@@ -35,6 +35,11 @@ pub enum Command {
         domain: Option<String>,
         source: Option<String>,
         query_embedding: Option<Vec<f32>>,
+        /// v0.10: re-admit superseded records. Default `false` = current-value-
+        /// by-default (the supersession-aware behavior). `true` is for
+        /// history/archaeology — surfaces stale records stamped with their
+        /// superseded status.
+        include_superseded: bool,
     },
     Forget {
         rid: String,

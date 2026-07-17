@@ -28,18 +28,14 @@ pub fn entry_to_wire(e: &OplogEntry) -> OplogEntryWire {
         embedding_hash: e.embedding_hash.clone(),
         origin_actor: e.origin_actor.clone(),
         format_version: yantrikdb_protocol::messages::OPLOG_FORMAT_VERSION,
-        // Oplog format v2 (engine v0.10 Item 3): carries the origin's exact
-        // embedding bytes for a text-changing `correct`, so the follower
-        // applies the identical vector instead of re-embedding (which diverges
-        // by model version / quantization).
-        //
-        // `None` here is correct *for the current engine pin only*: v0.9.4's
-        // `OplogEntry` has no `embedding` field to source from. The wire can
-        // already carry it, so a v2 peer decodes it today and no second
-        // format bump is needed later; populating it from `e.embedding` is a
-        // one-line change that lands with the v0.10 pin (see branch
-        // test/engine-v0.10-19df24c, which wires + round-trip-tests it).
-        embedding: None,
+        // Oplog format v2 (engine v0.10 Item 3): carry the origin's exact
+        // embedding bytes across the peer-sync hop so the follower applies the
+        // identical vector instead of re-embedding (which diverges by model
+        // version / quantization). Now that the engine is pinned to v0.10.0,
+        // `OplogEntry` HAS the field to source from — so this is populated,
+        // not `None`. Dropping it here would compile fine and silently void
+        // the guarantee, which is the whole point of the v2 wire field (#52).
+        embedding: e.embedding.clone(),
     }
 }
 
@@ -54,6 +50,11 @@ pub fn wire_to_entry(w: OplogEntryWire) -> OplogEntry {
         hlc: w.hlc,
         embedding_hash: w.embedding_hash,
         origin_actor: w.origin_actor,
+        // Oplog format v2 / engine v0.10 Item 3: the origin's exact embedding
+        // bytes for a text-changing `correct` reach this follower here, so it
+        // applies the identical vector rather than re-embedding. `None` for
+        // every other op and for v1 entries from a pre-v2 peer (serde default).
+        embedding: w.embedding,
     }
 }
 

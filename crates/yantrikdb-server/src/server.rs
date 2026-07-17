@@ -419,6 +419,10 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
                 domain: req.domain,
                 source: req.source,
                 query_embedding: req.query_embedding,
+                // Wire protocol doesn't carry this field yet, so wire clients
+                // get the v0.10 default: current-value (superseded excluded).
+                // Exposing it over the wire is a RecallRequest change for later.
+                include_superseded: false,
             })
         }
         OpCode::Forget => {

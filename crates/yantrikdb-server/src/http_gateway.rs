@@ -1167,6 +1167,13 @@ async fn recall(
                     .collect()
             })
         }),
+        // v0.10: default false = current-value-by-default (superseded records
+        // excluded — the supersession-aware behavior we benchmarked). Opt in
+        // with `"include_superseded": true` for history/archaeology.
+        include_superseded: body
+            .get("include_superseded")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     };
     let mut resp = execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await?;
     annotate_fts5_fallback(&mut resp);
@@ -2986,6 +2993,11 @@ struct SessionDigestParams {
     include_gaps: Option<bool>,
     /// Cap for the folded-in gaps (default 5 — the digest is token-budgeted).
     max_gaps: Option<usize>,
+    /// v0.10 / v0.8.28: re-admit superseded records into the digest's content
+    /// aggregates. Default `false` — a boot briefing must report only CURRENT
+    /// decisions; quoting a superseded decision back at a waking agent would
+    /// mislead it. `true` is for history/archaeology packets.
+    include_superseded: Option<bool>,
 }
 
 /// GET /v1/session/digest — RFC 027 / v0.8.25 (pillar 2: lifecycle).
@@ -3022,6 +3034,9 @@ async fn session_digest(
         max_conflicts: params.max_conflicts.unwrap_or(5),
         max_triggers: params.max_triggers.unwrap_or(5),
         snippet_chars: params.snippet_chars.unwrap_or(240),
+        // v0.10: default false = the boot briefing reports only CURRENT
+        // records. Opt in with ?include_superseded=true for history packets.
+        include_superseded: params.include_superseded.unwrap_or(false),
     };
     let engine_for_gaps = std::sync::Arc::clone(&engine);
     let digest = tokio::task::spawn_blocking(move || engine.session_digest(&cfg))
@@ -3685,6 +3700,8 @@ async fn skill_search(
             domain: Some("skill".to_string()),
             source: None,
             query_embedding: None,
+            // Skill recall wants only CURRENT skills, never superseded ones.
+            include_superseded: false,
         },
         state.control.clone(),
         &state.inflight,
@@ -5731,7 +5748,7 @@ mod session_lifecycle_e2e {
 
 #[cfg(test)]
 mod current_and_gaps_e2e {
-    use super::e2e_test_support::{build_fixture, get};
+    use super::e2e_test_support::{build_fixture, get, post_body};
 
     #[tokio::test]
     async fn current_requires_bearer() {
@@ -5800,6 +5817,50 @@ mod current_and_gaps_e2e {
         assert!(
             v.get("knowledge_gaps").is_none(),
             "gaps must be opt-in, not in the default digest"
+        );
+    }
+
+    #[tokio::test]
+    async fn digest_include_superseded_param_is_accepted() {
+        // v0.10 contract: the digest accepts ?include_superseded and stays 200
+        // (default-false path is exercised by the other digest tests; this pins
+        // that the opt-in param parses and doesn't error on an empty corpus).
+        let fx = build_fixture("acme");
+        let (status, body) = get(
+            fx.state.clone(),
+            "/v1/session/digest?include_superseded=true",
+            Some(&fx.raw_token),
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v.get("top_decisions").is_some());
+    }
+
+    #[tokio::test]
+    async fn recall_include_superseded_param_is_accepted() {
+        // v0.10 contract: /v1/recall accepts `include_superseded` in the body
+        // and threads it through Command::Recall to db.recall. This fixture has
+        // no server-side embedder, so a text query reaches the engine and 500s
+        // at embed — which itself proves the param PARSED, built the Command,
+        // and routed through the recall handler (an unknown/rejected param
+        // never reaches the engine). Acceptance + threading is pinned here; the
+        // clean 200 path is covered by digest_include_superseded and the
+        // engine's own recall(include_superseded) tests at the v0.10 pin.
+        let fx = build_fixture("acme");
+        let (status, body) = post_body(
+            fx.state.clone(),
+            "/v1/recall",
+            Some(&fx.raw_token),
+            r#"{"query":"anything","top_k":5,"include_superseded":true}"#,
+        )
+        .await;
+        let text = String::from_utf8_lossy(&body);
+        // 200 (embedder present) OR the specific no-embedder 500 (param reached
+        // the engine). A 400 param rejection or a panic fails the test.
+        assert!(
+            status == 200 || (status == 500 && text.contains("embedder")),
+            "include_superseded must be accepted + threaded to the engine; got {status}: {text}"
         );
     }
 

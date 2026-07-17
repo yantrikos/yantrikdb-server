@@ -135,6 +135,7 @@ pub fn execute_with_guard(
             domain,
             source,
             query_embedding,
+            include_superseded,
         } => {
             let results = if let Some(emb) = query_embedding {
                 db.recall(
@@ -151,6 +152,7 @@ pub fn execute_with_guard(
                     source.as_deref(),
                     None, // certainty_min — v0.7.20 issue #46; pre-existing behavior = no filter
                     None, // order — v0.7.20 issue #46; pre-existing behavior = relevance order
+                    include_superseded, // v0.10: current-value-by-default unless the caller opts into history
                 )?
             } else if namespace.is_some()
                 || domain.is_some()
@@ -174,6 +176,7 @@ pub fn execute_with_guard(
                     source.as_deref(),
                     None, // certainty_min — v0.7.20 issue #46; pre-existing behavior = no filter
                     None, // order — v0.7.20 issue #46; pre-existing behavior = relevance order
+                    include_superseded, // v0.10: current-value-by-default unless the caller opts into history
                 )?
             } else {
                 db.recall_text(&query, top_k)?

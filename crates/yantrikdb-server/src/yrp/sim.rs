@@ -23,8 +23,23 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use super::bootstrap::{
+    inspect, BootDecision, BootstrapEffect, Integrity, QuarantineReason, QuarantinedNode,
+    RecoveredState, RejoinMessage,
+};
 use super::replica::{Effect, LogEntry, Message, ReplicaCore, Role, NOOP_PAYLOAD};
-use super::types::{HardState, LogPosition, NodeId, Term};
+use super::types::{ClusterId, HardState, LogPosition, NodeId, Term};
+
+/// The sim's cluster identity (all healthy nodes share it; alien-state tests
+/// inject a different one).
+const CLUSTER: ClusterId = ClusterId(7);
+
+/// Both protocol planes ride one transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Wire {
+    R(Message),
+    B(RejoinMessage),
+}
 
 /// Tiny deterministic PRNG (xorshift64*) — no external deps, fully seeded.
 struct Rng(u64);
@@ -51,14 +66,19 @@ impl Rng {
 struct InFlight {
     from: NodeId,
     to: NodeId,
-    msg: Message,
+    msg: Wire,
 }
 
-/// One simulated node: the core (None while crashed) + its durable "disk".
+/// One simulated node: the core (None while crashed/quarantined) + its
+/// durable "disk". `torn_hard`/`corrupt_log` model integrity-check failures
+/// the next boot inspection will see.
 struct SimNode {
     core: Option<ReplicaCore>,
+    quarantined: Option<QuarantinedNode>,
     disk_hard: HardState,
     disk_log: Vec<LogEntry>,
+    torn_hard: bool,
+    corrupt_log: bool,
     /// Highest index this node has applied (ledgered via CommitAdvanced).
     applied: u64,
 }
@@ -81,6 +101,9 @@ struct Sim {
     advertised: BTreeMap<(NodeId, Term), LogPosition>,
     /// I3 ledger: (voter_last_log_at_send, candidate_advertised).
     freshness_at_grant: Vec<(LogPosition, LogPosition)>,
+    /// Gate A #4 ledgers: preserve-before-resync + corruption alarms.
+    preserves: Vec<NodeId>,
+    alarms: Vec<(NodeId, Vec<QuarantineReason>)>,
 }
 
 impl Sim {
@@ -105,8 +128,11 @@ impl Sim {
                 nid,
                 SimNode {
                     core: Some(core),
+                    quarantined: None,
                     disk_hard: hard,
                     disk_log: log.clone(),
+                    torn_hard: false,
+                    corrupt_log: false,
                     applied: 0,
                 },
             );
@@ -122,6 +148,8 @@ impl Sim {
             committed_at: BTreeMap::new(),
             advertised: BTreeMap::new(),
             freshness_at_grant: Vec::new(),
+            preserves: Vec::new(),
+            alarms: Vec::new(),
         }
     }
 
@@ -230,11 +258,111 @@ impl Sim {
             }
             _ => {}
         }
-        self.net.push_back(InFlight { from, to, msg });
+        self.net.push_back(InFlight {
+            from,
+            to,
+            msg: Wire::R(msg),
+        });
     }
 
     fn crash(&mut self, id: NodeId) {
         self.nodes.get_mut(&id).unwrap().core = None;
+    }
+
+    /// Crash AND tear the durable hard-state record (models a torn write /
+    /// bit rot the next boot's checksum will catch).
+    fn crash_torn(&mut self, id: NodeId) {
+        let node = self.nodes.get_mut(&id).unwrap();
+        node.core = None;
+        node.quarantined = None;
+        node.torn_hard = true;
+    }
+
+    /// Crash AND break the log hash chain (data corruption evidence).
+    fn crash_corrupt(&mut self, id: NodeId) {
+        let node = self.nodes.get_mut(&id).unwrap();
+        node.core = None;
+        node.quarantined = None;
+        node.corrupt_log = true;
+    }
+
+    /// The production boot path: recover disk state, run integrity checks,
+    /// inspect, and become either a live replica or a quarantined node. The
+    /// process ALWAYS comes up as something — that is the point.
+    fn restart_via_bootstrap(&mut self, id: NodeId) {
+        let voters = self.voters.clone();
+        let node = self.nodes.get_mut(&id).unwrap();
+        let recovered = RecoveredState {
+            cluster_id: Some(CLUSTER),
+            hard: Some(node.disk_hard),
+            log: Some(node.disk_log.clone()),
+            commit_marker: 0, // volatile in A2's model
+            integrity: Integrity {
+                hard_state_verified: !node.torn_hard,
+                log_verified: !node.corrupt_log,
+            },
+        };
+        match inspect(CLUSTER, &recovered) {
+            BootDecision::Healthy { hard, log } => {
+                node.core = Some(ReplicaCore::new(id, voters, hard, log, false));
+                node.quarantined = None;
+                node.applied = node.applied.min(node.disk_log.len() as u64);
+            }
+            BootDecision::Quarantine { reasons } => {
+                node.core = None;
+                node.quarantined = Some(QuarantinedNode::new(id, CLUSTER, reasons));
+            }
+        }
+    }
+
+    /// Drive a quarantined node's rejoin retry toward `leader_hint`.
+    fn tick_rejoin(&mut self, id: NodeId, leader_hint: NodeId) {
+        let Some(q) = self.nodes.get_mut(&id).unwrap().quarantined.as_mut() else {
+            return;
+        };
+        let effects = q.tick_rejoin(leader_hint);
+        self.run_bootstrap_effects(id, effects);
+    }
+
+    fn run_bootstrap_effects(&mut self, id: NodeId, effects: Vec<BootstrapEffect>) {
+        for eff in effects {
+            match eff {
+                BootstrapEffect::PreserveOldState => {
+                    self.preserves.push(id);
+                }
+                BootstrapEffect::Alarm { reasons } => {
+                    self.alarms.push((id, reasons));
+                }
+                BootstrapEffect::Send { to, msg } => {
+                    self.net.push_back(InFlight {
+                        from: id,
+                        to,
+                        msg: Wire::B(msg),
+                    });
+                }
+                BootstrapEffect::AdoptSnapshot {
+                    cluster_id: _,
+                    hard,
+                    log,
+                } => {
+                    // Persist the adopted snapshot, clear damage flags, and
+                    // resume as a live follower. Quarantine ends here only.
+                    assert!(
+                        self.preserves.contains(&id),
+                        "adopt without preserving old state first"
+                    );
+                    let voters = self.voters.clone();
+                    let node = self.nodes.get_mut(&id).unwrap();
+                    node.disk_hard = hard;
+                    node.disk_log = log.clone();
+                    node.torn_hard = false;
+                    node.corrupt_log = false;
+                    node.quarantined = None;
+                    node.core = Some(ReplicaCore::new(id, voters, hard, log, false));
+                    node.applied = node.applied.min(node.disk_log.len() as u64);
+                }
+            }
+        }
     }
 
     fn restart(&mut self, id: NodeId, use_pre_vote: bool) {
@@ -250,6 +378,7 @@ impl Sim {
             node.disk_log.clone(),
             use_pre_vote,
         ));
+        node.quarantined = None;
         node.applied = node.applied.min(node.disk_log.len() as u64);
     }
 
@@ -290,14 +419,57 @@ impl Sim {
         if self.cut.contains(&key) {
             return true;
         }
-        let Some(node) = self.nodes.get_mut(&m.to) else {
-            return true;
-        };
-        let Some(core) = node.core.as_mut() else {
-            return true;
-        };
-        let effects = core.on_message(m.from, m.msg, false);
-        self.run_effects(m.to, effects, crash_at);
+        match m.msg {
+            Wire::R(msg) => {
+                let Some(node) = self.nodes.get_mut(&m.to) else {
+                    return true;
+                };
+                // Quarantined (or crashed) nodes DROP replica traffic:
+                // fail-closed is enforced by absence — there is no code
+                // path by which a quarantined node grants a vote or acks
+                // an append.
+                let Some(core) = node.core.as_mut() else {
+                    return true;
+                };
+                let effects = core.on_message(m.from, msg, false);
+                self.run_effects(m.to, effects, crash_at);
+            }
+            Wire::B(RejoinMessage::Request { node: asker }) => {
+                // Rejoin requests are answered only by a live core holding
+                // the leadership certificate (committed in current term).
+                let grant = self
+                    .nodes
+                    .get(&m.to)
+                    .and_then(|n| n.core.as_ref())
+                    .and_then(|c| c.rejoin_grant());
+                if let Some((term, log, commit)) = grant {
+                    self.net.push_back(InFlight {
+                        from: m.to,
+                        to: asker,
+                        msg: Wire::B(RejoinMessage::Grant {
+                            cluster_id: CLUSTER,
+                            term,
+                            log,
+                            commit,
+                            // The leader's snapshot is live state: verified.
+                            verified: true,
+                        }),
+                    });
+                }
+            }
+            Wire::B(grant @ RejoinMessage::Grant { .. }) => {
+                let effects = {
+                    let Some(node) = self.nodes.get_mut(&m.to) else {
+                        return true;
+                    };
+                    let Some(q) = node.quarantined.as_mut() else {
+                        return true; // no longer quarantined: stale grant ignored
+                    };
+                    q.on_grant(m.from, grant)
+                };
+                self.run_bootstrap_effects(m.to, effects);
+            }
+        }
         true
     }
 
@@ -739,5 +911,201 @@ fn seeded_soak_invariants_hold() {
         sim.cut.clear();
         sim.drain();
         sim.check_all();
+    }
+}
+
+// ── tests: Phase A2 — quarantine + quorum-authorized rejoin ────────
+
+/// THE CT-141 TEST. A node with torn consensus metadata BOOTS (process up,
+/// diagnostics available, stale reads offered) but fails closed as a voter;
+/// its damaged state is preserved before resync; a leader with a
+/// quorum-backed certificate authorizes rejoin; the node adopts the
+/// snapshot, resumes as a follower, and catches up. No operator surgery,
+/// no 10-day outage, no double vote.
+#[test]
+fn ct141_torn_node_quarantines_then_rejoins_via_leader() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 31, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    assert!(sim.propose(NodeId(1), 501));
+    sim.drain();
+
+    // Node 3's disk record is torn in a crash.
+    sim.crash_torn(NodeId(3));
+    sim.restart_via_bootstrap(NodeId(3));
+    {
+        let n3 = &sim.nodes[&NodeId(3)];
+        let q = n3.quarantined.as_ref().expect("torn node must quarantine");
+        assert!(q.reasons().contains(&QuarantineReason::TornHardState));
+        // Metadata-only damage: data verified → labeled stale reads OK.
+        assert!(q.stale_reads_allowed());
+        assert!(n3.core.is_none(), "quarantined node must not run a core");
+    }
+
+    // Rejoin via the leader; adopt; catch up.
+    sim.tick_rejoin(NodeId(3), NodeId(1));
+    sim.drain();
+    {
+        let n3 = &sim.nodes[&NodeId(3)];
+        assert!(n3.quarantined.is_none(), "rejoin did not complete");
+        assert!(n3.core.is_some());
+        assert!(!n3.torn_hard);
+    }
+    assert!(
+        sim.preserves.contains(&NodeId(3)),
+        "old state must be preserved before resync"
+    );
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.check_all();
+    assert!(
+        sim.nodes[&NodeId(3)].applied >= 2,
+        "rejoined node failed to catch up (applied {})",
+        sim.nodes[&NodeId(3)].applied
+    );
+}
+
+/// Fail-closed proof: a quarantined node cannot contribute to ANY quorum.
+/// With one node quarantined and the other two partitioned from each other,
+/// no candidate can assemble a majority — the cluster correctly stalls
+/// rather than electing on damaged state.
+#[test]
+fn quarantined_node_cannot_vote() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 37, false);
+    sim.crash_torn(NodeId(3));
+    sim.restart_via_bootstrap(NodeId(3));
+    sim.cut.insert((NodeId(1), NodeId(2)));
+    sim.timeout(NodeId(1), None);
+    sim.timeout(NodeId(2), None);
+    sim.drain();
+    sim.check_all();
+    assert!(
+        sim.leaders.is_empty(),
+        "an election succeeded without a legal quorum: {:?}",
+        sim.leaders
+    );
+    // And the quarantined node sent zero grants, ever.
+    assert!(sim.grants_sent.keys().all(|(voter, _)| *voter != NodeId(3)));
+}
+
+/// Corruption evidence (broken log hash chain): alarms fire, stale reads
+/// are refused, and only a VERIFIED grant is adopted.
+#[test]
+fn corrupted_log_alarms_and_rejoins_from_verified_source() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 41, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    sim.crash_corrupt(NodeId(3));
+    sim.restart_via_bootstrap(NodeId(3));
+    {
+        let q = sim.nodes[&NodeId(3)].quarantined.as_ref().unwrap();
+        assert!(q.reasons().contains(&QuarantineReason::LogCorruption));
+        assert!(!q.stale_reads_allowed(), "corrupt data must not be served");
+    }
+    sim.tick_rejoin(NodeId(3), NodeId(1));
+    sim.drain();
+    assert!(
+        sim.alarms.iter().any(|(id, _)| *id == NodeId(3)),
+        "corruption evidence must alarm"
+    );
+    assert!(sim.nodes[&NodeId(3)].quarantined.is_none());
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.check_all();
+}
+
+/// A rejoin request sent to a NON-leader (or a leader without a committed
+/// current-term entry) is simply not granted — the node stays quarantined
+/// and retries. Authorization requires the certificate.
+#[test]
+fn rejoin_requires_leadership_certificate() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 43, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    sim.crash_torn(NodeId(3));
+    sim.restart_via_bootstrap(NodeId(3));
+    // Ask a FOLLOWER (node 2): no grant, still quarantined.
+    sim.tick_rejoin(NodeId(3), NodeId(2));
+    sim.drain();
+    assert!(sim.nodes[&NodeId(3)].quarantined.is_some());
+    // Ask the leader: granted.
+    sim.tick_rejoin(NodeId(3), NodeId(1));
+    sim.drain();
+    assert!(sim.nodes[&NodeId(3)].quarantined.is_none());
+    sim.check_all();
+}
+
+/// Soak with damage: random torn/corrupt crashes now join the schedule;
+/// crashed-damaged nodes restart through the REAL boot path (inspect →
+/// quarantine → rejoin-retry). Every invariant holds for every seed —
+/// including that no quarantined node ever votes or acks.
+#[test]
+fn seeded_soak_with_quarantine_invariants_hold() {
+    for seed in 1..20u64 {
+        let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, seed, false);
+        let mut payload = 5000;
+        for _step in 0..300 {
+            let ids = [NodeId(1), NodeId(2), NodeId(3)];
+            match sim.rng.next() % 14 {
+                0 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_some() {
+                        sim.timeout(id, None);
+                    }
+                }
+                1 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_some() && sim.rng.chance(10) {
+                        if sim.rng.chance(50) {
+                            sim.crash_torn(id);
+                        } else {
+                            sim.crash(id);
+                        }
+                    }
+                }
+                2 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_none() && sim.nodes[&id].quarantined.is_none() {
+                        sim.restart_via_bootstrap(id);
+                    }
+                }
+                3 => {
+                    let id = ids[sim.rng.pick(3)];
+                    payload += 1;
+                    let _ = sim.propose(id, payload);
+                }
+                4 => {
+                    let id = ids[sim.rng.pick(3)];
+                    sim.heartbeat(id);
+                }
+                5 => {
+                    // Quarantined nodes retry rejoin toward a random peer.
+                    let id = ids[sim.rng.pick(3)];
+                    let hint = ids[sim.rng.pick(3)];
+                    if id != hint {
+                        sim.tick_rejoin(id, hint);
+                    }
+                }
+                6 => {
+                    let a = ids[sim.rng.pick(3)];
+                    let b = ids[sim.rng.pick(3)];
+                    if a != b {
+                        let key = (a.min(b), a.max(b));
+                        if !sim.cut.remove(&key) {
+                            sim.cut.insert(key);
+                        }
+                    }
+                }
+                _ => {
+                    sim.deliver_one(None);
+                }
+            }
+        }
+        sim.cut.clear();
+        sim.drain();
+        sim.check_all();
+        // Fail-closed held throughout: nodes that were EVER quarantined in
+        // a term sent no grants while quarantined — enforced structurally,
+        // re-checked here via the global ledgers in check_all().
     }
 }

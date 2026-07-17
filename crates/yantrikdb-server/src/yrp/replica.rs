@@ -882,6 +882,39 @@ impl ReplicaCore {
         effects
     }
 
+    /// Rejoin authorization (RFC 028 v2 §5): produce a snapshot grant for a
+    /// quarantined node — but only when this node holds a **quorum-backed
+    /// leadership certificate**: it is leader AND has committed an entry in
+    /// its CURRENT term (the election no-op guarantees one exists once a
+    /// quorum has confirmed the reign). A stale partitioned "leader" cannot
+    /// satisfy that (its current-term entries never commit — Gate A #2), so
+    /// it can never authorize a resync — review scenario R5's fix.
+    ///
+    /// Returns `(term, log, commit)` for the driver to wrap into a
+    /// `bootstrap::RejoinMessage::Grant`; `None` = not authorized (the
+    /// quarantined node stays quarantined and retries — fail closed).
+    pub fn rejoin_grant(&self) -> Option<(Term, Vec<LogEntry>, u64)> {
+        if self.role != Role::Leader {
+            return None;
+        }
+        let cur = self.current_term();
+        let committed_in_current_term =
+            self.commit > 0 && self.entry(self.commit).map(|e| e.term) == Some(cur);
+        if !committed_in_current_term {
+            return None;
+        }
+        // Grant only the DURABLE prefix: a snapshot must never carry entries
+        // our own disk could forget in a crash.
+        let durable: Vec<LogEntry> = self
+            .log
+            .iter()
+            .take(self.durable_len as usize)
+            .copied()
+            .collect();
+        let commit = self.commit.min(self.durable_len);
+        Some((cur, durable, commit))
+    }
+
     fn pre_quorum_reached(&self) -> bool {
         self.pre_votes.len() >= quorum(self.voters.len())
     }

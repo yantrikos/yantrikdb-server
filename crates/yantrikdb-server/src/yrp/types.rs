@@ -8,6 +8,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Immutable cluster identity (RFC 028 v2 §3). Ops, votes, and snapshots
+/// carry it; a mismatch at boot or on the wire is a quarantine trigger —
+/// state from a different cluster is alien no matter how well-formed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ClusterId(pub u64);
+
 /// A node's stable identifier within one cluster.
 ///
 /// Identity alone is NOT sufficient to vote — RFC 028 v2 §3 requires the

@@ -27,6 +27,7 @@
 //! 3. **Possibly-committed-suffix protection** (R3) — Raft last-`(term,
 //!    index)` election freshness, never a watermark.
 
+pub mod bootstrap;
 pub mod replica;
 pub mod types;
 

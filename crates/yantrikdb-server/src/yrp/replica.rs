@@ -227,6 +227,11 @@ impl ReplicaCore {
         self.commit
     }
 
+    /// Leader's next send index for `peer` (observability + tests).
+    pub fn next_index_of(&self, peer: NodeId) -> Option<u64> {
+        self.next_index.get(&peer).copied()
+    }
+
     pub fn log_len(&self) -> u64 {
         self.log.len() as u64
     }
@@ -781,19 +786,26 @@ impl ReplicaCore {
             return Vec::new();
         }
         let mut out = Vec::new();
+        // Codex finding 2: delayed/duplicate responses must not regress
+        // next_index below match_index + 1. match_index is monotonic (max);
+        // matched entries are confirmed-durable-matching, so probing below
+        // match+1 is never needed — a stale success or an out-of-date
+        // failure clamped to the floor costs nothing, while an unclamped
+        // one triggers spurious full-suffix retransmissions.
         if success {
             let m = self.match_index.entry(from).or_insert(0);
             *m = (*m).max(last_index);
-            self.next_index.insert(from, last_index + 1);
+            let floor = *m + 1;
+            self.next_index.insert(from, floor);
             self.try_advance_commit(&mut out);
         } else {
-            // Back up toward the follower's durable frontier and retry.
+            let floor = self.match_index.get(&from).copied().unwrap_or(0) + 1;
             let next = self
                 .next_index
                 .get(&from)
                 .copied()
                 .unwrap_or(self.log_len() + 1);
-            let backed = next.saturating_sub(1).clamp(1, last_index + 1);
+            let backed = next.saturating_sub(1).clamp(1, last_index + 1).max(floor);
             self.next_index.insert(from, backed);
             self.send_append_to(from, &mut out);
         }
@@ -880,6 +892,39 @@ impl ReplicaCore {
             voted_for: None,
         }));
         effects
+    }
+
+    /// Rejoin authorization (RFC 028 v2 §5): produce a snapshot grant for a
+    /// quarantined node — but only when this node holds a **quorum-backed
+    /// leadership certificate**: it is leader AND has committed an entry in
+    /// its CURRENT term (the election no-op guarantees one exists once a
+    /// quorum has confirmed the reign). A stale partitioned "leader" cannot
+    /// satisfy that (its current-term entries never commit — Gate A #2), so
+    /// it can never authorize a resync — review scenario R5's fix.
+    ///
+    /// Returns `(term, log, commit)` for the driver to wrap into a
+    /// `bootstrap::RejoinMessage::Grant`; `None` = not authorized (the
+    /// quarantined node stays quarantined and retries — fail closed).
+    pub fn rejoin_grant(&self) -> Option<(Term, Vec<LogEntry>, u64)> {
+        if self.role != Role::Leader {
+            return None;
+        }
+        let cur = self.current_term();
+        let committed_in_current_term =
+            self.commit > 0 && self.entry(self.commit).map(|e| e.term) == Some(cur);
+        if !committed_in_current_term {
+            return None;
+        }
+        // Grant only the DURABLE prefix: a snapshot must never carry entries
+        // our own disk could forget in a crash.
+        let durable: Vec<LogEntry> = self
+            .log
+            .iter()
+            .take(self.durable_len as usize)
+            .copied()
+            .collect();
+        let commit = self.commit.min(self.durable_len);
+        Some((cur, durable, commit))
     }
 
     fn pre_quorum_reached(&self) -> bool {

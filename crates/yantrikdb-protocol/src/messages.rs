@@ -762,9 +762,15 @@ mod oplog_wire_v2_tests {
         let wire = v2_entry(Some(bytes.clone()));
 
         let json = serde_json::to_string(&wire).expect("serialize");
+        // Must be the exact key. A bare `contains("embedding")` is satisfied by
+        // the pre-existing `embedding_hash` field, so it would pass even if
+        // `embedding` were serde-skipped — a false-positive guard on precisely
+        // the regression this test exists to catch (caught in review by
+        // yantrikdb-core).
         assert!(
-            json.contains("embedding"),
-            "v2 wire encoding must actually carry the embedding key"
+            json.contains("\"embedding\":"),
+            "v2 wire encoding must carry the `embedding` key itself \
+             (not just `embedding_hash`); got: {json}"
         );
 
         let decoded: OplogEntryWire = serde_json::from_str(&json).expect("deserialize");

@@ -116,7 +116,14 @@ pub enum BootDecision {
     /// with exactly this state.
     Healthy { hard: HardState, log: Vec<LogEntry> },
     /// Fail closed: run as a [`QuarantinedNode`] until an authorized rejoin.
-    Quarantine { reasons: Vec<QuarantineReason> },
+    /// `term_hint` is the current_term parsed from the damaged hard-state
+    /// record when the bytes were readable — UNTRUSTED (its checksum
+    /// failed), usable only to REFUSE things (a rejoin grant below the
+    /// hint), never to authorize them. See `QuarantinedNode::on_grant`.
+    Quarantine {
+        reasons: Vec<QuarantineReason>,
+        term_hint: Option<Term>,
+    },
 }
 
 /// Inspect recovered state against the node's configured cluster identity.
@@ -171,7 +178,10 @@ pub fn inspect(expected_cluster: ClusterId, recovered: &RecoveredState) -> BootD
             log: recovered.log.clone().unwrap_or_default(),
         }
     } else {
-        BootDecision::Quarantine { reasons }
+        BootDecision::Quarantine {
+            reasons,
+            term_hint: recovered.hard.map(|h| h.current_term),
+        }
     }
 }
 
@@ -228,18 +238,34 @@ pub struct QuarantinedNode {
     id: NodeId,
     cluster: ClusterId,
     reasons: Vec<QuarantineReason>,
+    /// Untrusted current_term parsed from the damaged record (checksum
+    /// failed, bytes readable). Used ONLY to refuse rejoin grants below it —
+    /// codex review finding 1: a grant below the node's true prior term
+    /// regresses the durable term and reopens a double-vote window in the
+    /// prior term. Refusing below-hint grants closes the replayed/stale-
+    /// grant scenario whenever the record parsed; the residual (record
+    /// unreadable or hint corrupted downward) is closed by Gate C's
+    /// quorum-managed incarnations, not by this hint — never treat the
+    /// hint as proof.
+    term_hint: Option<Term>,
     /// Whether the preserved-state effect has been issued (once).
     preserved: bool,
     alarmed: bool,
 }
 
 impl QuarantinedNode {
-    pub fn new(id: NodeId, cluster: ClusterId, reasons: Vec<QuarantineReason>) -> Self {
+    pub fn new(
+        id: NodeId,
+        cluster: ClusterId,
+        reasons: Vec<QuarantineReason>,
+        term_hint: Option<Term>,
+    ) -> Self {
         debug_assert!(!reasons.is_empty(), "quarantine requires a reason");
         Self {
             id,
             cluster,
             reasons,
+            term_hint,
             preserved: false,
             alarmed: false,
         }
@@ -309,6 +335,20 @@ impl QuarantinedNode {
         if self.reasons.iter().any(|r| r.is_corruption_evidence()) && !verified {
             return Vec::new();
         }
+        // Codex finding 1: refuse grants BELOW the untrusted term hint. A
+        // grant below our (possible) prior term would regress the durable
+        // term; a later VoteRequest at the prior term would then find a
+        // blank vote and grant — a double vote in a term where our torn
+        // record may already have granted someone. Refusal is safe in both
+        // directions: a hint corrupted UPWARD only over-refuses (liveness:
+        // we stay quarantined until a genuinely-current leader grants); a
+        // hint corrupted DOWNWARD (or unreadable) leaves the residual that
+        // Gate C incarnation fencing closes. The hint authorizes nothing.
+        if let Some(hint) = self.term_hint {
+            if term < hint {
+                return Vec::new();
+            }
+        }
         // Adopt as a follower with `voted_for = Some(granting leader)` —
         // NOT `None`. The node's pre-quarantine vote in `term` is unknown
         // (its record was torn) and may have helped elect someone; a blank
@@ -364,7 +404,7 @@ mod tests {
                 assert_eq!(hard, HardState::default());
                 assert!(log.is_empty());
             }
-            BootDecision::Quarantine { reasons } => {
+            BootDecision::Quarantine { reasons, .. } => {
                 panic!("fresh node quarantined: {reasons:?}")
             }
         }
@@ -377,7 +417,7 @@ mod tests {
                 assert_eq!(hard.voted_for, Some(NodeId(2)));
                 assert_eq!(log.len(), 1);
             }
-            BootDecision::Quarantine { reasons } => panic!("quarantined: {reasons:?}"),
+            BootDecision::Quarantine { reasons, .. } => panic!("quarantined: {reasons:?}"),
         }
     }
 
@@ -385,7 +425,7 @@ mod tests {
     fn torn_hard_state_quarantines() {
         let mut s = coherent();
         s.integrity.hard_state_verified = false;
-        let BootDecision::Quarantine { reasons } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
             panic!("torn state booted healthy");
         };
         assert!(reasons.contains(&QuarantineReason::TornHardState));
@@ -395,7 +435,7 @@ mod tests {
     fn alien_cluster_quarantines() {
         let mut s = coherent();
         s.cluster_id = Some(ClusterId(99));
-        let BootDecision::Quarantine { reasons } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
             panic!("alien state booted healthy");
         };
         assert!(reasons.contains(&QuarantineReason::ClusterIdMismatch));
@@ -405,7 +445,7 @@ mod tests {
     fn commit_marker_beyond_log_quarantines() {
         let mut s = coherent();
         s.commit_marker = 5; // log has 1 entry
-        let BootDecision::Quarantine { reasons } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
             panic!("frontier-beyond-data booted healthy");
         };
         assert!(reasons.contains(&QuarantineReason::CommitBeyondLog));
@@ -415,10 +455,10 @@ mod tests {
     fn log_corruption_is_corruption_evidence_and_blocks_stale_reads() {
         let mut s = coherent();
         s.integrity.log_verified = false;
-        let BootDecision::Quarantine { reasons } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
             panic!("corrupt log booted healthy");
         };
-        let node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons);
+        let node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
         assert!(!node.stale_reads_allowed());
     }
 
@@ -428,10 +468,10 @@ mod tests {
         // reads OK, voting closed.
         let mut s = coherent();
         s.integrity.hard_state_verified = false;
-        let BootDecision::Quarantine { reasons } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
             panic!()
         };
-        let node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons);
+        let node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
         assert!(node.stale_reads_allowed());
     }
 
@@ -439,10 +479,10 @@ mod tests {
     fn corruption_requires_verified_grant() {
         let mut s = coherent();
         s.integrity.log_verified = false;
-        let BootDecision::Quarantine { reasons } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
             panic!()
         };
-        let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons);
+        let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
         let unverified = RejoinMessage::Grant {
             cluster_id: CLUSTER,
             term: Term(4),
@@ -471,10 +511,10 @@ mod tests {
     fn wrong_cluster_grant_is_never_adopted() {
         let mut s = coherent();
         s.integrity.hard_state_verified = false;
-        let BootDecision::Quarantine { reasons } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
             panic!()
         };
-        let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons);
+        let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
         let alien = RejoinMessage::Grant {
             cluster_id: ClusterId(99),
             term: Term(4),
@@ -489,10 +529,10 @@ mod tests {
     fn preserve_happens_before_first_rejoin_request_and_alarm_fires_once() {
         let mut s = coherent();
         s.integrity.log_verified = false;
-        let BootDecision::Quarantine { reasons } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
             panic!()
         };
-        let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons);
+        let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
         let first = node.tick_rejoin(NodeId(1));
         assert!(matches!(first[0], BootstrapEffect::PreserveOldState));
         assert!(matches!(first[1], BootstrapEffect::Alarm { .. }));

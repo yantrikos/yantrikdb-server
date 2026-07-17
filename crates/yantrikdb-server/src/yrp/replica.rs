@@ -227,6 +227,11 @@ impl ReplicaCore {
         self.commit
     }
 
+    /// Leader's next send index for `peer` (observability + tests).
+    pub fn next_index_of(&self, peer: NodeId) -> Option<u64> {
+        self.next_index.get(&peer).copied()
+    }
+
     pub fn log_len(&self) -> u64 {
         self.log.len() as u64
     }
@@ -781,19 +786,26 @@ impl ReplicaCore {
             return Vec::new();
         }
         let mut out = Vec::new();
+        // Codex finding 2: delayed/duplicate responses must not regress
+        // next_index below match_index + 1. match_index is monotonic (max);
+        // matched entries are confirmed-durable-matching, so probing below
+        // match+1 is never needed — a stale success or an out-of-date
+        // failure clamped to the floor costs nothing, while an unclamped
+        // one triggers spurious full-suffix retransmissions.
         if success {
             let m = self.match_index.entry(from).or_insert(0);
             *m = (*m).max(last_index);
-            self.next_index.insert(from, last_index + 1);
+            let floor = *m + 1;
+            self.next_index.insert(from, floor);
             self.try_advance_commit(&mut out);
         } else {
-            // Back up toward the follower's durable frontier and retry.
+            let floor = self.match_index.get(&from).copied().unwrap_or(0) + 1;
             let next = self
                 .next_index
                 .get(&from)
                 .copied()
                 .unwrap_or(self.log_len() + 1);
-            let backed = next.saturating_sub(1).clamp(1, last_index + 1);
+            let backed = next.saturating_sub(1).clamp(1, last_index + 1).max(floor);
             self.next_index.insert(from, backed);
             self.send_append_to(from, &mut out);
         }

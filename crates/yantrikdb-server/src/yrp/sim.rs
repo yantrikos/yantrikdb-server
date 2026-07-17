@@ -308,9 +308,9 @@ impl Sim {
                 node.quarantined = None;
                 node.applied = node.applied.min(node.disk_log.len() as u64);
             }
-            BootDecision::Quarantine { reasons } => {
+            BootDecision::Quarantine { reasons, term_hint } => {
                 node.core = None;
-                node.quarantined = Some(QuarantinedNode::new(id, CLUSTER, reasons));
+                node.quarantined = Some(QuarantinedNode::new(id, CLUSTER, reasons, term_hint));
             }
         }
     }
@@ -1108,4 +1108,133 @@ fn seeded_soak_with_quarantine_invariants_hold() {
         // a term sent no grants while quarantined — enforced structurally,
         // re-checked here via the global ledgers in check_all().
     }
+}
+
+// ── tests: codex code-review fixes ─────────────────────────────────
+
+/// Codex finding 1 (SAFETY): a stale-but-certificated leader's grant BELOW
+/// the quarantined node's (untrusted) term hint is refused — adopting it
+/// would regress the durable term and reopen a double-vote window in the
+/// node's true prior term. The genuinely current leader's grant is adopted,
+/// and the vote ledger stays clean.
+#[test]
+fn codex_stale_grant_below_term_hint_is_refused() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 47, false);
+    // Node 1 becomes leader of term 1 with a committed no-op (certificate).
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    assert_eq!(sim.current_leader(), Some(NodeId(1)));
+    // Partition node 1 away; it keeps its stale term-1 certificate.
+    sim.cut.insert((NodeId(1), NodeId(2)));
+    sim.cut.insert((NodeId(1), NodeId(3)));
+    // Majority elects node 2 in term 2 — node 3 votes for node 2, so its
+    // durable hard state is {term 2, voted node 2}.
+    sim.timeout(NodeId(2), None);
+    sim.drain();
+    // Node 3's record is torn; the bytes (term 2) remain readable as a hint.
+    sim.crash_torn(NodeId(3));
+    sim.restart_via_bootstrap(NodeId(3));
+    assert!(sim.nodes[&NodeId(3)].quarantined.is_some());
+    // Ask the STALE leader (node 1, term 1 certificate). Partition does not
+    // block them — but the grant term (1) is below the hint (2): refused.
+    sim.cut.clear();
+    sim.tick_rejoin(NodeId(3), NodeId(1));
+    sim.drain();
+    assert!(
+        sim.nodes[&NodeId(3)].quarantined.is_some(),
+        "below-hint grant was adopted — term regression"
+    );
+    // The real leader's grant (term 2) is adopted.
+    sim.heartbeat(NodeId(2));
+    sim.drain(); // node 1 gets fenced by term-2 traffic
+    sim.tick_rejoin(NodeId(3), NodeId(2));
+    sim.drain();
+    assert!(sim.nodes[&NodeId(3)].quarantined.is_none());
+    // Vote safety held throughout: node 3's term-2 grants name only node 2.
+    let grants = sim
+        .grants_sent
+        .get(&(NodeId(3), Term(2)))
+        .cloned()
+        .unwrap_or_default();
+    assert!(grants.len() <= 1 && !grants.contains(&NodeId(1)));
+    sim.check_all();
+}
+
+/// Codex finding 2 (CORRECTNESS): a delayed duplicate success response must
+/// not regress next_index below match_index + 1.
+#[test]
+fn codex_duplicate_response_does_not_regress_next_index() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 53, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    for p in [601, 602, 603] {
+        assert!(sim.propose(NodeId(1), p));
+    }
+    sim.drain();
+    // Follower 2 is fully matched (no-op + 3 entries = index 4).
+    let next_before = sim.nodes[&NodeId(1)]
+        .core
+        .as_ref()
+        .unwrap()
+        .next_index_of(NodeId(2))
+        .unwrap();
+    assert_eq!(next_before, 5);
+    // Deliver a DELAYED duplicate: an old success covering only index 1.
+    let effects = sim
+        .nodes
+        .get_mut(&NodeId(1))
+        .unwrap()
+        .core
+        .as_mut()
+        .unwrap()
+        .on_message(
+            NodeId(2),
+            Message::AppendResponse {
+                term: Term(1),
+                success: true,
+                last_index: 1,
+            },
+            false,
+        );
+    sim.run_effects(NodeId(1), effects, None);
+    let next_after = sim.nodes[&NodeId(1)]
+        .core
+        .as_ref()
+        .unwrap()
+        .next_index_of(NodeId(2))
+        .unwrap();
+    assert_eq!(
+        next_after, 5,
+        "duplicate old success regressed next_index to {next_after}"
+    );
+    // And a stale FAILURE cannot drag next below match+1 either.
+    let effects = sim
+        .nodes
+        .get_mut(&NodeId(1))
+        .unwrap()
+        .core
+        .as_mut()
+        .unwrap()
+        .on_message(
+            NodeId(2),
+            Message::AppendResponse {
+                term: Term(1),
+                success: false,
+                last_index: 0,
+            },
+            false,
+        );
+    sim.run_effects(NodeId(1), effects, None);
+    let next_final = sim.nodes[&NodeId(1)]
+        .core
+        .as_ref()
+        .unwrap()
+        .next_index_of(NodeId(2))
+        .unwrap();
+    assert!(
+        next_final >= 5,
+        "stale failure regressed next_index to {next_final}"
+    );
+    sim.drain();
+    sim.check_all();
 }

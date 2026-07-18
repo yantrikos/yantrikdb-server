@@ -36,8 +36,10 @@
 //! clone/rollback fencing) and true membership change; in A2's fixed-voter
 //! world, a rejoining node re-enters as the same voter after resync.
 
+use std::collections::BTreeMap;
+
 use super::replica::LogEntry;
-use super::types::{ClusterId, HardState, NodeId, Term};
+use super::types::{ClusterId, HardState, LogPosition, NodeId, Term};
 
 /// What the boot path recovered from disk. The driver fills this in from
 /// real storage (with real checksums); the sim injects damage.
@@ -201,7 +203,13 @@ pub enum RejoinMessage {
     Grant {
         cluster_id: ClusterId,
         term: Term,
+        /// Compaction base of the granted state (ZERO when uncompacted).
+        base: LogPosition,
+        /// Log suffix above `base`.
         log: Vec<LogEntry>,
+        /// Idempotency claims through the granted frontier (RFC 028 §7 +
+        /// §6: claims survive compaction by riding the snapshot).
+        claims: BTreeMap<u64, u64>,
         commit: u64,
         verified: bool,
     },
@@ -226,7 +234,9 @@ pub enum BootstrapEffect {
     AdoptSnapshot {
         cluster_id: ClusterId,
         hard: HardState,
+        base: LogPosition,
         log: Vec<LogEntry>,
+        claims: BTreeMap<u64, u64>,
     },
 }
 
@@ -320,7 +330,9 @@ impl QuarantinedNode {
         let RejoinMessage::Grant {
             cluster_id,
             term,
+            base,
             log,
+            claims,
             commit: _,
             verified,
         } = grant
@@ -367,7 +379,9 @@ impl QuarantinedNode {
                 current_term: term,
                 voted_for: Some(from),
             },
+            base,
             log,
+            claims,
         }]
     }
 }
@@ -483,7 +497,9 @@ mod tests {
         let unverified = RejoinMessage::Grant {
             cluster_id: CLUSTER,
             term: Term(4),
+            base: LogPosition::ZERO,
             log: Vec::new(),
+            claims: BTreeMap::new(),
             commit: 0,
             verified: false,
         };
@@ -494,7 +510,9 @@ mod tests {
         let verified = RejoinMessage::Grant {
             cluster_id: CLUSTER,
             term: Term(4),
+            base: LogPosition::ZERO,
             log: Vec::new(),
+            claims: BTreeMap::new(),
             commit: 0,
             verified: true,
         };
@@ -515,7 +533,9 @@ mod tests {
         let alien = RejoinMessage::Grant {
             cluster_id: ClusterId(99),
             term: Term(4),
+            base: LogPosition::ZERO,
             log: Vec::new(),
+            claims: BTreeMap::new(),
             commit: 0,
             verified: true,
         };

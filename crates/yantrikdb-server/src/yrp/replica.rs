@@ -108,6 +108,22 @@ pub enum KeyedProposal {
     DuplicatePending { index: u64 },
 }
 
+/// A log-compaction snapshot (RFC 028 §6, pure-model form). The production
+/// manifest binds an engine checkpoint (content hash, membership epoch,
+/// schema/capability/generation state); the pure core carries what the
+/// PROTOCOL needs:
+/// - `last`: the exact frontier the snapshot covers (entries ≤ last.index
+///   are gone from the log);
+/// - `claims`: every idempotency claim at or below the frontier — sol
+///   P1-9's rule made structural: compaction may never create a window
+///   where a GC'd claim can be replayed, so the claims RIDE the snapshot
+///   exactly as they rode the entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub last: LogPosition,
+    pub claims: BTreeMap<u64, u64>,
+}
+
 /// Wire messages for the replica layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
@@ -139,6 +155,14 @@ pub enum Message {
         entries: Vec<LogEntry>,
         commit: u64,
     },
+    /// Snapshot install (leader → straggler whose next index fell below
+    /// the leader's compaction base). Acked with a normal AppendResponse
+    /// at `snapshot.last.index` once durable.
+    InstallSnapshot {
+        term: Term,
+        leader: NodeId,
+        snapshot: Snapshot,
+    },
     /// `last_index` is the acceptor's last DURABLE matching index on
     /// success — the per-write quorum-confirmation signal. A success
     /// response for newly appended entries is sent only after they are
@@ -158,7 +182,9 @@ pub enum Effect {
     /// batch coalesce: persisting the last one seen satisfies all of them.
     Persist {
         hard: HardState,
+        base: LogPosition,
         log: Vec<LogEntry>,
+        claims: BTreeMap<u64, u64>,
     },
     Send {
         to: NodeId,
@@ -178,6 +204,12 @@ pub enum Effect {
     /// entries `(previous commit, to]` to the state machine, in order.
     CommitAdvanced {
         to: u64,
+    },
+    /// A snapshot was adopted: the driver replaces its applied state with
+    /// the checkpoint at `last_index` (no per-entry replay — the entries
+    /// are gone; the state arrives wholesale, like A2's rejoin adoption).
+    InstallState {
+        last_index: u64,
     },
 }
 
@@ -204,7 +236,11 @@ pub struct ReplicaCore {
     persisted_hard: HardState,
     /// Durable log length (entries `1..=durable_len` survive a crash).
     durable_len: u64,
-    /// The in-memory canonical log, 1-indexed (`log[0]` ↔ index 1).
+    /// Compaction base (RFC 028 §6): the last position covered by the
+    /// adopted/created snapshot. Entries ≤ base.index are compacted away;
+    /// `log[0]` holds absolute index `base.index + 1`. ZERO = uncompacted.
+    base: LogPosition,
+    /// The in-memory canonical log SUFFIX above `base`.
     log: Vec<LogEntry>,
     /// In-flight persist + withheld messages. Lost on crash.
     pending: Option<Pending>,
@@ -260,6 +296,7 @@ impl ReplicaCore {
             voters,
             persisted_hard: restored_hard,
             durable_len,
+            base: LogPosition::ZERO,
             log: restored_log,
             pending: None,
             role: Role::Follower,
@@ -284,6 +321,69 @@ impl ReplicaCore {
             "a witness cannot already hold a data role"
         );
         self.witnesses = witnesses;
+    }
+
+    /// Restore a COMPACTED node: `base` + `snapshot_claims` come from the
+    /// durable snapshot; `restored_log` is the suffix above the base. The
+    /// claims table = snapshot claims + suffix claims (a suffix entry may
+    /// re-claim a key whose original was compacted only if the original
+    /// was superseded — in practice suffix wins, matching log order).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_durable(
+        id: NodeId,
+        voters: BTreeSet<NodeId>,
+        restored_hard: HardState,
+        base: LogPosition,
+        restored_log: Vec<LogEntry>,
+        snapshot_claims: BTreeMap<u64, u64>,
+        use_pre_vote: bool,
+    ) -> Self {
+        let mut core = Self::new(id, voters, restored_hard, Vec::new(), use_pre_vote);
+        core.base = base;
+        core.claims = snapshot_claims;
+        // The state below base is adopted wholesale (checkpoint semantics).
+        core.commit = base.index;
+        for e in restored_log {
+            core.log.push(e);
+            if let Some(k) = e.key {
+                core.claims.insert(k, core.last_index());
+            }
+        }
+        core.durable_len = core.log.len() as u64;
+        core
+    }
+
+    /// Absolute index of the last entry (base + suffix).
+    pub fn last_index(&self) -> u64 {
+        self.base.index + self.log.len() as u64
+    }
+
+    /// The compaction base (snapshot frontier).
+    pub fn base(&self) -> LogPosition {
+        self.base
+    }
+
+    /// Compact the log through `up_to` (absolute index). Only COMMITTED
+    /// entries may compact (RFC 028 §6: every recovery path keeps log
+    /// coverage or a verified snapshot — an uncommitted entry has neither).
+    /// Returns the snapshot the driver persists alongside the suffix; the
+    /// claims table travels in it (sol P1-9).
+    pub fn compact(&mut self, up_to: u64) -> Option<Snapshot> {
+        if up_to <= self.base.index || up_to > self.commit {
+            return None;
+        }
+        let last_term = self.entry(up_to)?.term;
+        let drop = (up_to - self.base.index) as usize;
+        self.log.drain(..drop);
+        self.base = LogPosition {
+            term: last_term.0,
+            index: up_to,
+        };
+        self.durable_len = self.durable_len.saturating_sub(drop as u64);
+        Some(Snapshot {
+            last: self.base,
+            claims: self.claims.clone(),
+        })
     }
 
     // ── accessors ──────────────────────────────────────────────────
@@ -315,10 +415,10 @@ impl ReplicaCore {
 
     /// Entry at 1-based `index`, if present.
     pub fn entry(&self, index: u64) -> Option<&LogEntry> {
-        if index == 0 {
-            return None;
+        if index <= self.base.index {
+            return None; // compacted (or the 0 sentinel)
         }
-        self.log.get(index as usize - 1)
+        self.log.get((index - self.base.index) as usize - 1)
     }
 
     /// Position of the last in-memory log entry (sentinel ZERO when empty).
@@ -329,9 +429,9 @@ impl ReplicaCore {
         match self.log.last() {
             Some(e) => LogPosition {
                 term: e.term.0,
-                index: self.log.len() as u64,
+                index: self.last_index(),
             },
-            None => LogPosition::ZERO,
+            None => self.base,
         }
     }
 
@@ -360,7 +460,9 @@ impl ReplicaCore {
         }
         Effect::Persist {
             hard,
+            base: self.base,
             log: self.log.clone(),
+            claims: self.claims.clone(),
         }
     }
 
@@ -400,7 +502,8 @@ impl ReplicaCore {
             None => return Vec::new(),
         };
         if self.role == Role::Leader {
-            self.match_index.insert(self.id, self.durable_len);
+            self.match_index
+                .insert(self.id, self.base.index + self.durable_len);
             self.try_advance_commit(&mut out);
         }
         out
@@ -451,7 +554,7 @@ impl ReplicaCore {
             payload,
             key: Some(key),
         });
-        let index = self.log_len();
+        let index = self.last_index();
         self.claims.insert(key, index);
         let mut effects = vec![self.stage_log()];
         self.append_effects_for_followers(&mut effects);
@@ -485,19 +588,39 @@ impl ReplicaCore {
     fn send_append_to(&mut self, peer: NodeId, out: &mut Vec<Effect>) {
         let term = self.current_term();
         let next = *self.next_index.get(&peer).unwrap_or(&1);
+        // Straggler below our compaction base: entries are gone — ship the
+        // snapshot instead (the stale-rejoin-beyond-GC path, §6). Claims
+        // ride along, so the GC'd claim can never be replay-lost (P1-9).
+        if next <= self.base.index {
+            let msg = Message::InstallSnapshot {
+                term,
+                leader: self.id,
+                snapshot: Snapshot {
+                    last: self.base,
+                    claims: self.claims.clone(),
+                },
+            };
+            self.hold_or(Effect::Send { to: peer, msg }, out);
+            return;
+        }
         let prev_index = next.saturating_sub(1);
-        let prev = if prev_index == 0 {
-            LogPosition::ZERO
+        let prev = if prev_index == self.base.index {
+            self.base // covers the ZERO sentinel when uncompacted
         } else {
             match self.entry(prev_index) {
                 Some(e) => LogPosition {
                     term: e.term.0,
                     index: prev_index,
                 },
-                None => LogPosition::ZERO,
+                None => self.base,
             }
         };
-        let entries: Vec<LogEntry> = self.log.iter().skip(prev_index as usize).copied().collect();
+        let entries: Vec<LogEntry> = self
+            .log
+            .iter()
+            .skip((prev.index - self.base.index) as usize)
+            .copied()
+            .collect();
         let msg = Message::AppendEntries {
             term,
             leader: self.id,
@@ -560,6 +683,11 @@ impl ReplicaCore {
                 success,
                 last_index,
             } => self.on_append_response(from, term, success, last_index),
+            Message::InstallSnapshot {
+                term,
+                leader: _,
+                snapshot,
+            } => self.on_install_snapshot(from, term, snapshot),
         }
     }
 
@@ -756,7 +884,7 @@ impl ReplicaCore {
                 msg: Message::AppendResponse {
                     term: cur,
                     success: false,
-                    last_index: self.durable_len,
+                    last_index: self.base.index + self.durable_len,
                 },
             }];
         }
@@ -780,10 +908,31 @@ impl ReplicaCore {
             self.effective()
         };
 
+        // Everything at or below our base is COMMITTED here, and committed
+        // entries are globally unique (Gate A #2) — a leader probing below
+        // our base can simply fast-forward to it.
+        if prev.index < self.base.index {
+            let ack = Effect::Send {
+                to: from,
+                msg: Message::AppendResponse {
+                    term,
+                    success: true,
+                    last_index: self.base.index,
+                },
+            };
+            if newer {
+                effects.push(self.stage(adopted));
+                self.hold(ack);
+            } else {
+                self.hold_or(ack, &mut effects);
+            }
+            return effects;
+        }
+
         // Continuity check at `prev` (the append-side of Gate A #2: a hole
         // or a term mismatch means these entries do not extend our history —
         // refuse; the leader backs up).
-        let prev_ok = prev.index == 0
+        let prev_ok = (prev.index == self.base.index && prev.term == self.base.term)
             || self
                 .entry(prev.index)
                 .is_some_and(|e| e.term.0 == prev.term);
@@ -793,7 +942,8 @@ impl ReplicaCore {
                 msg: Message::AppendResponse {
                     term,
                     success: false,
-                    last_index: self.durable_len.min(prev.index.saturating_sub(1)),
+                    last_index: (self.base.index + self.durable_len)
+                        .min(prev.index.saturating_sub(1)),
                 },
             };
             if newer {
@@ -823,7 +973,7 @@ impl ReplicaCore {
                             msg: Message::AppendResponse {
                                 term,
                                 success: false,
-                                last_index: self.durable_len,
+                                last_index: self.base.index + self.durable_len,
                             },
                         };
                         if newer {
@@ -837,14 +987,14 @@ impl ReplicaCore {
                     // The claim dies WITH its truncated entry (the atomic
                     // unit, RFC 028 §7): remove keys owned by the removed
                     // suffix so a re-proposed key can claim afresh.
-                    for removed in self.log.iter().skip(idx as usize - 1) {
+                    for removed in self.log.iter().skip((idx - self.base.index) as usize - 1) {
                         if let Some(k) = removed.key {
                             if self.claims.get(&k) >= Some(&idx) {
                                 self.claims.remove(&k);
                             }
                         }
                     }
-                    self.log.truncate(idx as usize - 1);
+                    self.log.truncate((idx - self.base.index) as usize - 1);
                     self.log.push(*e);
                     if let Some(k) = e.key {
                         self.claims.insert(k, idx);
@@ -876,7 +1026,7 @@ impl ReplicaCore {
                     last_index: if changed {
                         covered
                     } else {
-                        self.durable_len.min(covered)
+                        (self.base.index + self.durable_len).min(covered)
                     },
                 },
             });
@@ -888,7 +1038,7 @@ impl ReplicaCore {
                 msg: Message::AppendResponse {
                     term,
                     success: true,
-                    last_index: self.durable_len.min(covered),
+                    last_index: (self.base.index + self.durable_len).min(covered),
                 },
             };
             self.hold_or(ack, &mut effects);
@@ -939,12 +1089,79 @@ impl ReplicaCore {
                 .next_index
                 .get(&from)
                 .copied()
-                .unwrap_or(self.log_len() + 1);
+                .unwrap_or(self.last_index() + 1);
             let backed = next.saturating_sub(1).clamp(1, last_index + 1).max(floor);
             self.next_index.insert(from, backed);
             self.send_append_to(from, &mut out);
         }
         out
+    }
+
+    /// Adopt a leader's snapshot (we are a straggler below its compaction
+    /// base). Same discipline as every other durable decision: ONE persist,
+    /// ack + InstallState held behind it. A snapshot at or below our own
+    /// commit is stale — ack our durable frontier instead (never regress).
+    fn on_install_snapshot(&mut self, from: NodeId, term: Term, snapshot: Snapshot) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        let cur = self.current_term();
+        if term < cur {
+            return vec![Effect::Send {
+                to: from,
+                msg: Message::AppendResponse {
+                    term: cur,
+                    success: false,
+                    last_index: self.base.index + self.durable_len,
+                },
+            }];
+        }
+        if matches!(self.role, Role::Leader | Role::Candidate) {
+            effects.push(Effect::SteppedDown { term: cur });
+        }
+        self.role = Role::Follower;
+        let newer = term > cur;
+        let adopted = if newer {
+            HardState {
+                current_term: term,
+                voted_for: None,
+            }
+        } else {
+            self.effective()
+        };
+        if snapshot.last.index <= self.commit {
+            // Stale snapshot: our committed state is already ahead.
+            let ack = Effect::Send {
+                to: from,
+                msg: Message::AppendResponse {
+                    term,
+                    success: true,
+                    last_index: self.base.index + self.durable_len,
+                },
+            };
+            if newer {
+                effects.push(self.stage(adopted));
+                self.hold(ack);
+            } else {
+                self.hold_or(ack, &mut effects);
+            }
+            return effects;
+        }
+        // Adopt: checkpoint replaces log prefix AND claims wholesale.
+        let last_index = snapshot.last.index;
+        self.base = snapshot.last;
+        self.log.clear();
+        self.claims = snapshot.claims;
+        self.commit = last_index;
+        effects.push(self.stage(adopted));
+        self.hold(Effect::InstallState { last_index });
+        self.hold(Effect::Send {
+            to: from,
+            msg: Message::AppendResponse {
+                term,
+                success: true,
+                last_index,
+            },
+        });
+        effects
     }
 
     /// The commit rule (Gate A #2): the largest `n` such that a quorum of
@@ -955,7 +1172,7 @@ impl ReplicaCore {
     /// data-bearing voters (witness exclusion).
     fn try_advance_commit(&mut self, out: &mut Vec<Effect>) {
         let cur = self.current_term();
-        let mut n = self.log_len();
+        let mut n = self.last_index();
         while n > self.commit {
             if self.entry(n).map(|e| e.term) == Some(cur) {
                 // Data quorum ONLY: witnesses never count toward commit
@@ -1002,14 +1219,15 @@ impl ReplicaCore {
 
     fn init_leader_state(&mut self, _term: Term) {
         self.role = Role::Leader;
-        let last = self.log_len();
+        let last = self.last_index();
         self.next_index.clear();
         self.match_index.clear();
         for v in self.voters.iter().copied() {
             self.next_index.insert(v, last + 1);
             self.match_index.insert(v, 0);
         }
-        self.match_index.insert(self.id, self.durable_len);
+        self.match_index
+            .insert(self.id, self.base.index + self.durable_len);
     }
 
     fn step_down_to(&mut self, newer: Term, cur: Term) -> Vec<Effect> {
@@ -1036,7 +1254,12 @@ impl ReplicaCore {
     /// Returns `(term, log, commit)` for the driver to wrap into a
     /// `bootstrap::RejoinMessage::Grant`; `None` = not authorized (the
     /// quarantined node stays quarantined and retries — fail closed).
-    pub fn rejoin_grant(&self) -> Option<(Term, Vec<LogEntry>, u64)> {
+    /// Returns `(term, base, durable_suffix, claims, commit)` — the full
+    /// durable picture, snapshot-aware: `base` + `claims` carry compacted
+    /// history, `durable_suffix` the live entries above it.
+    pub fn rejoin_grant(
+        &self,
+    ) -> Option<(Term, LogPosition, Vec<LogEntry>, BTreeMap<u64, u64>, u64)> {
         if self.role != Role::Leader {
             return None;
         }
@@ -1046,16 +1269,17 @@ impl ReplicaCore {
         if !committed_in_current_term {
             return None;
         }
-        // Grant only the DURABLE prefix: a snapshot must never carry entries
-        // our own disk could forget in a crash.
+        // Grant only the DURABLE suffix: a snapshot must never carry
+        // entries our own disk could forget in a crash. Base + claims are
+        // durable by construction (they only advance via persisted state).
         let durable: Vec<LogEntry> = self
             .log
             .iter()
             .take(self.durable_len as usize)
             .copied()
             .collect();
-        let commit = self.commit.min(self.durable_len);
-        Some((cur, durable, commit))
+        let commit = self.commit.min(self.base.index + self.durable_len);
+        Some((cur, self.base, durable, self.claims.clone(), commit))
     }
 
     fn pre_quorum_reached(&self) -> bool {

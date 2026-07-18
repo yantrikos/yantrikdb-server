@@ -51,6 +51,9 @@ pub struct RecoveredState {
     /// its checksum verified).
     pub hard: Option<HardState>,
     pub log: Option<Vec<LogEntry>>,
+    /// Active capability bits recorded with the durable state (snapshot
+    /// frontier's view; 0 when uncompacted-and-unactivated).
+    pub active: u32,
     /// The durably recorded applied/commit marker, if any. A marker beyond
     /// the verifiable log is a frontier-beyond-data inconsistency.
     pub commit_marker: u64,
@@ -74,6 +77,7 @@ impl RecoveredState {
             cluster_id: None,
             hard: None,
             log: None,
+            active: 0,
             commit_marker: 0,
             integrity: Integrity {
                 hard_state_verified: true,
@@ -97,6 +101,12 @@ pub enum QuarantineReason {
     LogCorruption,
     /// Commit marker beyond the verifiable log (frontier-beyond-data).
     CommitBeyondLog,
+    /// Recorded active capabilities (or a retained activation entry —
+    /// committed OR NOT, codex F2: an uncommitted unsupported activation
+    /// in the suffix could win elections on freshness and then commit)
+    /// exceed this binary's supported set. The downgrade-then-restart
+    /// trigger from the RFC §5 list.
+    UnsupportedCapability,
 }
 
 impl QuarantineReason {
@@ -133,7 +143,11 @@ pub enum BootDecision {
 /// exists at A2 (incarnation/epoch regression, snapshot manifests,
 /// capability support) lands with the Phase B machinery that introduces
 /// those artifacts.
-pub fn inspect(expected_cluster: ClusterId, recovered: &RecoveredState) -> BootDecision {
+pub fn inspect(
+    expected_cluster: ClusterId,
+    supported: u32,
+    recovered: &RecoveredState,
+) -> BootDecision {
     // Fresh node: nothing on disk at all → healthy with defaults. (A blank
     // disk is not "torn" — there is nothing to be torn.)
     if recovered.cluster_id.is_none()
@@ -174,6 +188,19 @@ pub fn inspect(expected_cluster: ClusterId, recovered: &RecoveredState) -> BootD
         reasons.push(QuarantineReason::CommitBeyondLog);
     }
 
+    // Codex F2: scan BOTH the recorded active set and every retained
+    // activation entry (committed or not — an uncommitted unsupported
+    // activation could win elections on freshness and then commit).
+    let suffix_bits: u32 = recovered
+        .log
+        .iter()
+        .flatten()
+        .filter_map(|e| e.activate)
+        .fold(0, |acc, b| acc | b);
+    if supported & (recovered.active | suffix_bits) != (recovered.active | suffix_bits) {
+        reasons.push(QuarantineReason::UnsupportedCapability);
+    }
+
     if reasons.is_empty() {
         BootDecision::Healthy {
             hard: recovered.hard.expect("verified above"),
@@ -210,6 +237,8 @@ pub enum RejoinMessage {
         /// Idempotency claims through the granted frontier (RFC 028 §7 +
         /// §6: claims survive compaction by riding the snapshot).
         claims: BTreeMap<u64, u64>,
+        /// Active capability bits at the granted frontier.
+        active: u32,
         commit: u64,
         verified: bool,
     },
@@ -237,6 +266,7 @@ pub enum BootstrapEffect {
         base: LogPosition,
         log: Vec<LogEntry>,
         claims: BTreeMap<u64, u64>,
+        active: u32,
     },
 }
 
@@ -333,6 +363,7 @@ impl QuarantinedNode {
             base,
             log,
             claims,
+            active,
             commit: _,
             verified,
         } = grant
@@ -382,6 +413,7 @@ impl QuarantinedNode {
             base,
             log,
             claims,
+            active,
         }]
     }
 }
@@ -400,6 +432,7 @@ mod tests {
                 voted_for: Some(NodeId(2)),
             }),
             log: Some(vec![LogEntry::unkeyed(Term(3), 42)]),
+            active: 0,
             commit_marker: 1,
             integrity: Integrity {
                 hard_state_verified: true,
@@ -410,7 +443,7 @@ mod tests {
 
     #[test]
     fn blank_disk_boots_healthy_fresh() {
-        match inspect(CLUSTER, &RecoveredState::blank()) {
+        match inspect(CLUSTER, u32::MAX, &RecoveredState::blank()) {
             BootDecision::Healthy { hard, log } => {
                 assert_eq!(hard, HardState::default());
                 assert!(log.is_empty());
@@ -423,7 +456,7 @@ mod tests {
 
     #[test]
     fn coherent_state_boots_healthy_with_exact_state() {
-        match inspect(CLUSTER, &coherent()) {
+        match inspect(CLUSTER, u32::MAX, &coherent()) {
             BootDecision::Healthy { hard, log } => {
                 assert_eq!(hard.voted_for, Some(NodeId(2)));
                 assert_eq!(log.len(), 1);
@@ -436,7 +469,7 @@ mod tests {
     fn torn_hard_state_quarantines() {
         let mut s = coherent();
         s.integrity.hard_state_verified = false;
-        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, u32::MAX, &s) else {
             panic!("torn state booted healthy");
         };
         assert!(reasons.contains(&QuarantineReason::TornHardState));
@@ -446,7 +479,7 @@ mod tests {
     fn alien_cluster_quarantines() {
         let mut s = coherent();
         s.cluster_id = Some(ClusterId(99));
-        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, u32::MAX, &s) else {
             panic!("alien state booted healthy");
         };
         assert!(reasons.contains(&QuarantineReason::ClusterIdMismatch));
@@ -456,7 +489,7 @@ mod tests {
     fn commit_marker_beyond_log_quarantines() {
         let mut s = coherent();
         s.commit_marker = 5; // log has 1 entry
-        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, u32::MAX, &s) else {
             panic!("frontier-beyond-data booted healthy");
         };
         assert!(reasons.contains(&QuarantineReason::CommitBeyondLog));
@@ -466,7 +499,7 @@ mod tests {
     fn log_corruption_is_corruption_evidence_and_blocks_stale_reads() {
         let mut s = coherent();
         s.integrity.log_verified = false;
-        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, u32::MAX, &s) else {
             panic!("corrupt log booted healthy");
         };
         let node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
@@ -479,7 +512,7 @@ mod tests {
         // reads OK, voting closed.
         let mut s = coherent();
         s.integrity.hard_state_verified = false;
-        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, u32::MAX, &s) else {
             panic!()
         };
         let node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
@@ -490,7 +523,7 @@ mod tests {
     fn corruption_requires_verified_grant() {
         let mut s = coherent();
         s.integrity.log_verified = false;
-        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, u32::MAX, &s) else {
             panic!()
         };
         let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
@@ -500,6 +533,7 @@ mod tests {
             base: LogPosition::ZERO,
             log: Vec::new(),
             claims: BTreeMap::new(),
+            active: 0,
             commit: 0,
             verified: false,
         };
@@ -513,6 +547,7 @@ mod tests {
             base: LogPosition::ZERO,
             log: Vec::new(),
             claims: BTreeMap::new(),
+            active: 0,
             commit: 0,
             verified: true,
         };
@@ -526,7 +561,7 @@ mod tests {
     fn wrong_cluster_grant_is_never_adopted() {
         let mut s = coherent();
         s.integrity.hard_state_verified = false;
-        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, u32::MAX, &s) else {
             panic!()
         };
         let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);
@@ -536,6 +571,7 @@ mod tests {
             base: LogPosition::ZERO,
             log: Vec::new(),
             claims: BTreeMap::new(),
+            active: 0,
             commit: 0,
             verified: true,
         };
@@ -546,7 +582,7 @@ mod tests {
     fn preserve_happens_before_first_rejoin_request_and_alarm_fires_once() {
         let mut s = coherent();
         s.integrity.log_verified = false;
-        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, &s) else {
+        let BootDecision::Quarantine { reasons, .. } = inspect(CLUSTER, u32::MAX, &s) else {
             panic!()
         };
         let mut node = QuarantinedNode::new(NodeId(3), CLUSTER, reasons, None);

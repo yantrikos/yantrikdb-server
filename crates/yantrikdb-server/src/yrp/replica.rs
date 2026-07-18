@@ -74,6 +74,9 @@ pub struct LogEntry {
     pub term: Term,
     pub payload: u64,
     pub key: Option<u64>,
+    /// Phase B (RFC 028 §3): capability-activation entry. Bits activate on
+    /// COMMIT (never on append), monotonically — there is no deactivation.
+    pub activate: Option<u32>,
 }
 
 impl LogEntry {
@@ -83,6 +86,7 @@ impl LogEntry {
             term,
             payload,
             key: None,
+            activate: None,
         }
     }
 }
@@ -122,6 +126,10 @@ pub enum KeyedProposal {
 pub struct Snapshot {
     pub last: LogPosition,
     pub claims: BTreeMap<u64, u64>,
+    /// Active capability bits at the frontier — part of the snapshot's
+    /// identity (codex F8): two states with identical bytes but different
+    /// active semantics are NOT interchangeable.
+    pub active: u32,
 }
 
 /// Wire messages for the replica layer.
@@ -141,6 +149,10 @@ pub enum Message {
         term: Term,
         candidate: NodeId,
         last_log: LogPosition,
+        /// Candidate's capability set: a voter refuses candidates that
+        /// cannot cover the voter's ACTIVE view (semantically incomplete
+        /// leaders, sol r2 P1-14).
+        supported: u32,
     },
     VoteResponse {
         term: Term,
@@ -171,6 +183,12 @@ pub enum Message {
         term: Term,
         success: bool,
         last_index: u64,
+        /// Refusal reason: the batch (or snapshot) contained capability
+        /// bits outside the acceptor's `supported` set. Distinguishable so
+        /// the leader can stall + alarm instead of retransmit-storming
+        /// (codex F1/F7) — a capability NACK is a config problem, not a
+        /// log-divergence problem.
+        unsupported: bool,
     },
 }
 
@@ -185,6 +203,11 @@ pub enum Effect {
         base: LogPosition,
         log: Vec<LogEntry>,
         claims: BTreeMap<u64, u64>,
+        /// Committed-active capability bits. Sound to persist eagerly:
+        /// `active` only ever contains committed bits, and committed bits
+        /// never revert — restoring them early merely shrinks the
+        /// stale-low window (codex F5).
+        active: u32,
     },
     Send {
         to: NodeId,
@@ -210,6 +233,14 @@ pub enum Effect {
     /// are gone; the state arrives wholesale, like A2's rejoin adoption).
     InstallState {
         last_index: u64,
+    },
+    /// A peer NACKed replication for capability reasons: it cannot store
+    /// bits the log now carries. The leader has STOPPED sending to it
+    /// (no retransmit storm); the driver must alarm the operator — the
+    /// peer needs a binary upgrade (then a new capability exchange clears
+    /// the stall via set_peer_caps). Codex F1/F7.
+    PeerIncompatible {
+        peer: NodeId,
     },
 }
 
@@ -268,6 +299,21 @@ pub struct ReplicaCore {
     /// witness elect a leader" (the design review's P1-7 scenario) can lose
     /// only tentative entries — never acknowledged-durable ones.
     witnesses: BTreeSet<NodeId>,
+    /// This node's capability set (binary version). Static per process.
+    supported: u32,
+    /// Cluster-active bits: derived from COMMITTED activation entries +
+    /// the snapshot base. Monotone. Stale-low after restart until commit
+    /// re-advances — safe for election gating (freshness closes the gap;
+    /// codex Q1/F5), but the DRIVER must wait for a current-term commit
+    /// barrier before serving capability-dependent surfaces.
+    active: u32,
+    /// Peer capability advertisements (driver-fed from the session-start
+    /// capability exchange, #53). May be stale — the append-time NACK is
+    /// the backstop.
+    peer_caps: BTreeMap<NodeId, u32>,
+    /// Peers that NACKed on capability grounds: sends suspended until a
+    /// fresh exchange updates peer_caps (no retransmit storm).
+    stalled: BTreeSet<NodeId>,
 }
 
 impl ReplicaCore {
@@ -308,6 +354,74 @@ impl ReplicaCore {
             pre_votes: BTreeSet::new(),
             use_pre_vote,
             witnesses: BTreeSet::new(),
+            supported: u32::MAX,
+            active: 0,
+            peer_caps: BTreeMap::new(),
+            stalled: BTreeSet::new(),
+        }
+    }
+
+    /// Declare this node's capability set (binary version).
+    pub fn set_supported(&mut self, supported: u32) {
+        self.supported = supported;
+    }
+
+    /// Feed peer capability advertisements (the #53 session-start
+    /// exchange). Clears capability stalls — a new exchange means a new
+    /// binary may have arrived.
+    pub fn set_peer_caps(&mut self, caps: BTreeMap<NodeId, u32>) {
+        self.peer_caps = caps;
+        self.stalled.clear();
+    }
+
+    /// Cluster-active capability bits (committed view).
+    pub fn active_caps(&self) -> u32 {
+        self.active
+    }
+
+    /// Propose activating capability `bits` (RFC 028 §3). Leader-only;
+    /// refused unless EVERY voter — witnesses included, they store the
+    /// log — advertises support (codex Q4). Advertisements can be stale;
+    /// the append-time NACK + stall is the backstop, and activation
+    /// remains monotone regardless. When membership changes land, this
+    /// check must bind to the exact config epoch (codex F3 — documented
+    /// constraint for that slice).
+    pub fn propose_activation(&mut self, bits: u32) -> Option<Vec<Effect>> {
+        if self.role != Role::Leader || bits == 0 {
+            return None;
+        }
+        if self.supported & bits != bits {
+            return None;
+        }
+        for v in self.voters.iter() {
+            if *v == self.id {
+                continue;
+            }
+            let caps = self.peer_caps.get(v).copied().unwrap_or(0);
+            if caps & bits != bits {
+                return None;
+            }
+        }
+        let term = self.current_term();
+        self.log.push(LogEntry {
+            term,
+            payload: NOOP_PAYLOAD,
+            key: None,
+            activate: Some(bits),
+        });
+        let mut out = vec![self.stage_log()];
+        self.append_effects_for_followers(&mut out);
+        Some(out)
+    }
+
+    /// Fold newly committed activation entries into `active` — called
+    /// wherever the commit index advances. Compacted ranges are covered by
+    /// snapshot.active.
+    fn apply_committed_caps(&mut self, from: u64, to: u64) {
+        for i in from.max(self.base.index + 1)..=to {
+            if let Some(bits) = self.entry(i).and_then(|e| e.activate) {
+                self.active |= bits;
+            }
         }
     }
 
@@ -316,6 +430,17 @@ impl ReplicaCore {
     /// witness id must be in `voters` (it IS a voter for elections).
     pub fn set_witnesses(&mut self, witnesses: BTreeSet<NodeId>) {
         debug_assert!(witnesses.iter().all(|w| self.voters.contains(w)));
+        // Codex F4: with ONE witness, every election quorum still contains
+        // enough data nodes to intersect every data-commit quorum (proven
+        // by enumeration for D≤4, pattern holds generally). TWO OR MORE
+        // witnesses break that intersection — an incompatible/stale data
+        // node + witnesses could elect without touching any commit-quorum
+        // member. Multi-witness needs certified committed-watermark
+        // machinery we deliberately do not have; refuse the topology.
+        debug_assert!(
+            witnesses.len() <= 1,
+            "multi-witness topologies break election/data quorum intersection"
+        );
         debug_assert!(
             !witnesses.contains(&self.id) || self.role == Role::Follower,
             "a witness cannot already hold a data role"
@@ -336,11 +461,13 @@ impl ReplicaCore {
         base: LogPosition,
         restored_log: Vec<LogEntry>,
         snapshot_claims: BTreeMap<u64, u64>,
+        snapshot_active: u32,
         use_pre_vote: bool,
     ) -> Self {
         let mut core = Self::new(id, voters, restored_hard, Vec::new(), use_pre_vote);
         core.base = base;
         core.claims = snapshot_claims;
+        core.active = snapshot_active;
         // The state below base is adopted wholesale (checkpoint semantics).
         core.commit = base.index;
         for e in restored_log {
@@ -368,7 +495,7 @@ impl ReplicaCore {
     /// coverage or a verified snapshot — an uncommitted entry has neither).
     /// Returns the snapshot the driver persists alongside the suffix; the
     /// claims table travels in it (sol P1-9).
-    pub fn compact(&mut self, up_to: u64) -> Option<Snapshot> {
+    pub fn compact(&mut self, up_to: u64) -> Option<(Snapshot, Vec<Effect>)> {
         if up_to <= self.base.index || up_to > self.commit {
             return None;
         }
@@ -380,10 +507,21 @@ impl ReplicaCore {
             index: up_to,
         };
         self.durable_len = self.durable_len.saturating_sub(drop as u64);
-        Some(Snapshot {
-            last: self.base,
-            claims: self.claims.clone(),
-        })
+        // The shape change (base + dropped prefix + active-at-base) must be
+        // durable atomically — stage a persist like every other durable
+        // decision. (Caught by the activation-survives-restart test: an
+        // unpersisted compaction left disk in the old shape, which is SAFE
+        // but loses the eager active/claims durability the snapshot form
+        // provides.)
+        let persist = self.stage_log();
+        Some((
+            Snapshot {
+                last: self.base,
+                claims: self.claims.clone(),
+                active: self.active,
+            },
+            vec![persist],
+        ))
     }
 
     // ── accessors ──────────────────────────────────────────────────
@@ -463,6 +601,7 @@ impl ReplicaCore {
             base: self.base,
             log: self.log.clone(),
             claims: self.claims.clone(),
+            active: self.active,
         }
     }
 
@@ -553,6 +692,7 @@ impl ReplicaCore {
             term,
             payload,
             key: Some(key),
+            activate: None,
         });
         let index = self.last_index();
         self.claims.insert(key, index);
@@ -586,6 +726,9 @@ impl ReplicaCore {
     }
 
     fn send_append_to(&mut self, peer: NodeId, out: &mut Vec<Effect>) {
+        if self.stalled.contains(&peer) {
+            return; // capability-stalled: waiting for a new exchange
+        }
         let term = self.current_term();
         let next = *self.next_index.get(&peer).unwrap_or(&1);
         // Straggler below our compaction base: entries are gone — ship the
@@ -598,6 +741,7 @@ impl ReplicaCore {
                 snapshot: Snapshot {
                     last: self.base,
                     claims: self.claims.clone(),
+                    active: self.active,
                 },
             };
             self.hold_or(Effect::Send { to: peer, msg }, out);
@@ -669,7 +813,8 @@ impl ReplicaCore {
                 term,
                 candidate,
                 last_log,
-            } => self.on_vote_request(from, term, candidate, last_log),
+                supported,
+            } => self.on_vote_request(from, term, candidate, last_log, supported),
             Message::VoteResponse { term, granted } => self.on_vote_response(from, term, granted),
             Message::AppendEntries {
                 term,
@@ -682,7 +827,8 @@ impl ReplicaCore {
                 term,
                 success,
                 last_index,
-            } => self.on_append_response(from, term, success, last_index),
+                unsupported,
+            } => self.on_append_response(from, term, success, last_index, unsupported),
             Message::InstallSnapshot {
                 term,
                 leader: _,
@@ -729,6 +875,7 @@ impl ReplicaCore {
                 term,
                 candidate: self.id,
                 last_log: self.last_log(),
+                supported: self.supported,
             },
         });
         vec![persist]
@@ -773,6 +920,7 @@ impl ReplicaCore {
         term: Term,
         candidate: NodeId,
         last_log: LogPosition,
+        candidate_supported: u32,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
         let cur = self.current_term();
@@ -807,7 +955,14 @@ impl ReplicaCore {
         let may_vote = prior_vote.is_none() || prior_vote == Some(candidate);
         // Gate A #3 (R3): Raft freshness over the candidate's log.
         let fresh = last_log.is_at_least_as_up_to_date_as(&self.last_log());
-        if may_vote && fresh {
+        // Capability gate (sol P1-14 / codex Q1): a candidate that cannot
+        // cover OUR active view is semantically incomplete — refuse. Note
+        // freshness usually catches this first (an incompatible node's log
+        // cannot contain the committed activation entry), but active-view
+        // gating closes the belt-and-braces gap when our own active is
+        // ahead of the candidate's advertisement.
+        let capable = candidate_supported & self.active == self.active;
+        if may_vote && fresh && capable {
             // Gate A #1 (R2): the grant changes voted_for → stage + HOLD.
             effects.push(self.stage(HardState {
                 current_term: term,
@@ -885,6 +1040,7 @@ impl ReplicaCore {
                     term: cur,
                     success: false,
                     last_index: self.base.index + self.durable_len,
+                    unsupported: false,
                 },
             }];
         }
@@ -918,6 +1074,7 @@ impl ReplicaCore {
                     term,
                     success: true,
                     last_index: self.base.index,
+                    unsupported: false,
                 },
             };
             if newer {
@@ -944,6 +1101,34 @@ impl ReplicaCore {
                     success: false,
                     last_index: (self.base.index + self.durable_len)
                         .min(prev.index.saturating_sub(1)),
+                    unsupported: false,
+                },
+            };
+            if newer {
+                effects.push(self.stage(adopted));
+                self.hold(refusal);
+            } else {
+                self.hold_or(refusal, &mut effects);
+            }
+            return effects;
+        }
+
+        // Capability gate (codex F1 backstop): if any entry in the batch
+        // activates bits we cannot support, refuse the WHOLE batch with a
+        // distinguishable NACK — our log must never contain an activation
+        // we cannot honor (that is what makes the freshness argument for
+        // incompatible candidates sound).
+        if entries
+            .iter()
+            .any(|e| e.activate.is_some_and(|b| self.supported & b != b))
+        {
+            let refusal = Effect::Send {
+                to: from,
+                msg: Message::AppendResponse {
+                    term,
+                    success: false,
+                    last_index: self.base.index + self.durable_len,
+                    unsupported: true,
                 },
             };
             if newer {
@@ -974,6 +1159,7 @@ impl ReplicaCore {
                                 term,
                                 success: false,
                                 last_index: self.base.index + self.durable_len,
+                                unsupported: false,
                             },
                         };
                         if newer {
@@ -1028,6 +1214,7 @@ impl ReplicaCore {
                     } else {
                         (self.base.index + self.durable_len).min(covered)
                     },
+                    unsupported: false,
                 },
             });
         } else {
@@ -1039,6 +1226,7 @@ impl ReplicaCore {
                     term,
                     success: true,
                     last_index: (self.base.index + self.durable_len).min(covered),
+                    unsupported: false,
                 },
             };
             self.hold_or(ack, &mut effects);
@@ -1047,7 +1235,9 @@ impl ReplicaCore {
         // Adopt the leader's commit proof, bounded by what we hold.
         let new_commit = leader_commit.min(covered);
         if new_commit > self.commit {
+            let from_idx = self.commit + 1;
             self.commit = new_commit;
+            self.apply_committed_caps(from_idx, new_commit);
             // Sequence apply behind the persist: apply never outruns
             // durability.
             let advanced = Effect::CommitAdvanced { to: new_commit };
@@ -1062,6 +1252,7 @@ impl ReplicaCore {
         term: Term,
         success: bool,
         last_index: u64,
+        unsupported: bool,
     ) -> Vec<Effect> {
         let cur = self.current_term();
         if term > cur {
@@ -1071,6 +1262,14 @@ impl ReplicaCore {
             return Vec::new();
         }
         let mut out = Vec::new();
+        if !success && unsupported {
+            // Capability NACK: retrying is useless until the peer upgrades
+            // (codex F7). Suspend sends, surface the incompatibility.
+            if self.stalled.insert(from) {
+                out.push(Effect::PeerIncompatible { peer: from });
+            }
+            return out;
+        }
         // Codex finding 2: delayed/duplicate responses must not regress
         // next_index below match_index + 1. match_index is monotonic (max);
         // matched entries are confirmed-durable-matching, so probing below
@@ -1111,6 +1310,7 @@ impl ReplicaCore {
                     term: cur,
                     success: false,
                     last_index: self.base.index + self.durable_len,
+                    unsupported: false,
                 },
             }];
         }
@@ -1127,6 +1327,47 @@ impl ReplicaCore {
         } else {
             self.effective()
         };
+        // Preflight (codex F6): refuse an install whose active set we
+        // cannot support (quarantine-bypass) or that would REGRESS our
+        // active view (monotonicity — a legitimately higher snapshot's
+        // active is always a superset of ours).
+        if self.supported & snapshot.active != snapshot.active {
+            let refusal = Effect::Send {
+                to: from,
+                msg: Message::AppendResponse {
+                    term,
+                    success: false,
+                    last_index: self.base.index + self.durable_len,
+                    unsupported: true,
+                },
+            };
+            if newer {
+                effects.push(self.stage(adopted));
+                self.hold(refusal);
+            } else {
+                self.hold_or(refusal, &mut effects);
+            }
+            return effects;
+        }
+        if snapshot.active & self.active != self.active {
+            // Active-regressing snapshot: forged or badly stale — refuse.
+            let refusal = Effect::Send {
+                to: from,
+                msg: Message::AppendResponse {
+                    term,
+                    success: false,
+                    last_index: self.base.index + self.durable_len,
+                    unsupported: false,
+                },
+            };
+            if newer {
+                effects.push(self.stage(adopted));
+                self.hold(refusal);
+            } else {
+                self.hold_or(refusal, &mut effects);
+            }
+            return effects;
+        }
         if snapshot.last.index <= self.commit {
             // Stale snapshot: our committed state is already ahead.
             let ack = Effect::Send {
@@ -1135,6 +1376,7 @@ impl ReplicaCore {
                     term,
                     success: true,
                     last_index: self.base.index + self.durable_len,
+                    unsupported: false,
                 },
             };
             if newer {
@@ -1150,6 +1392,7 @@ impl ReplicaCore {
         self.base = snapshot.last;
         self.log.clear();
         self.claims = snapshot.claims;
+        self.active |= snapshot.active;
         self.commit = last_index;
         effects.push(self.stage(adopted));
         self.hold(Effect::InstallState { last_index });
@@ -1159,6 +1402,7 @@ impl ReplicaCore {
                 term,
                 success: true,
                 last_index,
+                unsupported: false,
             },
         });
         effects
@@ -1183,7 +1427,9 @@ impl ReplicaCore {
                     .filter(|v| self.match_index.get(v).copied().unwrap_or(0) >= n)
                     .count();
                 if acks >= quorum(data_voters().count()) {
+                    let from_idx = self.commit + 1;
                     self.commit = n;
+                    self.apply_committed_caps(from_idx, n);
                     let advanced = Effect::CommitAdvanced { to: n };
                     self.hold_or(advanced, out);
                     // Share the new commit index promptly.
@@ -1257,9 +1503,17 @@ impl ReplicaCore {
     /// Returns `(term, base, durable_suffix, claims, commit)` — the full
     /// durable picture, snapshot-aware: `base` + `claims` carry compacted
     /// history, `durable_suffix` the live entries above it.
+    #[allow(clippy::type_complexity)]
     pub fn rejoin_grant(
         &self,
-    ) -> Option<(Term, LogPosition, Vec<LogEntry>, BTreeMap<u64, u64>, u64)> {
+    ) -> Option<(
+        Term,
+        LogPosition,
+        Vec<LogEntry>,
+        BTreeMap<u64, u64>,
+        u32,
+        u64,
+    )> {
         if self.role != Role::Leader {
             return None;
         }
@@ -1279,7 +1533,14 @@ impl ReplicaCore {
             .copied()
             .collect();
         let commit = self.commit.min(self.base.index + self.durable_len);
-        Some((cur, self.base, durable, self.claims.clone(), commit))
+        Some((
+            cur,
+            self.base,
+            durable,
+            self.claims.clone(),
+            self.active,
+            commit,
+        ))
     }
 
     fn pre_quorum_reached(&self) -> bool {

@@ -27,7 +27,9 @@ use super::bootstrap::{
     inspect, BootDecision, BootstrapEffect, Integrity, QuarantineReason, QuarantinedNode,
     RecoveredState, RejoinMessage,
 };
-use super::replica::{Effect, KeyedProposal, LogEntry, Message, ReplicaCore, Role, NOOP_PAYLOAD};
+use super::replica::{
+    Effect, KeyedProposal, LogEntry, Message, ReplicaCore, Role, Snapshot, NOOP_PAYLOAD,
+};
 use super::types::{ClusterId, HardState, LogPosition, NodeId, Term};
 
 /// The sim's cluster identity (all healthy nodes share it; alien-state tests
@@ -76,7 +78,9 @@ struct SimNode {
     core: Option<ReplicaCore>,
     quarantined: Option<QuarantinedNode>,
     disk_hard: HardState,
+    disk_base: LogPosition,
     disk_log: Vec<LogEntry>,
+    disk_claims: BTreeMap<u64, u64>,
     torn_hard: bool,
     corrupt_log: bool,
     /// Highest index this node has applied (ledgered via CommitAdvanced).
@@ -135,7 +139,13 @@ impl Sim {
                     core: Some(core),
                     quarantined: None,
                     disk_hard: hard,
+                    disk_base: LogPosition::ZERO,
                     disk_log: log.clone(),
+                    disk_claims: log
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, e)| e.key.map(|k| (k, i as u64 + 1)))
+                        .collect(),
                     torn_hard: false,
                     corrupt_log: false,
                     applied: 0,
@@ -187,7 +197,12 @@ impl Sim {
         let mut queue: VecDeque<Effect> = effects.into();
         while let Some(eff) = queue.pop_front() {
             match eff {
-                Effect::Persist { hard, log } => {
+                Effect::Persist {
+                    hard,
+                    base,
+                    log,
+                    claims,
+                } => {
                     if crash_at == Some(0) {
                         self.crash(id);
                         return;
@@ -195,7 +210,9 @@ impl Sim {
                     {
                         let node = self.nodes.get_mut(&id).unwrap();
                         node.disk_hard = hard;
+                        node.disk_base = base;
                         node.disk_log = log;
+                        node.disk_claims = claims;
                     }
                     if crash_at == Some(1) {
                         self.crash(id);
@@ -226,6 +243,11 @@ impl Sim {
                 }
                 Effect::SteppedDown { .. } => {}
                 Effect::CommitAdvanced { to } => self.ledger_commit(id, to),
+                Effect::InstallState { last_index } => {
+                    // Checkpoint adoption: applied state arrives wholesale.
+                    let node = self.nodes.get_mut(&id).unwrap();
+                    node.applied = node.applied.max(last_index);
+                }
             }
         }
     }
@@ -386,7 +408,9 @@ impl Sim {
                 BootstrapEffect::AdoptSnapshot {
                     cluster_id: _,
                     hard,
+                    base,
                     log,
+                    claims,
                 } => {
                     // Persist the adopted snapshot, clear damage flags, and
                     // resume as a live follower. Quarantine ends here only.
@@ -395,16 +419,23 @@ impl Sim {
                         "adopt without preserving old state first"
                     );
                     let voters = self.voters.clone();
+                    let w = self.witnesses.clone();
                     let node = self.nodes.get_mut(&id).unwrap();
                     node.disk_hard = hard;
+                    node.disk_base = base;
                     node.disk_log = log.clone();
+                    node.disk_claims = claims.clone();
                     node.torn_hard = false;
                     node.corrupt_log = false;
                     node.quarantined = None;
-                    let mut core = ReplicaCore::new(id, voters, hard, log, false);
-                    core.set_witnesses(self.witnesses.clone());
+                    let mut core =
+                        ReplicaCore::new_from_durable(id, voters, hard, base, log, claims, false);
+                    core.set_witnesses(w);
                     node.core = Some(core);
-                    node.applied = node.applied.min(node.disk_log.len() as u64);
+                    node.applied = node
+                        .applied
+                        .min(node.disk_base.index + node.disk_log.len() as u64)
+                        .max(node.disk_base.index);
                 }
             }
         }
@@ -416,17 +447,22 @@ impl Sim {
         // ONLY what was durably persisted survives. `applied` is clamped to
         // the durable log (the state machine re-applies deterministically;
         // the I2 ledger verifies every re-application is identical).
-        let mut core = ReplicaCore::new(
+        let mut core = ReplicaCore::new_from_durable(
             id,
             voters,
             node.disk_hard,
+            node.disk_base,
             node.disk_log.clone(),
+            node.disk_claims.clone(),
             use_pre_vote,
         );
         core.set_witnesses(self.witnesses.clone());
         node.core = Some(core);
         node.quarantined = None;
-        node.applied = node.applied.min(node.disk_log.len() as u64);
+        node.applied = node
+            .applied
+            .min(node.disk_base.index + node.disk_log.len() as u64)
+            .max(node.disk_base.index);
     }
 
     fn timeout(&mut self, id: NodeId, crash_at: Option<u8>) {
@@ -489,14 +525,16 @@ impl Sim {
                     .get(&m.to)
                     .and_then(|n| n.core.as_ref())
                     .and_then(|c| c.rejoin_grant());
-                if let Some((term, log, commit)) = grant {
+                if let Some((term, base, log, claims, commit)) = grant {
                     self.net.push_back(InFlight {
                         from: m.to,
                         to: asker,
                         msg: Wire::B(RejoinMessage::Grant {
                             cluster_id: CLUSTER,
                             term,
+                            base,
                             log,
+                            claims,
                             commit,
                             // The leader's snapshot is live state: verified.
                             verified: true,
@@ -566,7 +604,7 @@ impl Sim {
             let Some(core) = node.core.as_ref() else {
                 continue;
             };
-            for i in 1..=node.applied {
+            for i in (core.base().index + 1)..=node.applied {
                 if let Some(expected) = self.committed_at.get(&i) {
                     let actual = core.entry(i);
                     assert_eq!(
@@ -1699,6 +1737,260 @@ fn seeded_soak_witness_topology_keyed_claims_hold() {
                     sim.heartbeat(id);
                 }
                 6 => {
+                    let a = ids[sim.rng.pick(3)];
+                    let b = ids[sim.rng.pick(3)];
+                    if a != b {
+                        let kk = (a.min(b), a.max(b));
+                        if !sim.cut.remove(&kk) {
+                            sim.cut.insert(kk);
+                        }
+                    }
+                }
+                _ => {
+                    sim.deliver_one(None);
+                }
+            }
+        }
+        sim.cut.clear();
+        sim.drain();
+        sim.check_all();
+    }
+}
+
+// ── tests: Phase B — snapshots + log compaction + GC (RFC 028 §6) ──
+
+/// sol P1-9 as a test: compaction must never open a replay window for a
+/// GC'd claim. A keyed entry commits, the leader compacts it away — and
+/// the keyed retry STILL dedupes, because the claim rode into the
+/// snapshot state.
+#[test]
+fn compaction_preserves_claims_no_replay_window() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 101, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    let out = sim.propose_keyed(NodeId(1), 121, 1210).expect("leader");
+    let orig_index = match out {
+        KeyedProposal::Appended { index, .. } => index,
+        other => panic!("fresh append expected, got {other:?}"),
+    };
+    sim.drain();
+    // Compact through the commit index (entries GONE from the log).
+    {
+        let core = sim
+            .nodes
+            .get_mut(&NodeId(1))
+            .unwrap()
+            .core
+            .as_mut()
+            .unwrap();
+        let commit = core.commit_index();
+        let snap = core.compact(commit).expect("compaction through commit");
+        assert_eq!(snap.last.index, commit);
+        assert!(
+            snap.claims.contains_key(&121),
+            "claim must ride the snapshot"
+        );
+        assert!(core.entry(orig_index).is_none(), "entry compacted away");
+    }
+    // The retry after compaction: STILL a dedupe hit at the original index.
+    let retry = sim.propose_keyed(NodeId(1), 121, 1210).expect("leader");
+    assert_eq!(
+        retry,
+        KeyedProposal::DuplicateCommitted { index: orig_index },
+        "compaction opened a claim replay window"
+    );
+    sim.check_all();
+}
+
+/// Compaction refuses to touch uncommitted entries (every recovery path
+/// keeps log coverage or a verified snapshot — an uncommitted entry has
+/// neither).
+#[test]
+fn compaction_refuses_uncommitted() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 103, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    // Partition: new proposals stay tentative.
+    sim.cut.insert((NodeId(1), NodeId(2)));
+    sim.cut.insert((NodeId(1), NodeId(3)));
+    assert!(sim.propose(NodeId(1), 131));
+    sim.drain();
+    let core = sim
+        .nodes
+        .get_mut(&NodeId(1))
+        .unwrap()
+        .core
+        .as_mut()
+        .unwrap();
+    let commit = core.commit_index();
+    let tentative_tip = core.last_index();
+    assert!(tentative_tip > commit);
+    assert!(
+        core.compact(tentative_tip).is_none(),
+        "compacted an uncommitted entry"
+    );
+    assert!(
+        core.compact(commit).is_some(),
+        "committed compaction refused"
+    );
+}
+
+/// The stale-rejoin-beyond-GC path: a follower that slept through
+/// compaction gets an InstallSnapshot (entries are gone), adopts the
+/// checkpoint + claims wholesale, and then streams the live suffix.
+#[test]
+fn straggler_beyond_gc_recovers_via_snapshot_install() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 107, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    // Node 3 goes dark; the cluster commits keyed + unkeyed entries.
+    sim.crash(NodeId(3));
+    let out = sim.propose_keyed(NodeId(1), 141, 1410).expect("leader");
+    let keyed_index = match out {
+        KeyedProposal::Appended { index, .. } => index,
+        other => panic!("{other:?}"),
+    };
+    for p in [142, 143] {
+        assert!(sim.propose(NodeId(1), p));
+    }
+    sim.drain();
+    // Leader compacts through commit: node 3's catch-up data is GONE.
+    {
+        let core = sim
+            .nodes
+            .get_mut(&NodeId(1))
+            .unwrap()
+            .core
+            .as_mut()
+            .unwrap();
+        let commit = core.commit_index();
+        core.compact(commit).expect("compact");
+    }
+    // More live entries above the base.
+    assert!(sim.propose(NodeId(1), 144));
+    sim.drain();
+    // Node 3 returns from its stale (empty) disk and the leader heartbeats:
+    // next_index falls below the base → InstallSnapshot → adoption → the
+    // live suffix streams on top.
+    sim.restart(NodeId(3), false);
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.check_all();
+    let n3 = sim.nodes[&NodeId(3)].core.as_ref().unwrap();
+    assert!(
+        n3.base().index >= keyed_index,
+        "straggler did not adopt the snapshot (base {:?})",
+        n3.base()
+    );
+    assert!(
+        sim.nodes[&NodeId(3)].applied >= keyed_index,
+        "adopted state not applied"
+    );
+    // And the adopted claims dedupe correctly if node 3 ever leads: its
+    // claims table knows key 141.
+    assert!(
+        sim.committed_at.values().any(|e| e.payload == 144),
+        "post-snapshot suffix replicated"
+    );
+}
+
+/// A stale InstallSnapshot (at or below the follower's commit) must never
+/// regress state — acked with the current durable frontier, not adopted.
+#[test]
+fn stale_snapshot_never_regresses() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 109, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    for p in [151, 152] {
+        assert!(sim.propose(NodeId(1), p));
+    }
+    sim.drain();
+    let n2_commit_before = sim.nodes[&NodeId(2)].core.as_ref().unwrap().commit_index();
+    let n2_last_before = sim.nodes[&NodeId(2)].core.as_ref().unwrap().last_index();
+    // Forge a STALE snapshot (frontier at index 1 only) from the leader.
+    let effects = sim
+        .nodes
+        .get_mut(&NodeId(2))
+        .unwrap()
+        .core
+        .as_mut()
+        .unwrap()
+        .on_message(
+            NodeId(1),
+            Message::InstallSnapshot {
+                term: Term(1),
+                leader: NodeId(1),
+                snapshot: Snapshot {
+                    last: LogPosition { term: 1, index: 1 },
+                    claims: BTreeMap::new(),
+                },
+            },
+            false,
+        );
+    sim.run_effects(NodeId(2), effects, None);
+    sim.drain();
+    let n2 = sim.nodes[&NodeId(2)].core.as_ref().unwrap();
+    assert_eq!(n2.commit_index(), n2_commit_before, "commit regressed");
+    assert_eq!(n2.last_index(), n2_last_before, "log regressed");
+    sim.check_all();
+}
+
+/// Chaos with compaction in the schedule: leaders compact through commit at
+/// random; stragglers recover via snapshot; keyed retries keep both claim
+/// properties; every invariant holds.
+#[test]
+fn seeded_soak_with_compaction_invariants_hold() {
+    for seed in 1..12u64 {
+        let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, seed, false);
+        let keys = [61u64, 62, 63];
+        for _step in 0..300 {
+            let ids = [NodeId(1), NodeId(2), NodeId(3)];
+            match sim.rng.next() % 14 {
+                0 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_some() {
+                        sim.timeout(id, None);
+                    }
+                }
+                1 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_some() && sim.rng.chance(12) {
+                        sim.crash(id);
+                    }
+                }
+                2 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_none() && sim.nodes[&id].quarantined.is_none() {
+                        sim.restart(id, false);
+                    }
+                }
+                3 | 4 => {
+                    let id = ids[sim.rng.pick(3)];
+                    let k = keys[sim.rng.pick(keys.len())];
+                    if let Some(KeyedProposal::DuplicateCommitted { .. }) =
+                        sim.propose_keyed(id, k, k * 10)
+                    {
+                        assert!(sim.keyed_committed.contains_key(&k));
+                    }
+                }
+                5 => {
+                    // Random compaction through commit on any live node —
+                    // the persist of the compacted shape rides the next
+                    // staged persist; force one via a heartbeat after.
+                    let id = ids[sim.rng.pick(3)];
+                    if let Some(core) = sim.nodes.get_mut(&id).unwrap().core.as_mut() {
+                        let c = core.commit_index();
+                        let _ = core.compact(c);
+                    }
+                    sim.heartbeat(id);
+                }
+                6 => {
+                    let id = ids[sim.rng.pick(3)];
+                    sim.heartbeat(id);
+                }
+                7 => {
                     let a = ids[sim.rng.pick(3)];
                     let b = ids[sim.rng.pick(3)];
                     if a != b {

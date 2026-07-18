@@ -38,6 +38,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use super::replica::LogEntry;
 use super::types::{ClusterId, HardState, LogPosition, NodeId, Term};
 
@@ -216,7 +218,7 @@ pub fn inspect(
 
 /// Rejoin protocol messages. Carried on the same transport as replica
 /// messages; the sim wraps both.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RejoinMessage {
     /// Quarantined node → (believed) leader.
     Request { node: NodeId },

@@ -51,6 +51,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::{Deserialize, Serialize};
+
 use super::types::{quorum, HardState, LogPosition, NodeId, Term};
 
 /// Payload reserved for the no-op entry a new leader appends on election —
@@ -69,7 +71,7 @@ pub const NOOP_PAYLOAD: u64 = 0;
 /// dedupes the retry (claim never lost after commit); a tentative keyed
 /// entry truncates WITH its claim, so the retry re-executes cleanly (no
 /// settled-claim-without-effect ghost).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogEntry {
     pub term: Term,
     pub payload: u64,
@@ -122,7 +124,7 @@ pub enum KeyedProposal {
 ///   P1-9's rule made structural: compaction may never create a window
 ///   where a GC'd claim can be replayed, so the claims RIDE the snapshot
 ///   exactly as they rode the entries.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub last: LogPosition,
     pub claims: BTreeMap<u64, u64>,
@@ -133,7 +135,7 @@ pub struct Snapshot {
 }
 
 /// Wire messages for the replica layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Message {
     /// Liveness probe before a real election (never changes voter state).
     PreVoteRequest {

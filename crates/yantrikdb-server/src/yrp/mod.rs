@@ -28,6 +28,7 @@
 //!    index)` election freshness, never a watermark.
 
 pub mod bootstrap;
+pub mod driver;
 pub mod replica;
 pub mod types;
 

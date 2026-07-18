@@ -223,6 +223,15 @@ pub struct ReplicaCore {
     votes: BTreeSet<NodeId>,
     pre_votes: BTreeSet<NodeId>,
     use_pre_vote: bool,
+    /// Phase B (RFC 028 §3/§4): voters that are WITNESSES — they vote in
+    /// elections (control quorum) but never count toward commit durability
+    /// (data quorum) and never campaign. With commits requiring a quorum of
+    /// DATA voters, a witness-assisted election can only ever elect a data
+    /// node that holds every committed entry: in the 2-data+witness
+    /// topology, every commit is on BOTH data nodes, so "stale data node +
+    /// witness elect a leader" (the design review's P1-7 scenario) can lose
+    /// only tentative entries — never acknowledged-durable ones.
+    witnesses: BTreeSet<NodeId>,
 }
 
 impl ReplicaCore {
@@ -261,7 +270,20 @@ impl ReplicaCore {
             votes: BTreeSet::new(),
             pre_votes: BTreeSet::new(),
             use_pre_vote,
+            witnesses: BTreeSet::new(),
         }
+    }
+
+    /// Declare the witness subset of the voter set (driver/config-time).
+    /// Witnesses vote, never campaign, never count toward commits, and a
+    /// witness id must be in `voters` (it IS a voter for elections).
+    pub fn set_witnesses(&mut self, witnesses: BTreeSet<NodeId>) {
+        debug_assert!(witnesses.iter().all(|w| self.voters.contains(w)));
+        debug_assert!(
+            !witnesses.contains(&self.id) || self.role == Role::Follower,
+            "a witness cannot already hold a data role"
+        );
+        self.witnesses = witnesses;
     }
 
     // ── accessors ──────────────────────────────────────────────────
@@ -492,6 +514,12 @@ impl ReplicaCore {
     // ── events ─────────────────────────────────────────────────────
 
     pub fn on_election_timeout(&mut self) -> Vec<Effect> {
+        // A witness never campaigns: it has no data to lead with. It still
+        // VOTES (its on_vote_request path is untouched), which is its whole
+        // job — the tiebreak in even-data-node topologies.
+        if self.witnesses.contains(&self.id) {
+            return Vec::new();
+        }
         match self.role {
             Role::Leader => Vec::new(),
             _ if self.use_pre_vote => self.start_pre_vote(),
@@ -930,12 +958,14 @@ impl ReplicaCore {
         let mut n = self.log_len();
         while n > self.commit {
             if self.entry(n).map(|e| e.term) == Some(cur) {
-                let acks = self
-                    .voters
-                    .iter()
+                // Data quorum ONLY: witnesses never count toward commit
+                // durability (RFC 028 §4 — a witness ack is a position
+                // ack, not a data copy).
+                let data_voters = || self.voters.iter().filter(|v| !self.witnesses.contains(v));
+                let acks = data_voters()
                     .filter(|v| self.match_index.get(v).copied().unwrap_or(0) >= n)
                     .count();
-                if acks >= quorum(self.voters.len()) {
+                if acks >= quorum(data_voters().count()) {
                     self.commit = n;
                     let advanced = Effect::CommitAdvanced { to: n };
                     self.hold_or(advanced, out);

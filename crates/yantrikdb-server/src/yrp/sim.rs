@@ -107,6 +107,8 @@ struct Sim {
     /// Phase B claim ledger: key → (index, payload) of the ONE committed
     /// entry ever allowed to hold it (never-double-write, globally).
     keyed_committed: BTreeMap<u64, (u64, u64)>,
+    /// Witness subset (applied to every constructed core, incl. restarts).
+    witnesses: BTreeSet<NodeId>,
 }
 
 impl Sim {
@@ -154,7 +156,29 @@ impl Sim {
             preserves: Vec::new(),
             alarms: Vec::new(),
             keyed_committed: BTreeMap::new(),
+            witnesses: BTreeSet::new(),
         }
+    }
+
+    /// Witness-topology constructor: `witness_ids` vote but never count
+    /// toward commits and never campaign. Applied to every core this sim
+    /// ever constructs (initial, restart, bootstrap, rejoin-adopt).
+    fn new_with_witnesses(
+        node_logs: &[(u64, Vec<LogEntry>)],
+        start_term: u64,
+        seed: u64,
+        use_pre_vote: bool,
+        witness_ids: &[u64],
+    ) -> Self {
+        let mut sim = Sim::new(node_logs, start_term, seed, use_pre_vote);
+        sim.witnesses = witness_ids.iter().map(|w| NodeId(*w)).collect();
+        let w = sim.witnesses.clone();
+        for node in sim.nodes.values_mut() {
+            if let Some(core) = node.core.as_mut() {
+                core.set_witnesses(w.clone());
+            }
+        }
+        sim
     }
 
     /// Run one node's effect batch. `crash_at` injects a crash at a persist
@@ -321,7 +345,9 @@ impl Sim {
         };
         match inspect(CLUSTER, &recovered) {
             BootDecision::Healthy { hard, log } => {
-                node.core = Some(ReplicaCore::new(id, voters, hard, log, false));
+                let mut core = ReplicaCore::new(id, voters, hard, log, false);
+                core.set_witnesses(self.witnesses.clone());
+                node.core = Some(core);
                 node.quarantined = None;
                 node.applied = node.applied.min(node.disk_log.len() as u64);
             }
@@ -375,7 +401,9 @@ impl Sim {
                     node.torn_hard = false;
                     node.corrupt_log = false;
                     node.quarantined = None;
-                    node.core = Some(ReplicaCore::new(id, voters, hard, log, false));
+                    let mut core = ReplicaCore::new(id, voters, hard, log, false);
+                    core.set_witnesses(self.witnesses.clone());
+                    node.core = Some(core);
                     node.applied = node.applied.min(node.disk_log.len() as u64);
                 }
             }
@@ -388,13 +416,15 @@ impl Sim {
         // ONLY what was durably persisted survives. `applied` is clamped to
         // the durable log (the state machine re-applies deterministically;
         // the I2 ledger verifies every re-application is identical).
-        node.core = Some(ReplicaCore::new(
+        let mut core = ReplicaCore::new(
             id,
             voters,
             node.disk_hard,
             node.disk_log.clone(),
             use_pre_vote,
-        ));
+        );
+        core.set_witnesses(self.witnesses.clone());
+        node.core = Some(core);
         node.quarantined = None;
         node.applied = node.applied.min(node.disk_log.len() as u64);
     }
@@ -1488,5 +1518,203 @@ fn seeded_soak_keyed_claims_hold_under_chaos() {
         sim.cut.clear();
         sim.drain();
         sim.check_all(); // includes the per-key single-commit ledger
+    }
+}
+
+// ── tests: Phase B — witness data-quorum split (RFC 028 §3/§4) ─────
+
+/// A witness never campaigns: election timeouts on it are inert.
+#[test]
+fn witness_never_campaigns() {
+    let mut sim = Sim::new_with_witnesses(
+        &[(1, empty()), (2, empty()), (3, empty())],
+        0,
+        83,
+        false,
+        &[3],
+    );
+    for _ in 0..5 {
+        sim.timeout(NodeId(3), None);
+        sim.drain();
+    }
+    assert!(
+        sim.leaders.is_empty(),
+        "witness campaigned: {:?}",
+        sim.leaders
+    );
+    assert_eq!(sim.nodes[&NodeId(3)].disk_hard.current_term, Term(0));
+}
+
+/// The witness's vote elects a leader (control quorum counts it), but its
+/// append acks never count toward commits: with the only other DATA node
+/// partitioned away, commits stall — a write acked only by leader+witness
+/// is NOT durable, exactly as §4 promises.
+#[test]
+fn witness_votes_but_never_counts_for_commit() {
+    let mut sim = Sim::new_with_witnesses(
+        &[(1, empty()), (2, empty()), (3, empty())],
+        0,
+        89,
+        false,
+        &[3],
+    );
+    // Election succeeds with the witness's vote (leader 1 + witness 3).
+    sim.cut.insert((NodeId(1), NodeId(2))); // data peer unreachable
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    assert!(
+        sim.leaders.values().any(|s| s.contains(&NodeId(1))),
+        "witness vote must elect: {:?}",
+        sim.leaders
+    );
+    // But nothing can COMMIT: data quorum is 2-of-2 data nodes and node 2
+    // is unreachable. The no-op and this proposal stay tentative.
+    assert!(sim.propose(NodeId(1), 901));
+    sim.drain();
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    assert_eq!(
+        sim.nodes[&NodeId(1)].applied,
+        0,
+        "commit advanced on witness acks alone"
+    );
+    assert!(sim.committed_at.is_empty());
+    // Heal the data peer: the suffix commits.
+    sim.cut.clear();
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.check_all();
+    assert!(
+        sim.committed_at.values().any(|e| e.payload == 901),
+        "entry must commit once the data quorum is reachable"
+    );
+}
+
+/// The P1-7 answer: crash the data leader; the surviving data node +
+/// witness elect a new leader (control quorum 2/3) — and NO committed
+/// entry can be lost, because data-quorum commits guaranteed every
+/// committed entry was already on BOTH data nodes.
+#[test]
+fn witness_tiebreak_preserves_all_committed_entries() {
+    let mut sim = Sim::new_with_witnesses(
+        &[(1, empty()), (2, empty()), (3, empty())],
+        0,
+        97,
+        false,
+        &[3],
+    );
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    for p in [911, 912, 913] {
+        assert!(sim.propose(NodeId(1), p));
+    }
+    sim.drain();
+    let committed_before: Vec<u64> = sim.committed_at.values().map(|e| e.payload).collect();
+    assert!(committed_before.contains(&913), "writes committed");
+    // Data leader dies. Survivors: one data node + the witness.
+    sim.crash(NodeId(1));
+    sim.timeout(NodeId(2), None);
+    sim.drain();
+    assert!(
+        sim.leaders.values().any(|s| s.contains(&NodeId(2))),
+        "surviving data node must win with the witness vote"
+    );
+    // The honest tradeoff of 2-data+witness (documented per the design
+    // review's P1-7 ask): the topology survives a data-node failure for
+    // ELECTIONS and committed-data safety — but NOT for write
+    // availability. A new write cannot commit on witness acks alone.
+    sim.propose(NodeId(2), 914);
+    sim.drain();
+    assert!(
+        !sim.committed_at.values().any(|e| e.payload == 914),
+        "write committed without a data quorum"
+    );
+    sim.check_all(); // committed-prefix integrity: nothing lost
+    for p in [911, 912, 913] {
+        assert!(
+            sim.committed_at.values().any(|e| e.payload == p),
+            "committed entry {p} lost across witness-assisted failover"
+        );
+    }
+    // The crashed data node returns: write availability resumes and the
+    // stalled entry commits.
+    sim.restart(NodeId(1), false);
+    sim.heartbeat(NodeId(2));
+    sim.drain();
+    sim.heartbeat(NodeId(2));
+    sim.drain();
+    sim.check_all();
+    assert!(
+        sim.committed_at.values().any(|e| e.payload == 914),
+        "stalled write must commit once the data quorum returns"
+    );
+}
+
+/// Keyed-claims chaos on the witness topology: same properties as the
+/// 3-data soak, with the witness voting through every election and never
+/// polluting the data quorum.
+#[test]
+fn seeded_soak_witness_topology_keyed_claims_hold() {
+    for seed in 1..10u64 {
+        let mut sim = Sim::new_with_witnesses(
+            &[(1, empty()), (2, empty()), (3, empty())],
+            0,
+            seed,
+            false,
+            &[3],
+        );
+        let keys = [55u64, 66];
+        for _step in 0..250 {
+            let ids = [NodeId(1), NodeId(2), NodeId(3)];
+            match sim.rng.next() % 12 {
+                0 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_some() {
+                        sim.timeout(id, None);
+                    }
+                }
+                1 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_some() && sim.rng.chance(10) {
+                        sim.crash(id);
+                    }
+                }
+                2 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_none() && sim.nodes[&id].quarantined.is_none() {
+                        sim.restart(id, false);
+                    }
+                }
+                3 | 4 => {
+                    let id = ids[sim.rng.pick(3)];
+                    let k = keys[sim.rng.pick(keys.len())];
+                    if let Some(KeyedProposal::DuplicateCommitted { .. }) =
+                        sim.propose_keyed(id, k, k * 10)
+                    {
+                        assert!(sim.keyed_committed.contains_key(&k));
+                    }
+                }
+                5 => {
+                    let id = ids[sim.rng.pick(3)];
+                    sim.heartbeat(id);
+                }
+                6 => {
+                    let a = ids[sim.rng.pick(3)];
+                    let b = ids[sim.rng.pick(3)];
+                    if a != b {
+                        let kk = (a.min(b), a.max(b));
+                        if !sim.cut.remove(&kk) {
+                            sim.cut.insert(kk);
+                        }
+                    }
+                }
+                _ => {
+                    sim.deliver_one(None);
+                }
+            }
+        }
+        sim.cut.clear();
+        sim.drain();
+        sim.check_all();
     }
 }

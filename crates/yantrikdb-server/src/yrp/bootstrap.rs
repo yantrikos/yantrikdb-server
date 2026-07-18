@@ -385,10 +385,7 @@ mod tests {
                 current_term: Term(3),
                 voted_for: Some(NodeId(2)),
             }),
-            log: Some(vec![LogEntry {
-                term: Term(3),
-                payload: 42,
-            }]),
+            log: Some(vec![LogEntry::unkeyed(Term(3), 42)]),
             commit_marker: 1,
             integrity: Integrity {
                 hard_state_verified: true,

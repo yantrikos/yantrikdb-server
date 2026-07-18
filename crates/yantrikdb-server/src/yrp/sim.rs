@@ -27,7 +27,7 @@ use super::bootstrap::{
     inspect, BootDecision, BootstrapEffect, Integrity, QuarantineReason, QuarantinedNode,
     RecoveredState, RejoinMessage,
 };
-use super::replica::{Effect, LogEntry, Message, ReplicaCore, Role, NOOP_PAYLOAD};
+use super::replica::{Effect, KeyedProposal, LogEntry, Message, ReplicaCore, Role, NOOP_PAYLOAD};
 use super::types::{ClusterId, HardState, LogPosition, NodeId, Term};
 
 /// The sim's cluster identity (all healthy nodes share it; alien-state tests
@@ -104,6 +104,9 @@ struct Sim {
     /// Gate A #4 ledgers: preserve-before-resync + corruption alarms.
     preserves: Vec<NodeId>,
     alarms: Vec<(NodeId, Vec<QuarantineReason>)>,
+    /// Phase B claim ledger: key → (index, payload) of the ONE committed
+    /// entry ever allowed to hold it (never-double-write, globally).
+    keyed_committed: BTreeMap<u64, (u64, u64)>,
 }
 
 impl Sim {
@@ -150,6 +153,7 @@ impl Sim {
             freshness_at_grant: Vec::new(),
             preserves: Vec::new(),
             alarms: Vec::new(),
+            keyed_committed: BTreeMap::new(),
         }
     }
 
@@ -223,6 +227,19 @@ impl Sim {
                     "AUTHORITY SAFETY VIOLATED: index {i} applied with two \
                      different entries ({prev:?} vs {e:?}, second by {id:?})"
                 ),
+            }
+            // Phase B never-double-write: one committed entry per key, ever.
+            if let Some(k) = e.key {
+                match self.keyed_committed.get(&k) {
+                    None => {
+                        self.keyed_committed.insert(k, (i, e.payload));
+                    }
+                    Some((pi, pp)) => assert_eq!(
+                        (*pi, *pp),
+                        (i, e.payload),
+                        "CLAIM DOUBLE-WRITE: key {k} committed at two places"
+                    ),
+                }
             }
         }
         let node = self.nodes.get_mut(&id).unwrap();
@@ -546,10 +563,7 @@ fn entries(terms: &[u64]) -> Vec<LogEntry> {
     terms
         .iter()
         .enumerate()
-        .map(|(i, t)| LogEntry {
-            term: Term(*t),
-            payload: 1000 + i as u64, // distinct, non-NOOP payloads
-        })
+        .map(|(i, t)| LogEntry::unkeyed(Term(*t), 1000 + i as u64))
         .collect()
 }
 
@@ -1237,4 +1251,242 @@ fn codex_duplicate_response_does_not_regress_next_index() {
     );
     sim.drain();
     sim.check_all();
+}
+
+// ── tests: Phase B — claim-in-log (RFC 028 §7) ─────────────────────
+
+impl Sim {
+    /// Sim driver for a keyed proposal: runs any effects, returns the
+    /// outcome. Mirrors what the production API layer will do.
+    fn propose_keyed(&mut self, id: NodeId, key: u64, payload: u64) -> Option<KeyedProposal> {
+        let core = self.nodes.get_mut(&id).unwrap().core.as_mut()?;
+        let outcome = core.propose_keyed(key, payload)?;
+        if let KeyedProposal::Appended { effects, index } = outcome {
+            self.run_effects(id, effects, None);
+            return Some(KeyedProposal::Appended {
+                index,
+                effects: Vec::new(), // consumed
+            });
+        }
+        Some(outcome)
+    }
+}
+
+/// Trading scenario (a): "fill committed but claim lost" must be
+/// impossible — a committed keyed entry SURVIVES failover, and the retry
+/// dedupes against it instead of re-executing. (The claim rides in the
+/// entry; committing the entry commits the claim.)
+#[test]
+fn keyed_commit_survives_failover_and_dedupes_retry() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 71, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    // Keyed write commits cluster-wide; the CLIENT never learns (leader
+    // crashes before responding).
+    let out = sim.propose_keyed(NodeId(1), 77, 707).expect("leader");
+    let orig_index = match out {
+        KeyedProposal::Appended { index, .. } => index,
+        other => panic!("expected fresh append, got {other:?}"),
+    };
+    sim.drain();
+    assert!(
+        sim.keyed_committed.contains_key(&77),
+        "keyed entry committed"
+    );
+    sim.crash(NodeId(1));
+    // Failover; the new leader commits the prior suffix by implication.
+    sim.timeout(NodeId(2), None);
+    sim.drain();
+    // The client retries the SAME keyed request on the new leader.
+    let retry = sim.propose_keyed(NodeId(2), 77, 707).expect("new leader");
+    match retry {
+        KeyedProposal::DuplicateCommitted { index } => {
+            assert_eq!(index, orig_index, "dedupe must return the ORIGINAL entry");
+        }
+        other => panic!("retry after committed failover must dedupe, got {other:?}"),
+    }
+    sim.check_all();
+    assert_eq!(
+        sim.keyed_committed.get(&77).map(|(i, p)| (*i, *p)),
+        Some((orig_index, 707)),
+        "exactly one committed effect for the key"
+    );
+}
+
+/// Trading scenario (b): "claim settled but commit rolled back" must be
+/// impossible — a TENTATIVE keyed entry truncates WITH its claim, so the
+/// retry re-executes cleanly on the new leader and exactly one effect
+/// commits, ever.
+#[test]
+fn keyed_tentative_loss_reexecutes_cleanly() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 73, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    // Partition the leader; its keyed write stays tentative forever.
+    sim.cut.insert((NodeId(1), NodeId(2)));
+    sim.cut.insert((NodeId(1), NodeId(3)));
+    let out = sim.propose_keyed(NodeId(1), 88, 808).expect("stale leader");
+    assert!(matches!(out, KeyedProposal::Appended { .. }));
+    sim.drain();
+    assert!(
+        !sim.keyed_committed.contains_key(&88),
+        "tentative keyed write must not commit without a quorum"
+    );
+    // Majority elects a new leader; the client retries there.
+    sim.timeout(NodeId(2), None);
+    sim.drain();
+    let retry = sim.propose_keyed(NodeId(2), 88, 808).expect("new leader");
+    let new_index = match retry {
+        KeyedProposal::Appended { index, .. } => index,
+        other => panic!("retry after tentative loss must re-execute, got {other:?}"),
+    };
+    sim.drain();
+    // Heal: the stale leader truncates its tentative entry AND its claim,
+    // then adopts the canonical keyed entry.
+    sim.cut.clear();
+    sim.heartbeat(NodeId(2));
+    sim.drain();
+    sim.heartbeat(NodeId(2));
+    sim.drain();
+    sim.check_all();
+    assert_eq!(
+        sim.keyed_committed.get(&88).map(|(i, p)| (*i, *p)),
+        Some((new_index, 808)),
+        "exactly one committed effect, at the canonical index"
+    );
+    // The healed ex-leader holds the canonical keyed entry.
+    let n1 = sim.nodes[&NodeId(1)].core.as_ref().unwrap();
+    assert_eq!(
+        n1.entry(new_index).and_then(|e| e.key),
+        Some(88),
+        "healed node holds the canonical keyed entry"
+    );
+}
+
+/// Same-leader retry semantics: a pending claim parks (no second append,
+/// no premature success); after commit the same retry dedupes.
+#[test]
+fn keyed_retry_pending_parks_then_dedupes() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 79, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    // Propose but do NOT deliver anything yet: claim is pending.
+    let core = sim
+        .nodes
+        .get_mut(&NodeId(1))
+        .unwrap()
+        .core
+        .as_mut()
+        .unwrap();
+    let out1 = core.propose_keyed(99, 909).unwrap();
+    let index = match &out1 {
+        KeyedProposal::Appended { index, .. } => *index,
+        other => panic!("fresh append expected, got {other:?}"),
+    };
+    // Immediate retry while pending: parked, same index, NO new entry.
+    let out2 = core.propose_keyed(99, 909).unwrap();
+    assert_eq!(out2, KeyedProposal::DuplicatePending { index });
+    let log_len_before = core.log_len();
+    // Run the pending effects (persist + fan-out) to completion.
+    if let KeyedProposal::Appended { effects, .. } = out1 {
+        sim.run_effects(NodeId(1), effects, None);
+    }
+    sim.drain();
+    let core = sim
+        .nodes
+        .get_mut(&NodeId(1))
+        .unwrap()
+        .core
+        .as_mut()
+        .unwrap();
+    assert_eq!(
+        core.log_len(),
+        log_len_before,
+        "no second append for the key"
+    );
+    let out3 = core.propose_keyed(99, 909).unwrap();
+    assert_eq!(out3, KeyedProposal::DuplicateCommitted { index });
+    sim.check_all();
+}
+
+/// The mcp wire-contract property + its twin, under chaos: keyed retries
+/// fired at random nodes across elections, partitions, crashes,
+/// torn-quarantines and rejoins never double-commit a key (ledger-asserted
+/// on every commit) — and every DuplicateCommitted answer refers to a key
+/// with exactly one committed effect (success implies durable effect).
+#[test]
+fn seeded_soak_keyed_claims_hold_under_chaos() {
+    for seed in 1..15u64 {
+        let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, seed, false);
+        let keys = [11u64, 22, 33, 44];
+        for _step in 0..300 {
+            let ids = [NodeId(1), NodeId(2), NodeId(3)];
+            match sim.rng.next() % 14 {
+                0 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_some() {
+                        sim.timeout(id, None);
+                    }
+                }
+                1 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_some() && sim.rng.chance(10) {
+                        if sim.rng.chance(40) {
+                            sim.crash_torn(id);
+                        } else {
+                            sim.crash(id);
+                        }
+                    }
+                }
+                2 => {
+                    let id = ids[sim.rng.pick(3)];
+                    if sim.nodes[&id].core.is_none() && sim.nodes[&id].quarantined.is_none() {
+                        sim.restart_via_bootstrap(id);
+                    }
+                }
+                3 | 4 => {
+                    // The property under test: keyed retries at random nodes.
+                    let id = ids[sim.rng.pick(3)];
+                    let k = keys[sim.rng.pick(keys.len())];
+                    if let Some(KeyedProposal::DuplicateCommitted { .. }) =
+                        sim.propose_keyed(id, k, k * 10)
+                    {
+                        // Success answer implies a durable effect exists.
+                        assert!(
+                            sim.keyed_committed.contains_key(&k),
+                            "DuplicateCommitted for key {k} without a \
+                             committed effect (ghost success)"
+                        );
+                    }
+                }
+                5 => {
+                    let id = ids[sim.rng.pick(3)];
+                    sim.heartbeat(id);
+                }
+                6 => {
+                    let id = ids[sim.rng.pick(3)];
+                    let hint = ids[sim.rng.pick(3)];
+                    if id != hint {
+                        sim.tick_rejoin(id, hint);
+                    }
+                }
+                7 => {
+                    let a = ids[sim.rng.pick(3)];
+                    let b = ids[sim.rng.pick(3)];
+                    if a != b {
+                        let kk = (a.min(b), a.max(b));
+                        if !sim.cut.remove(&kk) {
+                            sim.cut.insert(kk);
+                        }
+                    }
+                }
+                _ => {
+                    sim.deliver_one(None);
+                }
+            }
+        }
+        sim.cut.clear();
+        sim.drain();
+        sim.check_all(); // includes the per-key single-commit ledger
+    }
 }

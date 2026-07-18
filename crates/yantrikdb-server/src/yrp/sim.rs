@@ -81,6 +81,7 @@ struct SimNode {
     disk_base: LogPosition,
     disk_log: Vec<LogEntry>,
     disk_claims: BTreeMap<u64, u64>,
+    disk_active: u32,
     torn_hard: bool,
     corrupt_log: bool,
     /// Highest index this node has applied (ledgered via CommitAdvanced).
@@ -113,6 +114,8 @@ struct Sim {
     keyed_committed: BTreeMap<u64, (u64, u64)>,
     /// Witness subset (applied to every constructed core, incl. restarts).
     witnesses: BTreeSet<NodeId>,
+    /// Capability-incompatibility alarms: (leader, stalled peer).
+    incompat_alarms: Vec<(NodeId, NodeId)>,
 }
 
 impl Sim {
@@ -146,6 +149,7 @@ impl Sim {
                         .enumerate()
                         .filter_map(|(i, e)| e.key.map(|k| (k, i as u64 + 1)))
                         .collect(),
+                    disk_active: 0,
                     torn_hard: false,
                     corrupt_log: false,
                     applied: 0,
@@ -167,6 +171,7 @@ impl Sim {
             alarms: Vec::new(),
             keyed_committed: BTreeMap::new(),
             witnesses: BTreeSet::new(),
+            incompat_alarms: Vec::new(),
         }
     }
 
@@ -202,6 +207,7 @@ impl Sim {
                     base,
                     log,
                     claims,
+                    active,
                 } => {
                     if crash_at == Some(0) {
                         self.crash(id);
@@ -213,6 +219,7 @@ impl Sim {
                         node.disk_base = base;
                         node.disk_log = log;
                         node.disk_claims = claims;
+                        node.disk_active = active;
                     }
                     if crash_at == Some(1) {
                         self.crash(id);
@@ -247,6 +254,9 @@ impl Sim {
                     // Checkpoint adoption: applied state arrives wholesale.
                     let node = self.nodes.get_mut(&id).unwrap();
                     node.applied = node.applied.max(last_index);
+                }
+                Effect::PeerIncompatible { peer } => {
+                    self.incompat_alarms.push((id, peer));
                 }
             }
         }
@@ -299,6 +309,7 @@ impl Sim {
                 term,
                 candidate,
                 last_log,
+                ..
             } => {
                 self.advertised.insert((*candidate, *term), *last_log);
             }
@@ -359,13 +370,14 @@ impl Sim {
             cluster_id: Some(CLUSTER),
             hard: Some(node.disk_hard),
             log: Some(node.disk_log.clone()),
+            active: node.disk_active,
             commit_marker: 0, // volatile in A2's model
             integrity: Integrity {
                 hard_state_verified: !node.torn_hard,
                 log_verified: !node.corrupt_log,
             },
         };
-        match inspect(CLUSTER, &recovered) {
+        match inspect(CLUSTER, u32::MAX, &recovered) {
             BootDecision::Healthy { hard, log } => {
                 let mut core = ReplicaCore::new(id, voters, hard, log, false);
                 core.set_witnesses(self.witnesses.clone());
@@ -411,6 +423,7 @@ impl Sim {
                     base,
                     log,
                     claims,
+                    active,
                 } => {
                     // Persist the adopted snapshot, clear damage flags, and
                     // resume as a live follower. Quarantine ends here only.
@@ -425,11 +438,13 @@ impl Sim {
                     node.disk_base = base;
                     node.disk_log = log.clone();
                     node.disk_claims = claims.clone();
+                    node.disk_active = active;
                     node.torn_hard = false;
                     node.corrupt_log = false;
                     node.quarantined = None;
-                    let mut core =
-                        ReplicaCore::new_from_durable(id, voters, hard, base, log, claims, false);
+                    let mut core = ReplicaCore::new_from_durable(
+                        id, voters, hard, base, log, claims, active, false,
+                    );
                     core.set_witnesses(w);
                     node.core = Some(core);
                     node.applied = node
@@ -454,6 +469,7 @@ impl Sim {
             node.disk_base,
             node.disk_log.clone(),
             node.disk_claims.clone(),
+            node.disk_active,
             use_pre_vote,
         );
         core.set_witnesses(self.witnesses.clone());
@@ -525,7 +541,7 @@ impl Sim {
                     .get(&m.to)
                     .and_then(|n| n.core.as_ref())
                     .and_then(|c| c.rejoin_grant());
-                if let Some((term, base, log, claims, commit)) = grant {
+                if let Some((term, base, log, claims, active, commit)) = grant {
                     self.net.push_back(InFlight {
                         from: m.to,
                         to: asker,
@@ -535,6 +551,7 @@ impl Sim {
                             base,
                             log,
                             claims,
+                            active,
                             commit,
                             // The leader's snapshot is live state: verified.
                             verified: true,
@@ -725,6 +742,7 @@ fn r2_crash_after_persist_binds_the_restarted_node() {
                 term: Term(1),
                 candidate: NodeId(2),
                 last_log: LogPosition::ZERO,
+                supported: u32::MAX,
             },
             false,
         );
@@ -1275,6 +1293,7 @@ fn codex_duplicate_response_does_not_regress_next_index() {
                 term: Term(1),
                 success: true,
                 last_index: 1,
+                unsupported: false,
             },
             false,
         );
@@ -1303,6 +1322,7 @@ fn codex_duplicate_response_does_not_regress_next_index() {
                 term: Term(1),
                 success: false,
                 last_index: 0,
+                unsupported: false,
             },
             false,
         );
@@ -1784,13 +1804,14 @@ fn compaction_preserves_claims_no_replay_window() {
             .as_mut()
             .unwrap();
         let commit = core.commit_index();
-        let snap = core.compact(commit).expect("compaction through commit");
+        let (snap, effects) = core.compact(commit).expect("compaction through commit");
         assert_eq!(snap.last.index, commit);
         assert!(
             snap.claims.contains_key(&121),
             "claim must ride the snapshot"
         );
         assert!(core.entry(orig_index).is_none(), "entry compacted away");
+        sim.run_effects(NodeId(1), effects, None);
     }
     // The retry after compaction: STILL a dedupe hit at the original index.
     let retry = sim.propose_keyed(NodeId(1), 121, 1210).expect("leader");
@@ -1864,7 +1885,8 @@ fn straggler_beyond_gc_recovers_via_snapshot_install() {
             .as_mut()
             .unwrap();
         let commit = core.commit_index();
-        core.compact(commit).expect("compact");
+        let (_snap, effects) = core.compact(commit).expect("compact");
+        sim.run_effects(NodeId(1), effects, None);
     }
     // More live entries above the base.
     assert!(sim.propose(NodeId(1), 144));
@@ -1925,6 +1947,7 @@ fn stale_snapshot_never_regresses() {
                 snapshot: Snapshot {
                     last: LogPosition { term: 1, index: 1 },
                     claims: BTreeMap::new(),
+                    active: 0,
                 },
             },
             false,
@@ -1980,9 +2003,18 @@ fn seeded_soak_with_compaction_invariants_hold() {
                     // the persist of the compacted shape rides the next
                     // staged persist; force one via a heartbeat after.
                     let id = ids[sim.rng.pick(3)];
-                    if let Some(core) = sim.nodes.get_mut(&id).unwrap().core.as_mut() {
-                        let c = core.commit_index();
-                        let _ = core.compact(c);
+                    let effects = sim
+                        .nodes
+                        .get_mut(&id)
+                        .unwrap()
+                        .core
+                        .as_mut()
+                        .and_then(|core| {
+                            let c = core.commit_index();
+                            core.compact(c).map(|(_s, e)| e)
+                        });
+                    if let Some(effects) = effects {
+                        sim.run_effects(id, effects, None);
                     }
                     sim.heartbeat(id);
                 }
@@ -2009,4 +2041,237 @@ fn seeded_soak_with_compaction_invariants_hold() {
         sim.drain();
         sim.check_all();
     }
+}
+
+// ── tests: Phase B — capability activation (RFC 028 §3, codex-reviewed) ──
+
+impl Sim {
+    fn set_node_caps(&mut self, id: NodeId, supported: u32) {
+        if let Some(core) = self.nodes.get_mut(&id).unwrap().core.as_mut() {
+            core.set_supported(supported);
+        }
+    }
+    fn feed_peer_caps(&mut self, id: NodeId, caps: &[(u64, u32)]) {
+        if let Some(core) = self.nodes.get_mut(&id).unwrap().core.as_mut() {
+            core.set_peer_caps(caps.iter().map(|(n, c)| (NodeId(*n), *c)).collect());
+        }
+    }
+    fn propose_activation(&mut self, id: NodeId, bits: u32) -> bool {
+        let Some(core) = self.nodes.get_mut(&id).unwrap().core.as_mut() else {
+            return false;
+        };
+        match core.propose_activation(bits) {
+            Some(effects) => {
+                self.run_effects(id, effects, None);
+                true
+            }
+            None => false,
+        }
+    }
+    /// Boot path with an explicit supported set (the downgrade case).
+    fn restart_via_bootstrap_with(&mut self, id: NodeId, supported: u32) {
+        let voters = self.voters.clone();
+        let w = self.witnesses.clone();
+        let node = self.nodes.get_mut(&id).unwrap();
+        let recovered = RecoveredState {
+            cluster_id: Some(CLUSTER),
+            hard: Some(node.disk_hard),
+            log: Some(node.disk_log.clone()),
+            active: node.disk_active,
+            commit_marker: 0,
+            integrity: Integrity {
+                hard_state_verified: !node.torn_hard,
+                log_verified: !node.corrupt_log,
+            },
+        };
+        match inspect(CLUSTER, supported, &recovered) {
+            BootDecision::Healthy { hard, log } => {
+                let mut core = ReplicaCore::new(id, voters, hard, log, false);
+                core.set_witnesses(w);
+                core.set_supported(supported);
+                node.core = Some(core);
+                node.quarantined = None;
+            }
+            BootDecision::Quarantine { reasons, term_hint } => {
+                node.core = None;
+                node.quarantined = Some(QuarantinedNode::new(id, CLUSTER, reasons, term_hint));
+            }
+        }
+    }
+}
+
+const CAP_X: u32 = 0b0001;
+
+/// Activation is refused unless EVERY voter advertises support — a leader
+/// with an incomplete or missing peer_caps map cannot activate.
+#[test]
+fn activation_requires_unanimous_support() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 113, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    // No peer_caps fed at all → refused.
+    assert!(!sim.propose_activation(NodeId(1), CAP_X));
+    // One peer lacks the bit → refused.
+    sim.feed_peer_caps(NodeId(1), &[(2, CAP_X), (3, 0)]);
+    assert!(!sim.propose_activation(NodeId(1), CAP_X));
+    // Unanimous → accepted.
+    sim.feed_peer_caps(NodeId(1), &[(2, CAP_X), (3, CAP_X)]);
+    assert!(sim.propose_activation(NodeId(1), CAP_X));
+    sim.drain();
+    sim.check_all();
+    for id in [1u64, 2, 3] {
+        assert_eq!(
+            sim.nodes[&NodeId(id)].core.as_ref().unwrap().active_caps(),
+            CAP_X,
+            "node {id} did not activate on commit"
+        );
+    }
+}
+
+/// Codex F1/F7: a stale advertisement lets the activation commit on the
+/// supporting quorum, but the incompatible follower NACKs (its log never
+/// contains the entry), the leader STALLS sends to it (no retransmit
+/// storm) and raises exactly one PeerIncompatible alarm — visible
+/// degradation, not silent.
+#[test]
+fn stale_advertisement_stalls_incompatible_follower_visibly() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 127, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    // Node 3 actually lacks CAP_X, but the leader was told otherwise.
+    sim.set_node_caps(NodeId(3), 0);
+    sim.feed_peer_caps(NodeId(1), &[(2, CAP_X), (3, CAP_X)]);
+    assert!(sim.propose_activation(NodeId(1), CAP_X));
+    sim.drain();
+    // Commit proceeded via the supporting data quorum {1,2}.
+    assert_eq!(
+        sim.nodes[&NodeId(1)].core.as_ref().unwrap().active_caps(),
+        CAP_X
+    );
+    // The incompatible follower never stored it and got alarmed exactly once.
+    let n3 = sim.nodes[&NodeId(3)].core.as_ref().unwrap();
+    assert_eq!(n3.active_caps(), 0);
+    assert_eq!(
+        sim.incompat_alarms,
+        vec![(NodeId(1), NodeId(3))],
+        "expected exactly one alarm"
+    );
+    // Retries don't storm: further heartbeats add no new alarms.
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    assert_eq!(sim.incompat_alarms.len(), 1);
+    // And the incompatible node can never become leader: its log lacks the
+    // committed activation (freshness) AND voters gate on capability.
+    sim.crash(NodeId(1));
+    sim.timeout(NodeId(3), None);
+    sim.drain();
+    assert!(
+        sim.leaders.values().all(|s| !s.contains(&NodeId(3))),
+        "incompatible node won an election"
+    );
+    sim.check_all();
+}
+
+/// Codex F2 (the sharpest catch): a node retaining an activation entry in
+/// its suffix — committed or not — that its (downgraded) binary cannot
+/// support must QUARANTINE at boot, not pass an active-only check and
+/// win elections on freshness.
+#[test]
+fn codex_f2_downgraded_node_with_retained_activation_quarantines() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 131, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    sim.feed_peer_caps(NodeId(1), &[(2, CAP_X), (3, CAP_X)]);
+    assert!(sim.propose_activation(NodeId(1), CAP_X));
+    sim.drain();
+    // Node 2 restarts with a DOWNGRADED binary lacking CAP_X. Its disk
+    // retains the activation entry (and disk_active records it).
+    sim.crash(NodeId(2));
+    sim.restart_via_bootstrap_with(NodeId(2), 0);
+    let n2 = &sim.nodes[&NodeId(2)];
+    let q = n2
+        .quarantined
+        .as_ref()
+        .expect("downgraded node must quarantine");
+    assert!(q
+        .reasons()
+        .contains(&QuarantineReason::UnsupportedCapability));
+    // Re-upgrade: boots healthy again.
+    sim.restart_via_bootstrap_with(NodeId(2), CAP_X);
+    assert!(sim.nodes[&NodeId(2)].quarantined.is_none());
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.check_all();
+}
+
+/// Codex F6: a snapshot whose active set exceeds the receiver's supported
+/// set is refused before any state mutation (quarantine-bypass closed).
+#[test]
+fn unsupported_snapshot_install_refused() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 137, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    sim.set_node_caps(NodeId(2), 0); // node 2 supports nothing extra
+    let before_base = sim.nodes[&NodeId(2)].core.as_ref().unwrap().base();
+    let effects = sim
+        .nodes
+        .get_mut(&NodeId(2))
+        .unwrap()
+        .core
+        .as_mut()
+        .unwrap()
+        .on_message(
+            NodeId(1),
+            Message::InstallSnapshot {
+                term: Term(1),
+                leader: NodeId(1),
+                snapshot: Snapshot {
+                    last: LogPosition { term: 1, index: 9 },
+                    claims: BTreeMap::new(),
+                    active: CAP_X,
+                },
+            },
+            false,
+        );
+    sim.run_effects(NodeId(2), effects, None);
+    let n2 = sim.nodes[&NodeId(2)].core.as_ref().unwrap();
+    assert_eq!(n2.base(), before_base, "unsupported snapshot was adopted");
+    assert_eq!(n2.active_caps(), 0);
+    sim.check_all();
+}
+
+/// Activation survives compaction + restart: active rides Persist and the
+/// snapshot, so a restarted node knows its capabilities without replaying
+/// compacted entries.
+#[test]
+fn activation_survives_compaction_and_restart() {
+    let mut sim = Sim::new(&[(1, empty()), (2, empty()), (3, empty())], 0, 139, false);
+    sim.timeout(NodeId(1), None);
+    sim.drain();
+    sim.feed_peer_caps(NodeId(1), &[(2, CAP_X), (3, CAP_X)]);
+    assert!(sim.propose_activation(NodeId(1), CAP_X));
+    sim.drain();
+    // Compact the activation entry away, then bounce the leader.
+    {
+        let core = sim
+            .nodes
+            .get_mut(&NodeId(1))
+            .unwrap()
+            .core
+            .as_mut()
+            .unwrap();
+        let c = core.commit_index();
+        let (_snap, effects) = core.compact(c).expect("compact");
+        sim.run_effects(NodeId(1), effects, None);
+    }
+    sim.heartbeat(NodeId(1));
+    sim.drain();
+    sim.crash(NodeId(1));
+    sim.restart(NodeId(1), false);
+    assert_eq!(
+        sim.nodes[&NodeId(1)].core.as_ref().unwrap().active_caps(),
+        CAP_X,
+        "active lost across compaction + restart"
+    );
+    sim.check_all();
 }

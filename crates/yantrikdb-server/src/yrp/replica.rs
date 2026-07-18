@@ -57,13 +57,55 @@ use super::types::{quorum, HardState, LogPosition, NodeId, Term};
 /// the §5.4.2 mechanism that lets prior-term entries commit by implication.
 pub const NOOP_PAYLOAD: u64 = 0;
 
-/// One canonical-log entry. `payload` is an opaque identifier in Phase A1b;
-/// the memory-native oplog op (embedding bytes, provenance, HLC) binds here
-/// in Phase B.
+/// One canonical-log entry. `payload` is an opaque identifier until the
+/// memory-native oplog op (embedding bytes, provenance, HLC) binds here.
+///
+/// `key` (Phase B, RFC 028 §7): the idempotency claim, carried IN the entry
+/// so claim and op are one atomic replicated unit — committed together,
+/// truncated together, snapshot together. This is what makes the two
+/// crash-scenario halves (pre-registered by the trading workspace, who
+/// converged on the identical invariant independently) hold by
+/// construction: a committed-but-unacked keyed entry survives failover and
+/// dedupes the retry (claim never lost after commit); a tentative keyed
+/// entry truncates WITH its claim, so the retry re-executes cleanly (no
+/// settled-claim-without-effect ghost).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogEntry {
     pub term: Term,
     pub payload: u64,
+    pub key: Option<u64>,
+}
+
+impl LogEntry {
+    /// Unkeyed entry (the common case; also every pre-Phase-B test entry).
+    pub fn unkeyed(term: Term, payload: u64) -> Self {
+        Self {
+            term,
+            payload,
+            key: None,
+        }
+    }
+}
+
+/// Outcome of a keyed proposal at the leader's origin ingress (RFC 028 §7:
+/// claims are checked at ORIGIN, carried in the log, and never re-gated at
+/// apply).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyedProposal {
+    /// Fresh claim: the entry was appended at `index`; effects carry the
+    /// persist + fan-out. The caller acks its client only when the commit
+    /// index reaches `index` (quorum-durable tier — never before).
+    Appended { index: u64, effects: Vec<Effect> },
+    /// The key already claims `index`, and that entry is COMMITTED: a
+    /// dedupe hit. The caller answers the retry with the ORIGINAL entry's
+    /// outcome immediately — this is the "committed but client never
+    /// learned" failover half.
+    DuplicateCommitted { index: u64 },
+    /// The key claims `index` but that entry is NOT yet committed (in
+    /// flight, possibly from this same client's earlier attempt). The
+    /// caller waits for commit (or its loss by truncation) — it must NOT
+    /// append a second entry, and must NOT report success yet.
+    DuplicatePending { index: u64 },
 }
 
 /// Wire messages for the replica layer.
@@ -173,6 +215,11 @@ pub struct ReplicaCore {
     match_index: BTreeMap<NodeId, u64>,
     /// Leader bookkeeping: next index to send per voter.
     next_index: BTreeMap<NodeId, u64>,
+    /// Phase B (RFC 028 §7): key → log index of the entry claiming it.
+    /// Maintained incrementally on append/truncate and rebuilt from the
+    /// restored log at construction — the claims table IS the log's keyed
+    /// entries, never a separate source of truth.
+    claims: BTreeMap<u64, u64>,
     votes: BTreeSet<NodeId>,
     pre_votes: BTreeSet<NodeId>,
     use_pre_vote: bool,
@@ -192,6 +239,13 @@ impl ReplicaCore {
     ) -> Self {
         debug_assert!(voters.contains(&id), "a core's own id must be a voter");
         let durable_len = restored_log.len() as u64;
+        // Rebuild the claims table from the restored log: claims live IN
+        // keyed entries, so a crash can never separate a claim from its op.
+        let claims = restored_log
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| e.key.map(|k| (k, i as u64 + 1)))
+            .collect();
         Self {
             id,
             voters,
@@ -203,6 +257,7 @@ impl ReplicaCore {
             commit: 0,
             match_index: BTreeMap::new(),
             next_index: BTreeMap::new(),
+            claims,
             votes: BTreeSet::new(),
             pre_votes: BTreeSet::new(),
             use_pre_vote,
@@ -338,11 +393,47 @@ impl ReplicaCore {
             return None;
         }
         let term = self.current_term();
-        self.log.push(LogEntry { term, payload });
+        self.log.push(LogEntry::unkeyed(term, payload));
         let mut out = vec![self.stage_log()];
         // Fan out eagerly; success responses confirm durable acceptance.
         self.append_effects_for_followers(&mut out);
         Some(out)
+    }
+
+    /// Keyed proposal (Phase B, RFC 028 §7). The claim check happens HERE —
+    /// origin ingress — against the claims table rebuilt from the log:
+    /// a key claimed by a committed entry dedupes; a key claimed by an
+    /// in-flight entry parks the retry (no second append, no premature
+    /// success); a fresh key appends an entry that CARRIES the claim.
+    /// Leader-only; `None` = redirect to the leader.
+    ///
+    /// The caller's ack contract (the pre-registered twin properties):
+    /// report success for `index` only once `commit_index() >= index`
+    /// (never-success-without-durable-effect), and never append the same
+    /// key twice while it is claimed (never-double-write). Both halves are
+    /// proven in the simulator across failover/quarantine interleavings.
+    pub fn propose_keyed(&mut self, key: u64, payload: u64) -> Option<KeyedProposal> {
+        if self.role != Role::Leader {
+            return None;
+        }
+        if let Some(&index) = self.claims.get(&key) {
+            return Some(if index <= self.commit {
+                KeyedProposal::DuplicateCommitted { index }
+            } else {
+                KeyedProposal::DuplicatePending { index }
+            });
+        }
+        let term = self.current_term();
+        self.log.push(LogEntry {
+            term,
+            payload,
+            key: Some(key),
+        });
+        let index = self.log_len();
+        self.claims.insert(key, index);
+        let mut effects = vec![self.stage_log()];
+        self.append_effects_for_followers(&mut effects);
+        Some(KeyedProposal::Appended { index, effects })
     }
 
     /// Leader heartbeat tick (driver timer): send each follower its next
@@ -715,12 +806,28 @@ impl ReplicaCore {
                         }
                         return effects;
                     }
+                    // The claim dies WITH its truncated entry (the atomic
+                    // unit, RFC 028 §7): remove keys owned by the removed
+                    // suffix so a re-proposed key can claim afresh.
+                    for removed in self.log.iter().skip(idx as usize - 1) {
+                        if let Some(k) = removed.key {
+                            if self.claims.get(&k) >= Some(&idx) {
+                                self.claims.remove(&k);
+                            }
+                        }
+                    }
                     self.log.truncate(idx as usize - 1);
                     self.log.push(*e);
+                    if let Some(k) = e.key {
+                        self.claims.insert(k, idx);
+                    }
                     changed = true;
                 }
                 None => {
                     self.log.push(*e);
+                    if let Some(k) = e.key {
+                        self.claims.insert(k, idx);
+                    }
                     changed = true;
                 }
             }
@@ -848,10 +955,7 @@ impl ReplicaCore {
         out.push(Effect::BecameLeader { term });
         // §5.4.2 no-op: gives the new term an entry so the prior-term
         // suffix can commit by implication.
-        self.log.push(LogEntry {
-            term,
-            payload: NOOP_PAYLOAD,
-        });
+        self.log.push(LogEntry::unkeyed(term, NOOP_PAYLOAD));
         out.push(self.stage_log());
         self.append_effects_for_followers(out);
     }
@@ -862,10 +966,7 @@ impl ReplicaCore {
         debug_assert!(self.pending.is_some());
         self.init_leader_state(term);
         self.hold(Effect::BecameLeader { term });
-        self.log.push(LogEntry {
-            term,
-            payload: NOOP_PAYLOAD,
-        });
+        self.log.push(LogEntry::unkeyed(term, NOOP_PAYLOAD));
         let _ = self.stage_log(); // coalesces into the pending persist
     }
 

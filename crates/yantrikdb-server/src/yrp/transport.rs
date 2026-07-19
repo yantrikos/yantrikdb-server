@@ -20,6 +20,12 @@
 //! (votes, rejoin) is small and non-cumulative: a bounded queue; overflow
 //! drops the NEWEST (the protocol re-times-out and re-sends).
 //!
+//! Snapshot starvation (codex F4) cannot occur here: the slot is
+//! PER-PEER and the leader re-decides each peer's message TYPE from
+//! `next_index` on every heartbeat — a straggler below the compaction
+//! base gets `InstallSnapshot` again each tick, so its slot re-fills
+//! with the snapshot, never with a heartbeat that would displace it.
+//!
 //! Codex F4 also suggested term-generation tags to cancel stale sends on
 //! step-down. With a latest-only slot the stale window is exactly ONE
 //! in-flight message, which the receiver term-fences — the tag machinery

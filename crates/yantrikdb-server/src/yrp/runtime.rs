@@ -527,28 +527,64 @@ impl MutationCommitter for YrpCommitter {
                 ),
             });
         }
-        let op_id = opts.op_id.unwrap_or_else(OpId::new_random);
-        let op = YrpOp {
-            tenant_id,
-            op_id,
-            mutation,
-            idempotency_key: None,
-        };
-        let key = claim_key_for_op(tenant_id, &op_id);
-        let outcome = self
-            .handle
-            .propose_and_wait(key, &op)
-            .await
-            .map_err(|e| propose_err_to_commit(e, op_id))?;
-        let applied_at = SystemTime::UNIX_EPOCH
-            + Duration::from_micros(outcome.applied_at_unix_micros.max(0) as u64);
-        Ok(CommitReceipt {
-            op_id,
-            tenant_id,
-            term: outcome.term,
-            log_index: outcome.tenant_log_index,
-            committed_at: applied_at,
-            applied_at: Some(applied_at),
+        // Codex F2: refuse unimplemented grammar variants BEFORE they
+        // enter the replicated log. Without this, an entry with no apply
+        // path would still advance the marker and ack the client with no
+        // engine effect (same pre-check RaftCommitter performs).
+        if !mutation.is_implemented() {
+            return Err(CommitError::NotYetImplemented {
+                variant: mutation.variant_name(),
+                planned_rfc: mutation.planned_rfc(),
+            });
+        }
+        // Codex F3: the u64 claim digest can collide across DISTINCT
+        // op_ids (birthday bound over server-generated ids). A collision
+        // would dedupe a fresh write against an unrelated entry — detect
+        // it by verifying the outcome's op_id, and resolve by retrying
+        // under a fresh op_id (fresh id → fresh digest). Bounded: two
+        // independent collisions in a row are beyond astronomical.
+        let mut op_id = opts.op_id.unwrap_or_else(OpId::new_random);
+        for attempt in 0..3 {
+            let op = YrpOp {
+                tenant_id,
+                op_id,
+                mutation: mutation.clone(),
+                idempotency_key: None,
+            };
+            let key = claim_key_for_op(tenant_id, &op_id);
+            let outcome = self
+                .handle
+                .propose_and_wait(key, &op)
+                .await
+                .map_err(|e| propose_err_to_commit(e, op_id))?;
+            if outcome.op_id != op_id.to_string() {
+                tracing::warn!(
+                    attempt,
+                    "yrp unkeyed claim digest collision detected; retrying with fresh op_id"
+                );
+                // A caller-supplied op_id cannot be silently swapped —
+                // its retry contract is the whole point of supplying it.
+                if opts.op_id.is_some() {
+                    return Err(CommitError::StorageFailure {
+                        message: "claim digest collision on caller-supplied op_id".into(),
+                    });
+                }
+                op_id = OpId::new_random();
+                continue;
+            }
+            let applied_at = SystemTime::UNIX_EPOCH
+                + Duration::from_micros(outcome.applied_at_unix_micros.max(0) as u64);
+            return Ok(CommitReceipt {
+                op_id,
+                tenant_id,
+                term: outcome.term,
+                log_index: outcome.tenant_log_index,
+                committed_at: applied_at,
+                applied_at: Some(applied_at),
+            });
+        }
+        Err(CommitError::StorageFailure {
+            message: "repeated claim digest collisions (unkeyed)".into(),
         })
     }
 

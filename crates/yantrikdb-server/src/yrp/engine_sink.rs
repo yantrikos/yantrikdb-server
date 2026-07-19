@@ -25,6 +25,13 @@
 //!
 //! Client acks release only on the marker (the driver's `Applied` event),
 //! so "success reported, effect missing" is structurally impossible.
+//!
+//! Known residual (codex F1, shared with the openraft baseline): the
+//! marker certifies effects that were durable in the ENGINE's own store
+//! at step-2 commit time. Destruction of an engine DB with a surviving
+//! marker is data-corruption territory — the Phase C engine-checkpoint
+//! manifest (content hash + frontier binding) is the planned detection,
+//! feeding the same quarantine posture as replication-state damage.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};

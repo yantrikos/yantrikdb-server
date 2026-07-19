@@ -65,6 +65,7 @@ async fn post_json(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
+    let _serial = crate::yrp::testkit::serial_guard().await;
     let _ = tracing_subscriber::fmt()
         .with_env_filter("yantrikdb=info")
         .with_test_writer()

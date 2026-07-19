@@ -17,6 +17,17 @@ use crate::yrp::runtime::{spawn as spawn_yrp, YrpCommitter, YrpHandle, YrpPeer, 
 pub const SECRET: &str = "yrp-chaos-cluster-secret";
 pub const TENANT: &str = "yrpchaos";
 
+/// Serializes the heavy multi-node tests (chaos, 2-node cluster, the
+/// 3-driver channel test). Each spawns real servers with 10-20ms tick
+/// timers; running several such multi-threaded runtimes concurrently in
+/// one test binary starves tickers and flakes elections. Hold this for
+/// the duration of any multi-node test.
+pub async fn serial_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+    LOCK.lock().await
+}
+
 /// Per-cluster tuning shared by every node.
 #[derive(Debug, Clone, Copy)]
 pub struct ClusterSpec {

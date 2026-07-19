@@ -37,6 +37,7 @@ async fn assert_dedupes_everywhere(
 /// the restarted node catches up live.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kill_leader_under_keyed_load_never_double_writes() {
+    let _serial = serial_guard().await;
     let (nodes, _tmps) = spawn_cluster(3, ClusterSpec::default()).await;
     let mut live: Vec<TestNode> = nodes;
     let emb = embedding(0.3);
@@ -96,6 +97,7 @@ async fn kill_leader_under_keyed_load_never_double_writes() {
 /// leaks.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn partition_and_heal_fences_stale_leader() {
+    let _serial = serial_guard().await;
     let (nodes, _tmps) = spawn_cluster(3, ClusterSpec::default()).await;
     let emb = embedding(1.1);
     let all: Vec<&TestNode> = nodes.iter().collect();
@@ -185,6 +187,7 @@ async fn partition_and_heal_fences_stale_leader() {
 /// follower — the CT 141 posture, live end to end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn torn_state_boots_quarantined_then_rejoins_via_grant() {
+    let _serial = serial_guard().await;
     let (nodes, _tmps) = spawn_cluster(3, ClusterSpec::default()).await;
     let emb = embedding(2.2);
     let all: Vec<&TestNode> = nodes.iter().collect();
@@ -255,6 +258,7 @@ async fn torn_state_boots_quarantined_then_rejoins_via_grant() {
 /// a COMPACTED entry still dedupes (P1-9, live on real HTTP).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn straggler_beyond_gc_catches_up_and_compacted_claims_survive() {
+    let _serial = serial_guard().await;
     let (nodes, _tmps) = spawn_cluster(
         3,
         ClusterSpec {

@@ -781,6 +781,7 @@ mod tests {
     /// a node from disk and verify durable state survived.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn three_driver_cluster_elects_applies_dedupes_and_restarts() {
+        let _serial = crate::yrp::testkit::serial_guard().await;
         let tmp = tempfile::TempDir::new().unwrap();
         let router = Arc::new(Mutex::new(BTreeMap::new()));
         let mut nodes = BTreeMap::new();
@@ -790,9 +791,14 @@ mod tests {
         }
 
         let (leader, out) = propose_until_settled(&nodes, 42, 4242).await;
+        // Applied on the first attempt, or Duplicate when the first
+        // attempt's 500ms reply window expired mid-apply and the retry
+        // deduped against it — BOTH are the keyed contract holding
+        // (exactly-once, ambiguous attempts resolved by retry). Only a
+        // fresh double-apply would be a failure, asserted below.
         let index = match out {
-            ProposeOutcome::Applied { index } => index,
-            other => panic!("expected Applied, got {other:?}"),
+            ProposeOutcome::Applied { index } | ProposeOutcome::Duplicate { index } => index,
+            ProposeOutcome::Retry => unreachable!("propose_until_settled never returns Retry"),
         };
 
         // Same key retried on the leader dedupes to the same index.

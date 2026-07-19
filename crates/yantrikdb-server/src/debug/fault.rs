@@ -228,8 +228,8 @@ impl FaultRegistry {
                     to_peer,
                     probability,
                 } => {
-                    let matches = from_peer.map_or(true, |f| f == from)
-                        && to_peer.map_or(true, |t| t == to);
+                    let matches =
+                        from_peer.map_or(true, |f| f == from) && to_peer.map_or(true, |t| t == to);
                     if matches && rand::Rng::gen::<f64>(&mut rand::thread_rng()) < *probability {
                         return FaultVerdict::Drop;
                     }
@@ -240,8 +240,8 @@ impl FaultRegistry {
                     min_ms,
                     max_ms,
                 } => {
-                    let matches = from_peer.map_or(true, |f| f == from)
-                        && to_peer.map_or(true, |t| t == to);
+                    let matches =
+                        from_peer.map_or(true, |f| f == from) && to_peer.map_or(true, |t| t == to);
                     if matches {
                         let hi = (*max_ms).max(*min_ms);
                         let picked = if hi == *min_ms {

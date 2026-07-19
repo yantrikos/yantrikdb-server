@@ -37,6 +37,10 @@ pub mod transport;
 pub mod types;
 
 #[cfg(test)]
+mod chaos_test;
+#[cfg(test)]
 mod cluster_test;
 #[cfg(test)]
 mod sim;
+#[cfg(test)]
+mod testkit;

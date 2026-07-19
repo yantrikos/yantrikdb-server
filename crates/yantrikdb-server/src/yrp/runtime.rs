@@ -118,6 +118,11 @@ impl YrpHandle {
         super::transport::deliver(&self.owner_tx, from, msg)
     }
 
+    /// Graceful stop of whichever loop owns the funnel (tests/shutdown).
+    pub fn shutdown(&self) {
+        let _ = self.owner_tx.send(DriverEvent::Shutdown);
+    }
+
     /// Current leader hint as (id, http addr).
     pub fn leader_hint(&self) -> (Option<u64>, Option<String>) {
         let leader = self.status.borrow().leader.map(|n| n.0);
@@ -205,6 +210,21 @@ pub fn spawn(
     }
     if !cfg.peers.iter().any(|p| p.node_id == cfg.node_id) {
         return Err("[yrp] peers must include this node's node_id".into());
+    }
+
+    if cfg.compact_after_entries > 0 {
+        // Codex chaos-review P0, made loud: until Phase C ships
+        // engine-checkpoint transfer, a straggler that falls below the
+        // compaction base receives a PROTOCOL snapshot (claims/active)
+        // but no engine backfill for the compacted range. Enabling
+        // compaction is a chaos-test/operator-experiment posture, not a
+        // production default.
+        tracing::warn!(
+            compact_after = cfg.compact_after_entries,
+            "[yrp] log compaction ENABLED: beyond-GC stragglers rejoin without \
+             engine backfill for the compacted range until Phase C \
+             (engine-checkpoint transfer). Not recommended in production."
+        );
     }
 
     let me = NodeId(cfg.node_id);

@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use super::bootstrap::RejoinMessage;
-use super::replica::{Effect, KeyedProposal, LogEntry, Message, ReplicaCore, Role};
+use super::replica::{Effect, KeyedProposal, LogEntry, Message, Payload, ReplicaCore, Role};
 use super::types::{HardState, LogPosition, NodeId};
 
 /// Everything the core needs durably persisted, as one atomic unit — the
@@ -118,7 +118,7 @@ pub enum DriverEvent {
     },
     Propose {
         key: u64,
-        payload: u64,
+        payload: Payload,
         reply: oneshot::Sender<ProposeOutcome>,
     },
     /// Apply worker reports the highest contiguous durably-applied index.
@@ -352,7 +352,7 @@ impl YrpDriver {
     fn on_propose(
         &mut self,
         key: u64,
-        payload: u64,
+        payload: Payload,
         reply: oneshot::Sender<ProposeOutcome>,
     ) -> Option<DriverExit> {
         match self.core.propose_keyed(key, payload) {
@@ -457,7 +457,7 @@ impl YrpDriver {
                     let from = self.dispatched + 1;
                     for i in from..=to {
                         if let Some(e) = self.core.entry(i) {
-                            let _ = self.apply_tx.send((i, *e));
+                            let _ = self.apply_tx.send((i, e.clone()));
                         }
                     }
                     self.dispatched = self.dispatched.max(to);
@@ -561,7 +561,7 @@ mod tests {
     impl ApplySink for TestSink {
         fn apply(&mut self, index: u64, entry: &LogEntry) -> Result<(), String> {
             let mut s = self.0.lock().unwrap();
-            s.applied.push((index, *entry));
+            s.applied.push((index, entry.clone()));
             s.durable_applied = index;
             Ok(())
         }
@@ -633,7 +633,7 @@ mod tests {
                 let (otx, orx) = oneshot::channel();
                 let _ = n.tx.send(DriverEvent::Propose {
                     key,
-                    payload,
+                    payload: Payload::Test(payload),
                     reply: otx,
                 });
                 if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_millis(500), orx).await {
@@ -674,7 +674,7 @@ mod tests {
         let (otx, orx) = oneshot::channel();
         let _ = nodes[&leader].tx.send(DriverEvent::Propose {
             key: 42,
-            payload: 4242,
+            payload: Payload::Test(4242),
             reply: otx,
         });
         match tokio::time::timeout(Duration::from_secs(2), orx)

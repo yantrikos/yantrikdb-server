@@ -433,7 +433,10 @@ mod tests {
                 current_term: Term(3),
                 voted_for: Some(NodeId(2)),
             }),
-            log: Some(vec![LogEntry::unkeyed(Term(3), 42)]),
+            log: Some(vec![LogEntry::unkeyed(
+                Term(3),
+                super::super::replica::Payload::Test(42),
+            )]),
             active: 0,
             commit_marker: 1,
             integrity: Integrity {

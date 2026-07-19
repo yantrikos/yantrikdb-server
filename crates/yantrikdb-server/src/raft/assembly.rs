@@ -56,6 +56,12 @@ pub enum RaftClusterMode {
     /// 3+ node cluster via openraft. Requires fully-specified
     /// `cluster_tls` (or `dev_mode = true` with a warning log).
     OpenRaft,
+    /// RFC 028: YantrikDB's native replication protocol. Configured by
+    /// the `[yrp]` section; boots through `yrp::bootstrap::inspect`
+    /// (quarantine-not-wedge) and drives writes through
+    /// `yrp::runtime::YrpCommitter`. Slated to replace `OpenRaft`
+    /// (Phase D removes the openraft path).
+    Yrp,
 }
 
 impl Default for RaftClusterMode {

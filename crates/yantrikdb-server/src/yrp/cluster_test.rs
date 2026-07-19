@@ -1,0 +1,361 @@
+//! 2-node YRP cluster over REAL localhost HTTP — the runtime-integration
+//! slice's acceptance test (handoff steps 7+8).
+//!
+//! Two full servers (production router, real engines, real tempdir
+//! stores) form a 2-voter cluster whose YRP wire messages ride actual
+//! `POST /v1/yrp/msg` requests. Asserts, in order:
+//!
+//! 1. An election happens over HTTP and exactly one node leads.
+//! 2. A keyed `/v1/remember` on the leader commits and answers `{rid}`.
+//! 3. The identical retry answers the SAME rid (silent HIT) — the
+//!    issue-#58 contract, now replicated (the historical 501 is gone).
+//! 4. Same key + different text answers the 200 conflict shape with the
+//!    original rid.
+//! 5. **nuron's live-recall axis**: the FOLLOWER's live `/v1/recall`
+//!    (in-memory index, not just SQLite) surfaces the replicated memory —
+//!    the durable-green/live-red failure class.
+//! 6. An unkeyed write also replicates (the YrpCommitter funnel).
+//! 7. A write against the follower is refused with the leader's address
+//!    (503 via check_writable) — never silently accepted.
+
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+use serde_json::{json, Value};
+
+use crate::auth::ControlDbAuthProvider;
+use crate::control::ControlDb;
+use crate::server::AppState;
+use crate::yrp::runtime::{spawn as spawn_yrp, YrpCommitter, YrpPeer, YrpRuntimeConfig};
+
+struct Node {
+    state: Arc<AppState>,
+    handle: Arc<crate::yrp::runtime::YrpHandle>,
+    base: String,
+    token: String,
+    _tmp: tempfile::TempDir,
+}
+
+const CLUSTER_ID: u64 = 7;
+const SECRET: &str = "yrp-test-cluster-secret";
+const TENANT: &str = "yrpcluster";
+
+async fn post_json(
+    base: &str,
+    token: &str,
+    path: &str,
+    body: &Value,
+) -> (reqwest::StatusCode, Value) {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let resp = client
+        .post(format!("{base}{path}"))
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await
+        .expect("request");
+    let status = resp.status();
+    let text = resp.text().await.expect("body");
+    let val: Value = serde_json::from_str(&text).unwrap_or(json!({ "raw": text }));
+    (status, val)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("yantrikdb=info")
+        .with_test_writer()
+        .try_init();
+    // Pre-bind both HTTP ports so the peer lists can be exchanged before
+    // either server exists.
+    let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let p1 = l1.local_addr().unwrap().port();
+    let p2 = l2.local_addr().unwrap().port();
+    drop((l1, l2));
+    let peers = vec![
+        YrpPeer {
+            node_id: 1,
+            addr: format!("http://127.0.0.1:{p1}"),
+            witness: false,
+        },
+        YrpPeer {
+            node_id: 2,
+            addr: format!("http://127.0.0.1:{p2}"),
+            witness: false,
+        },
+    ];
+
+    // Spawn both nodes on the advertised ports.
+    let mut n1 = spawn_node_on(1, peers.clone(), p1).await;
+    let mut n2 = spawn_node_on(2, peers.clone(), p2).await;
+
+    // 1. Election over real HTTP.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    let leader_is_n1 = loop {
+        if n1.handle.is_leader() {
+            break true;
+        }
+        if n2.handle.is_leader() {
+            break false;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no leader elected over HTTP transport"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    if !leader_is_n1 {
+        std::mem::swap(&mut n1, &mut n2);
+    }
+    let (leader, follower) = (n1, n2);
+
+    // The engine's default embedding dim is 384 — synthesize two
+    // distinct full-width vectors.
+    let embedding = |seed: f32| -> Value {
+        json!((0..384)
+            .map(|i| (i as f32).mul_add(0.001, seed).sin())
+            .collect::<Vec<f32>>())
+    };
+    let emb1 = embedding(0.25);
+    let emb2 = embedding(2.5);
+
+    // 2. Keyed write on the leader — the endpoint that returned 501 in
+    // cluster mode until this slice.
+    let body1 = json!({
+        "text": "yrp replicated memory alpha",
+        "embedding": emb1,
+        "idempotency_key": "yrp-e2e-key-1",
+    });
+    let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body1).await;
+    assert_eq!(st, reqwest::StatusCode::OK, "keyed write failed: {resp}");
+    let rid = resp["rid"].as_str().expect("rid in response").to_string();
+
+    // 3. Silent HIT: identical retry answers the ORIGINAL rid.
+    let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body1).await;
+    assert_eq!(st, reqwest::StatusCode::OK);
+    assert_eq!(
+        resp["rid"].as_str(),
+        Some(rid.as_str()),
+        "retry must dedupe to the original rid"
+    );
+    assert!(
+        resp.get("idempotency_conflict").is_none(),
+        "same text must be a silent HIT: {resp}"
+    );
+
+    // 4. Same key + different text → 200 conflict shape, original rid.
+    let body_conflict = json!({
+        "text": "DIFFERENT text under the same key",
+        "embedding": emb1,
+        "idempotency_key": "yrp-e2e-key-1",
+    });
+    let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body_conflict).await;
+    assert_eq!(st, reqwest::StatusCode::OK);
+    assert_eq!(
+        resp["idempotency_conflict"],
+        json!(true),
+        "conflict shape expected: {resp}"
+    );
+    assert_eq!(resp["stored"], json!(false));
+    assert_eq!(resp["rid"].as_str(), Some(rid.as_str()));
+
+    // 5. Follower LIVE recall reflects the replicated apply (nuron's
+    // live-recall axis: in-memory index coherence, not just durable rows).
+    wait_for_recall(&follower, &emb1, &rid).await;
+
+    // 6. Unkeyed writes ride the same replicated funnel (YrpCommitter).
+    let body_unkeyed = json!({
+        "text": "yrp replicated memory beta (unkeyed)",
+        "embedding": emb2,
+    });
+    let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body_unkeyed).await;
+    assert_eq!(st, reqwest::StatusCode::OK, "unkeyed write failed: {resp}");
+    let rid2 = resp["rid"].as_str().expect("rid").to_string();
+    assert!(
+        resp["log_index"].as_u64().is_some(),
+        "receipt log_index missing: {resp}"
+    );
+    wait_for_recall(&follower, &emb2, &rid2).await;
+
+    // 7. Writes against the follower are refused with leader info — the
+    // key is never silently dropped and never double-executed.
+    let (st, resp) = post_json(&follower.base, &follower.token, "/v1/remember", &body1).await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        "follower must refuse writes: {resp}"
+    );
+
+    // Health surfaces yrp mode honestly on both nodes.
+    let client = reqwest::Client::new();
+    for n in [&leader, &follower] {
+        let v: Value = client
+            .get(format!("{}/v1/health", n.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(v["cluster"]["raft_mode"], json!("yrp"), "health: {v}");
+    }
+    assert_eq!(
+        leader.state.yrp.as_ref().unwrap().quarantine_reasons(),
+        None
+    );
+}
+
+async fn spawn_node_on(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node {
+    let node = spawn_node_inner(node_id, peers, port).await;
+    // Readiness: health answers.
+    let client = reqwest::Client::new();
+    for _ in 0..100 {
+        if client
+            .get(format!("{}/v1/health", node.base))
+            .send()
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    node
+}
+
+/// One full server: control DB (same db name on every node → same
+/// tenant id, which rides inside replicated ops), real engine pool,
+/// the yrp-mode assembly mirroring main.rs's Yrp arm, and the
+/// PRODUCTION router served on the pre-advertised port.
+async fn spawn_node_inner(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let mut cfg = crate::config::ServerConfig::default();
+    cfg.server.data_dir = data_dir.clone();
+
+    let control = ControlDb::open(&data_dir.join("control.db")).expect("control db");
+    let raw_token = crate::auth::generate_token();
+    let token_hash = crate::auth::hash_token(&raw_token);
+    let db_id = control.create_database(TENANT, TENANT).expect("create db");
+    control
+        .create_token(&token_hash, db_id, "yrp-test")
+        .expect("create token");
+    let control = Arc::new(Mutex::new(control));
+
+    let pool = Arc::new(crate::tenant_pool::TenantPool::new(&cfg, None, None));
+    let workers = crate::background::WorkerRegistry::new(
+        &cfg.background,
+        &cfg.maintenance,
+        crate::background::WriteAcceptanceGate::standalone(),
+    );
+    let admission = crate::admission::AdmissionState::new(Default::default());
+    let jobs: Arc<dyn crate::jobs::JobQueue> =
+        Arc::new(crate::jobs::LocalSqliteJobQueue::open_in_memory().expect("jobs"));
+    let auth_provider: Arc<dyn crate::auth::AuthProvider> = Arc::new(ControlDbAuthProvider::new(
+        Arc::clone(&control),
+        Some(SECRET.to_string()),
+    ));
+
+    let local: Arc<dyn crate::commit::MutationCommitter> = Arc::new(
+        crate::commit::LocalSqliteCommitter::open(data_dir.join("commit_log.sqlite"))
+            .expect("commit log"),
+    );
+    let resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
+        pool.clone(),
+        control.clone(),
+    )) as Arc<dyn crate::commit::EngineResolver>;
+    let applier: Arc<dyn crate::commit::Applier> =
+        Arc::new(crate::commit::EngineApplier::new(resolver));
+    let handle = spawn_yrp(
+        YrpRuntimeConfig {
+            node_id,
+            cluster_id: CLUSTER_ID,
+            peers,
+            data_dir: data_dir.clone(),
+            cluster_secret: Some(SECRET.to_string()),
+            tick_ms: 20,
+            election_ticks: (5, 10),
+            heartbeat_ticks: 2,
+        },
+        local.clone(),
+        applier,
+    )
+    .expect("yrp spawn");
+    let commit_log: Arc<dyn crate::commit::MutationCommitter> =
+        Arc::new(YrpCommitter::new(handle.clone(), local));
+
+    let state = Arc::new(AppState {
+        control,
+        pool,
+        workers,
+        cluster: None,
+        inflight: std::sync::atomic::AtomicU32::new(0),
+        admission,
+        control_runtime: None,
+        commit_log,
+        raft: None,
+        yrp: Some(handle.clone()),
+        fault_registry: crate::debug::FaultRegistry::new(),
+        jobs,
+        data_dir,
+        auth_provider,
+    });
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .expect("bind advertised port");
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app = crate::http_gateway::router(state.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    Node {
+        state,
+        handle,
+        base,
+        token: raw_token,
+        _tmp: tmp,
+    }
+}
+
+/// Poll the follower's LIVE /v1/recall (client query vector — no
+/// embedder in the fixture) until `rid` appears.
+async fn wait_for_recall(node: &Node, query_embedding: &Value, rid: &str) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let (st, resp) = post_json(
+            &node.base,
+            &node.token,
+            "/v1/recall",
+            &json!({
+                "query": "yrp replicated memory",
+                "query_embedding": query_embedding,
+                "top_k": 10,
+            }),
+        )
+        .await;
+        if st == reqwest::StatusCode::OK {
+            let found = resp["results"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .any(|r| r.get("rid").and_then(|v| v.as_str()) == Some(rid))
+                })
+                .unwrap_or(false);
+            if found {
+                return;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "follower live recall never surfaced {rid}; last response: {resp}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}

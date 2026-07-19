@@ -43,11 +43,10 @@
 //!
 //! ## What is deliberately NOT here (yet)
 //!
-//! Quarantine + incarnation fencing (Phase A2); membership changes, witness
-//! ack-exclusion (witnesses vote but never count toward data durability),
-//! snapshots/GC, and the real oplog payload binding (Phase B — `payload` is
-//! an opaque `u64` until then). The voter set is fixed at construction.
-//! Timers are the driver's job.
+//! Quarantine + incarnation fencing (Phase A2); membership changes. The
+//! voter set is fixed at construction. Timers are the driver's job.
+//! (`payload` carries real engine-mutation bytes as of the
+//! runtime-integration slice — see [`Payload`].)
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -55,12 +54,40 @@ use serde::{Deserialize, Serialize};
 
 use super::types::{quorum, HardState, LogPosition, NodeId, Term};
 
-/// Payload reserved for the no-op entry a new leader appends on election —
-/// the §5.4.2 mechanism that lets prior-term entries commit by implication.
-pub const NOOP_PAYLOAD: u64 = 0;
+/// The replicated command a log entry carries (runtime-integration slice —
+/// this is where the opaque Phase A/B `u64` became real bytes).
+///
+/// Equality is load-bearing: the append-path duplicate check and the sim's
+/// committed-entry ledgers compare entries structurally, so two ops are the
+/// same entry iff their bytes are the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Payload {
+    /// The no-op a new leader appends on election (§5.4.2 — lets prior-term
+    /// entries commit by implication) and the carrier for pure
+    /// capability-activation entries.
+    Noop,
+    /// Opaque numbered payload for the simulator and unit tests. Never
+    /// produced on a production path.
+    Test(u64),
+    /// A serialized engine mutation (`crate::commit::MemoryMutation` via
+    /// bincode) with the client-visible rid INSIDE the bytes (codex F3):
+    /// a retry answered from the claims table recovers its outcome from
+    /// the entry itself.
+    Op(Vec<u8>),
+}
 
-/// One canonical-log entry. `payload` is an opaque identifier until the
-/// memory-native oplog op (embedding bytes, provenance, HLC) binds here.
+/// Test-only ergonomic comparison against the sim's numeric payloads:
+/// `entry.payload == 42` ⇔ the payload is `Payload::Test(42)`.
+#[cfg(test)]
+impl PartialEq<u64> for Payload {
+    fn eq(&self, other: &u64) -> bool {
+        matches!(self, Payload::Test(n) if n == other)
+    }
+}
+
+/// One canonical-log entry. `payload` is the replicated command — engine
+/// mutation bytes on the production path (embedding bytes, provenance, HLC
+/// all inside), [`Payload::Noop`] for protocol-internal entries.
 ///
 /// `key` (Phase B, RFC 028 §7): the idempotency claim, carried IN the entry
 /// so claim and op are one atomic replicated unit — committed together,
@@ -71,10 +98,10 @@ pub const NOOP_PAYLOAD: u64 = 0;
 /// dedupes the retry (claim never lost after commit); a tentative keyed
 /// entry truncates WITH its claim, so the retry re-executes cleanly (no
 /// settled-claim-without-effect ghost).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogEntry {
     pub term: Term,
-    pub payload: u64,
+    pub payload: Payload,
     pub key: Option<u64>,
     /// Phase B (RFC 028 §3): capability-activation entry. Bits activate on
     /// COMMIT (never on append), monotonically — there is no deactivation.
@@ -83,7 +110,7 @@ pub struct LogEntry {
 
 impl LogEntry {
     /// Unkeyed entry (the common case; also every pre-Phase-B test entry).
-    pub fn unkeyed(term: Term, payload: u64) -> Self {
+    pub fn unkeyed(term: Term, payload: Payload) -> Self {
         Self {
             term,
             payload,
@@ -407,7 +434,7 @@ impl ReplicaCore {
         let term = self.current_term();
         self.log.push(LogEntry {
             term,
-            payload: NOOP_PAYLOAD,
+            payload: Payload::Noop,
             key: None,
             activate: Some(bits),
         });
@@ -473,8 +500,9 @@ impl ReplicaCore {
         // The state below base is adopted wholesale (checkpoint semantics).
         core.commit = base.index;
         for e in restored_log {
+            let key = e.key;
             core.log.push(e);
-            if let Some(k) = e.key {
+            if let Some(k) = key {
                 core.claims.insert(k, core.last_index());
             }
         }
@@ -654,7 +682,7 @@ impl ReplicaCore {
 
     /// Propose a new entry. Leader-only; returns `None` otherwise (the
     /// caller redirects to the leader — the API layer's job in Phase B).
-    pub fn propose(&mut self, payload: u64) -> Option<Vec<Effect>> {
+    pub fn propose(&mut self, payload: Payload) -> Option<Vec<Effect>> {
         if self.role != Role::Leader {
             return None;
         }
@@ -678,7 +706,7 @@ impl ReplicaCore {
     /// (never-success-without-durable-effect), and never append the same
     /// key twice while it is claimed (never-double-write). Both halves are
     /// proven in the simulator across failover/quarantine interleavings.
-    pub fn propose_keyed(&mut self, key: u64, payload: u64) -> Option<KeyedProposal> {
+    pub fn propose_keyed(&mut self, key: u64, payload: Payload) -> Option<KeyedProposal> {
         if self.role != Role::Leader {
             return None;
         }
@@ -765,7 +793,7 @@ impl ReplicaCore {
             .log
             .iter()
             .skip((prev.index - self.base.index) as usize)
-            .copied()
+            .cloned()
             .collect();
         let msg = Message::AppendEntries {
             term,
@@ -1183,14 +1211,14 @@ impl ReplicaCore {
                         }
                     }
                     self.log.truncate((idx - self.base.index) as usize - 1);
-                    self.log.push(*e);
+                    self.log.push(e.clone());
                     if let Some(k) = e.key {
                         self.claims.insert(k, idx);
                     }
                     changed = true;
                 }
                 None => {
-                    self.log.push(*e);
+                    self.log.push(e.clone());
                     if let Some(k) = e.key {
                         self.claims.insert(k, idx);
                     }
@@ -1450,7 +1478,7 @@ impl ReplicaCore {
         out.push(Effect::BecameLeader { term });
         // §5.4.2 no-op: gives the new term an entry so the prior-term
         // suffix can commit by implication.
-        self.log.push(LogEntry::unkeyed(term, NOOP_PAYLOAD));
+        self.log.push(LogEntry::unkeyed(term, Payload::Noop));
         out.push(self.stage_log());
         self.append_effects_for_followers(out);
     }
@@ -1461,7 +1489,7 @@ impl ReplicaCore {
         debug_assert!(self.pending.is_some());
         self.init_leader_state(term);
         self.hold(Effect::BecameLeader { term });
-        self.log.push(LogEntry::unkeyed(term, NOOP_PAYLOAD));
+        self.log.push(LogEntry::unkeyed(term, Payload::Noop));
         let _ = self.stage_log(); // coalesces into the pending persist
     }
 
@@ -1532,7 +1560,7 @@ impl ReplicaCore {
             .log
             .iter()
             .take(self.durable_len as usize)
-            .copied()
+            .cloned()
             .collect();
         let commit = self.commit.min(self.base.index + self.durable_len);
         Some((

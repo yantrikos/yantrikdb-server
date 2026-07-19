@@ -51,6 +51,11 @@ pub struct AppState {
     /// `/v1/raft/*` (peer-to-peer RPC receive routes), and by the
     /// metrics recorder.
     pub raft: Option<std::sync::Arc<crate::raft::RaftAssembly>>,
+    /// RFC 028: YRP native-replication handle when cluster runs in
+    /// `RaftClusterMode::Yrp`. `None` otherwise. The gateway uses it for
+    /// the `/v1/yrp/msg` peer route, the keyed write path, health, and
+    /// leader redirects.
+    pub yrp: Option<std::sync::Arc<crate::yrp::runtime::YrpHandle>>,
     /// RFC 010 PR-5: in-memory fault-injection registry. Empty in
     /// production builds; populated by Jepsen runners via
     /// `/v1/debug/fault/inject`. The cluster transport layer (RFC 010

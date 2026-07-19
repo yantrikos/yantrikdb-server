@@ -52,13 +52,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use super::bootstrap::RejoinMessage;
-use super::replica::{Effect, KeyedProposal, LogEntry, Message, ReplicaCore, Role};
-use super::types::{HardState, LogPosition, NodeId};
+use super::replica::{Effect, KeyedProposal, LogEntry, Message, Payload, ReplicaCore, Role};
+use super::types::{ClusterId, HardState, LogPosition, NodeId};
 
 /// Everything the core needs durably persisted, as one atomic unit — the
-/// on-disk mirror of [`Effect::Persist`].
+/// on-disk mirror of [`Effect::Persist`] (plus the node's cluster
+/// identity, so boot inspection can detect alien state).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurableState {
+    pub cluster_id: ClusterId,
     pub hard: HardState,
     pub base: LogPosition,
     pub log: Vec<LogEntry>,
@@ -89,13 +91,47 @@ pub trait Transport: Send + 'static {
 ///    again for indices at or below the last durable applied index and
 ///    MUST be idempotent there.
 /// 2. The implementation MUST make the entry's effects AND its applied
-///    index (AND, for keyed entries, the key→outcome record) durable in
-///    ONE atomic unit before returning Ok.
+///    index (AND, for keyed entries, the key→outcome record) durable
+///    before returning Ok, such that a crash-replay of the same index is
+///    a no-op (the production sink achieves this with the op_id-idempotent
+///    commit-log transaction + idempotent engine primitives + the
+///    marker-last ordering — see `yrp::engine_sink`).
 /// 3. Returning Err is fail-stop: the driver exits (quarantine posture).
+///
+/// `apply` is async because the production sink composes the repo's async
+/// `MutationCommitter`/`Applier` traits; the worker still consumes strictly
+/// in order (one apply at a time).
+#[async_trait::async_trait]
 pub trait ApplySink: Send + 'static {
-    fn apply(&mut self, index: u64, entry: &LogEntry) -> Result<(), String>;
+    async fn apply(&mut self, index: u64, entry: &LogEntry) -> Result<(), String>;
     /// The last index this sink has durably applied (recovered at boot).
     fn durable_applied(&self) -> u64;
+}
+
+/// Live snapshot of the driver's replication state, published on a watch
+/// channel for health surfaces and write gates. Never authoritative for
+/// safety — purely observational.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct YrpStatus {
+    pub role: Role,
+    pub term: u64,
+    pub commit: u64,
+    pub applied: u64,
+    /// Last leader this node heard from (itself when leading). A HINT for
+    /// redirects — may be stale.
+    pub leader: Option<NodeId>,
+}
+
+impl Default for YrpStatus {
+    fn default() -> Self {
+        Self {
+            role: Role::Follower,
+            term: 0,
+            commit: 0,
+            applied: 0,
+            leader: None,
+        }
+    }
 }
 
 /// Client-facing outcome of a keyed proposal, delivered via oneshot.
@@ -118,7 +154,7 @@ pub enum DriverEvent {
     },
     Propose {
         key: u64,
-        payload: u64,
+        payload: Payload,
         reply: oneshot::Sender<ProposeOutcome>,
     },
     /// Apply worker reports the highest contiguous durably-applied index.
@@ -186,6 +222,7 @@ impl FileStore {
 /// Driver configuration.
 pub struct DriverConfig {
     pub id: NodeId,
+    pub cluster_id: ClusterId,
     pub voters: std::collections::BTreeSet<NodeId>,
     pub witnesses: std::collections::BTreeSet<NodeId>,
     pub supported: u32,
@@ -218,6 +255,10 @@ pub struct YrpDriver {
     election_ticks_left: Option<u32>,
     heartbeat_ticks_left: u32,
     rng: u64,
+    /// Last leader observed via append/install traffic (self when leading).
+    leader_hint: Option<NodeId>,
+    /// Optional live-status publisher (health surface / write gate).
+    status_tx: Option<tokio::sync::watch::Sender<YrpStatus>>,
 }
 
 impl YrpDriver {
@@ -233,7 +274,13 @@ impl YrpDriver {
         durable_applied: u64,
     ) -> Self {
         let (hard, base, log, claims, active) = match restored {
-            Some(d) => (d.hard, d.base, d.log, d.claims, d.active),
+            Some(d) => {
+                debug_assert_eq!(
+                    d.cluster_id, cfg.cluster_id,
+                    "alien state must be quarantined by boot inspection, never reach the driver"
+                );
+                (d.hard, d.base, d.log, d.claims, d.active)
+            }
             None => (
                 HardState::default(),
                 LogPosition::ZERO,
@@ -267,9 +314,41 @@ impl YrpDriver {
             election_ticks_left: None,
             heartbeat_ticks_left: 0,
             rng: seed,
+            leader_hint: None,
+            status_tx: None,
         };
         d.arm_election_deadline();
         d
+    }
+
+    /// Attach a live-status publisher. The driver sends a fresh snapshot
+    /// after every processed event; receivers use it for health/redirects.
+    pub fn set_status_tx(&mut self, tx: tokio::sync::watch::Sender<YrpStatus>) {
+        tx.send_replace(self.status_snapshot());
+        self.status_tx = Some(tx);
+    }
+
+    fn status_snapshot(&self) -> YrpStatus {
+        YrpStatus {
+            role: self.core.role(),
+            term: self.core.current_term().0,
+            commit: self.core.commit_index(),
+            applied: self.applied,
+            leader: if self.core.role() == Role::Leader {
+                Some(self.cfg.id)
+            } else {
+                self.leader_hint
+            },
+        }
+    }
+
+    fn publish_status(&self) {
+        if let Some(tx) = &self.status_tx {
+            let snap = self.status_snapshot();
+            if *tx.borrow() != snap {
+                tx.send_replace(snap);
+            }
+        }
     }
 
     fn rand(&mut self) -> u64 {
@@ -308,6 +387,7 @@ impl YrpDriver {
             if let Some(e) = exit {
                 return e;
             }
+            self.publish_status();
         }
         DriverExit::Shutdown
     }
@@ -323,6 +403,7 @@ impl YrpDriver {
                     Message::AppendEntries { .. } | Message::InstallSnapshot { .. }
                 ) {
                     self.arm_election_deadline();
+                    self.leader_hint = Some(from);
                 }
                 let effects = self.core.on_message(from, m, false);
                 self.execute(effects)
@@ -332,7 +413,7 @@ impl YrpDriver {
                     self.transport.send(
                         node,
                         WireMsg::Rejoin(RejoinMessage::Grant {
-                            cluster_id: super::types::ClusterId(0), // config-bound in HTTP slice
+                            cluster_id: self.cfg.cluster_id,
                             term,
                             base,
                             log,
@@ -352,7 +433,7 @@ impl YrpDriver {
     fn on_propose(
         &mut self,
         key: u64,
-        payload: u64,
+        payload: Payload,
         reply: oneshot::Sender<ProposeOutcome>,
     ) -> Option<DriverExit> {
         match self.core.propose_keyed(key, payload) {
@@ -416,6 +497,7 @@ impl YrpDriver {
                     active,
                 } => {
                     let state = DurableState {
+                        cluster_id: self.cfg.cluster_id,
                         hard,
                         base,
                         log,
@@ -457,7 +539,7 @@ impl YrpDriver {
                     let from = self.dispatched + 1;
                     for i in from..=to {
                         if let Some(e) = self.core.entry(i) {
-                            let _ = self.apply_tx.send((i, *e));
+                            let _ = self.apply_tx.send((i, e.clone()));
                         }
                     }
                     self.dispatched = self.dispatched.max(to);
@@ -505,7 +587,7 @@ pub async fn run_apply_worker(
         if index <= sink.durable_applied() {
             continue; // crash-replay of an already-durable index: idempotent skip
         }
-        match sink.apply(index, &entry) {
+        match sink.apply(index, &entry).await {
             Ok(()) => {
                 let _ = owner.send(DriverEvent::Applied { upto: index });
             }
@@ -558,10 +640,11 @@ mod tests {
         durable_applied: u64,
     }
     struct TestSink(Arc<Mutex<SinkState>>);
+    #[async_trait::async_trait]
     impl ApplySink for TestSink {
-        fn apply(&mut self, index: u64, entry: &LogEntry) -> Result<(), String> {
+        async fn apply(&mut self, index: u64, entry: &LogEntry) -> Result<(), String> {
             let mut s = self.0.lock().unwrap();
-            s.applied.push((index, *entry));
+            s.applied.push((index, entry.clone()));
             s.durable_applied = index;
             Ok(())
         }
@@ -593,6 +676,7 @@ mod tests {
         let driver = YrpDriver::new(
             DriverConfig {
                 id: NodeId(id),
+                cluster_id: super::super::types::ClusterId(0),
                 voters,
                 witnesses: BTreeSet::new(),
                 supported: u32::MAX,
@@ -633,7 +717,7 @@ mod tests {
                 let (otx, orx) = oneshot::channel();
                 let _ = n.tx.send(DriverEvent::Propose {
                     key,
-                    payload,
+                    payload: Payload::Test(payload),
                     reply: otx,
                 });
                 if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_millis(500), orx).await {
@@ -674,7 +758,7 @@ mod tests {
         let (otx, orx) = oneshot::channel();
         let _ = nodes[&leader].tx.send(DriverEvent::Propose {
             key: 42,
-            payload: 4242,
+            payload: Payload::Test(4242),
             reply: otx,
         });
         match tokio::time::timeout(Duration::from_secs(2), orx)
@@ -746,6 +830,7 @@ mod tests {
         let driver = YrpDriver::new(
             DriverConfig {
                 id: NodeId(1),
+                cluster_id: super::super::types::ClusterId(0),
                 voters,
                 witnesses: BTreeSet::new(),
                 supported: u32::MAX,

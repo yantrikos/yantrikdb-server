@@ -29,8 +29,14 @@
 
 pub mod bootstrap;
 pub mod driver;
+pub mod engine_sink;
+pub mod op;
 pub mod replica;
+pub mod runtime;
+pub mod transport;
 pub mod types;
 
+#[cfg(test)]
+mod cluster_test;
 #[cfg(test)]
 mod sim;

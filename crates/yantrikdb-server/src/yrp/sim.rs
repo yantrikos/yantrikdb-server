@@ -28,7 +28,7 @@ use super::bootstrap::{
     RecoveredState, RejoinMessage,
 };
 use super::replica::{
-    Effect, KeyedProposal, LogEntry, Message, ReplicaCore, Role, Snapshot, NOOP_PAYLOAD,
+    Effect, KeyedProposal, LogEntry, Message, Payload, ReplicaCore, Role, Snapshot,
 };
 use super::types::{ClusterId, HardState, LogPosition, NodeId, Term};
 
@@ -111,7 +111,7 @@ struct Sim {
     alarms: Vec<(NodeId, Vec<QuarantineReason>)>,
     /// Phase B claim ledger: key → (index, payload) of the ONE committed
     /// entry ever allowed to hold it (never-double-write, globally).
-    keyed_committed: BTreeMap<u64, (u64, u64)>,
+    keyed_committed: BTreeMap<u64, (u64, Payload)>,
     /// Witness subset (applied to every constructed core, incl. restarts).
     witnesses: BTreeSet<NodeId>,
     /// Capability-incompatibility alarms: (leader, stalled peer).
@@ -268,12 +268,26 @@ impl Sim {
     fn ledger_commit(&mut self, id: NodeId, to: u64) {
         let from = self.nodes[&id].applied + 1;
         for i in from..=to {
-            let e = *self.nodes[&id]
+            let e = self.nodes[&id]
                 .core
                 .as_ref()
                 .expect("commit on live node")
                 .entry(i)
-                .expect("committed index must be in log");
+                .expect("committed index must be in log")
+                .clone();
+            // Phase B never-double-write: one committed entry per key, ever.
+            if let Some(k) = e.key {
+                match self.keyed_committed.get(&k) {
+                    None => {
+                        self.keyed_committed.insert(k, (i, e.payload.clone()));
+                    }
+                    Some((pi, pp)) => assert_eq!(
+                        (*pi, pp),
+                        (i, &e.payload),
+                        "CLAIM DOUBLE-WRITE: key {k} committed at two places"
+                    ),
+                }
+            }
             match self.committed_at.get(&i) {
                 None => {
                     self.committed_at.insert(i, e);
@@ -283,19 +297,6 @@ impl Sim {
                     "AUTHORITY SAFETY VIOLATED: index {i} applied with two \
                      different entries ({prev:?} vs {e:?}, second by {id:?})"
                 ),
-            }
-            // Phase B never-double-write: one committed entry per key, ever.
-            if let Some(k) = e.key {
-                match self.keyed_committed.get(&k) {
-                    None => {
-                        self.keyed_committed.insert(k, (i, e.payload));
-                    }
-                    Some((pi, pp)) => assert_eq!(
-                        (*pi, *pp),
-                        (i, e.payload),
-                        "CLAIM DOUBLE-WRITE: key {k} committed at two places"
-                    ),
-                }
             }
         }
         let node = self.nodes.get_mut(&id).unwrap();
@@ -492,7 +493,7 @@ impl Sim {
         let Some(core) = self.nodes.get_mut(&id).unwrap().core.as_mut() else {
             return false;
         };
-        match core.propose(payload) {
+        match core.propose(Payload::Test(payload)) {
             Some(effects) => {
                 self.run_effects(id, effects, None);
                 true
@@ -648,7 +649,7 @@ fn entries(terms: &[u64]) -> Vec<LogEntry> {
     terms
         .iter()
         .enumerate()
-        .map(|(i, t)| LogEntry::unkeyed(Term(*t), 1000 + i as u64))
+        .map(|(i, t)| LogEntry::unkeyed(Term(*t), Payload::Test(1000 + i as u64)))
         .collect()
 }
 
@@ -674,8 +675,8 @@ fn three_nodes_elect_exactly_one_leader() {
     );
     // The winner's no-op reached commit.
     assert_eq!(
-        sim.committed_at.get(&1).map(|e| e.payload),
-        Some(NOOP_PAYLOAD)
+        sim.committed_at.get(&1).map(|e| e.payload.clone()),
+        Some(Payload::Noop)
     );
 }
 
@@ -839,9 +840,9 @@ fn replication_commits_across_cluster() {
     sim.drain();
     sim.check_all();
     // Index 1 = no-op, 2..=4 = payloads, committed everywhere.
-    assert_eq!(sim.committed_at.get(&2).map(|e| e.payload), Some(101));
-    assert_eq!(sim.committed_at.get(&3).map(|e| e.payload), Some(102));
-    assert_eq!(sim.committed_at.get(&4).map(|e| e.payload), Some(103));
+    assert!(sim.committed_at.get(&2).is_some_and(|e| e.payload == 101));
+    assert!(sim.committed_at.get(&3).is_some_and(|e| e.payload == 102));
+    assert!(sim.committed_at.get(&4).is_some_and(|e| e.payload == 103));
     for (id, node) in &sim.nodes {
         assert!(node.applied >= 4, "{id:?} applied only to {}", node.applied);
     }
@@ -903,7 +904,7 @@ fn r1_stale_leader_cannot_commit_and_gets_fenced() {
         .map(|(i, _)| *i)
         .expect("301 committed");
     let n1 = sim.nodes[&NodeId(1)].core.as_ref().unwrap();
-    assert_eq!(n1.entry(committed_301).map(|e| e.payload), Some(301));
+    assert!(n1.entry(committed_301).is_some_and(|e| e.payload == 301));
     assert_eq!(sim.current_leader(), Some(NodeId(2)));
 }
 
@@ -1348,7 +1349,7 @@ impl Sim {
     /// outcome. Mirrors what the production API layer will do.
     fn propose_keyed(&mut self, id: NodeId, key: u64, payload: u64) -> Option<KeyedProposal> {
         let core = self.nodes.get_mut(&id).unwrap().core.as_mut()?;
-        let outcome = core.propose_keyed(key, payload)?;
+        let outcome = core.propose_keyed(key, Payload::Test(payload))?;
         if let KeyedProposal::Appended { effects, index } = outcome {
             self.run_effects(id, effects, None);
             return Some(KeyedProposal::Appended {
@@ -1395,8 +1396,8 @@ fn keyed_commit_survives_failover_and_dedupes_retry() {
     }
     sim.check_all();
     assert_eq!(
-        sim.keyed_committed.get(&77).map(|(i, p)| (*i, *p)),
-        Some((orig_index, 707)),
+        sim.keyed_committed.get(&77).map(|(i, p)| (*i, p.clone())),
+        Some((orig_index, Payload::Test(707))),
         "exactly one committed effect for the key"
     );
 }
@@ -1438,8 +1439,8 @@ fn keyed_tentative_loss_reexecutes_cleanly() {
     sim.drain();
     sim.check_all();
     assert_eq!(
-        sim.keyed_committed.get(&88).map(|(i, p)| (*i, *p)),
-        Some((new_index, 808)),
+        sim.keyed_committed.get(&88).map(|(i, p)| (*i, p.clone())),
+        Some((new_index, Payload::Test(808))),
         "exactly one committed effect, at the canonical index"
     );
     // The healed ex-leader holds the canonical keyed entry.
@@ -1466,13 +1467,13 @@ fn keyed_retry_pending_parks_then_dedupes() {
         .core
         .as_mut()
         .unwrap();
-    let out1 = core.propose_keyed(99, 909).unwrap();
+    let out1 = core.propose_keyed(99, Payload::Test(909)).unwrap();
     let index = match &out1 {
         KeyedProposal::Appended { index, .. } => *index,
         other => panic!("fresh append expected, got {other:?}"),
     };
     // Immediate retry while pending: parked, same index, NO new entry.
-    let out2 = core.propose_keyed(99, 909).unwrap();
+    let out2 = core.propose_keyed(99, Payload::Test(909)).unwrap();
     assert_eq!(out2, KeyedProposal::DuplicatePending { index });
     let log_len_before = core.log_len();
     // Run the pending effects (persist + fan-out) to completion.
@@ -1492,7 +1493,7 @@ fn keyed_retry_pending_parks_then_dedupes() {
         log_len_before,
         "no second append for the key"
     );
-    let out3 = core.propose_keyed(99, 909).unwrap();
+    let out3 = core.propose_keyed(99, Payload::Test(909)).unwrap();
     assert_eq!(out3, KeyedProposal::DuplicateCommitted { index });
     sim.check_all();
 }
@@ -1667,8 +1668,15 @@ fn witness_tiebreak_preserves_all_committed_entries() {
         assert!(sim.propose(NodeId(1), p));
     }
     sim.drain();
-    let committed_before: Vec<u64> = sim.committed_at.values().map(|e| e.payload).collect();
-    assert!(committed_before.contains(&913), "writes committed");
+    let committed_before: Vec<Payload> = sim
+        .committed_at
+        .values()
+        .map(|e| e.payload.clone())
+        .collect();
+    assert!(
+        committed_before.iter().any(|p| *p == 913),
+        "writes committed"
+    );
     // Data leader dies. Survivors: one data node + the witness.
     sim.crash(NodeId(1));
     sim.timeout(NodeId(2), None);

@@ -1891,8 +1891,13 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         }
     }
 
-    // Initialize cluster context if clustering is enabled
-    let cluster_ctx = if cfg.cluster.is_clustered() {
+    // Initialize cluster context if clustering is enabled. YRP mode
+    // (RFC 028) deliberately does NOT build the legacy raft-lite context:
+    // its heartbeat/election/sync loops would fight the YRP driver for
+    // write acceptance. YRP runs its own transport on the HTTP plane.
+    let cluster_ctx = if cfg.cluster.is_clustered()
+        && cfg.cluster.raft_mode != crate::raft::RaftClusterMode::Yrp
+    {
         let raft_path = cfg.server.data_dir.join("raft.json");
         let node_state = Arc::new(cluster::NodeState::new(
             cfg.cluster.node_id,
@@ -2009,9 +2014,10 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         // it. Misconfig (openraft mode without cluster_tls) fails fast here
         // — server refuses to start, which is the production-safety
         // guarantee from `build_raft_cluster`.
-        let (commit_log, raft_assembly): (
+        let (commit_log, raft_assembly, yrp_handle): (
             Arc<dyn crate::commit::MutationCommitter>,
             Option<Arc<crate::raft::RaftAssembly>>,
+            Option<Arc<crate::yrp::runtime::YrpHandle>>,
         ) = match cfg.cluster.raft_mode {
             crate::raft::RaftClusterMode::Disabled => {
                 // RFC 010 PR-6.4 — single-node also needs an Applier so
@@ -2033,7 +2039,58 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                     local_committer.clone(),
                     applier,
                 ));
-                (submitter as Arc<dyn crate::commit::MutationCommitter>, None)
+                (
+                    submitter as Arc<dyn crate::commit::MutationCommitter>,
+                    None,
+                    None,
+                )
+            }
+            crate::raft::RaftClusterMode::Yrp => {
+                // RFC 028: native replication. The driver owns consensus;
+                // the apply sink lands committed ops in commit-log +
+                // engine on every node; YrpCommitter funnels all handler
+                // writes through the replicated log. Boot inspection
+                // decides healthy-vs-quarantine — the process starts
+                // either way (quarantine serves diagnostics, refuses
+                // writes, retries rejoin).
+                let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
+                    pool.clone(),
+                    control.clone(),
+                )) as Arc<dyn crate::commit::EngineResolver>;
+                let applier: Arc<dyn crate::commit::Applier> =
+                    Arc::new(crate::commit::EngineApplier::new(engine_resolver));
+                let local: Arc<dyn crate::commit::MutationCommitter> = local_committer.clone();
+                let runtime_cfg = crate::yrp::runtime::YrpRuntimeConfig {
+                    node_id: cfg.cluster.node_id as u64,
+                    cluster_id: cfg.yrp.cluster_id,
+                    peers: cfg
+                        .yrp
+                        .peers
+                        .iter()
+                        .map(|p| crate::yrp::runtime::YrpPeer {
+                            node_id: p.node_id,
+                            addr: p.addr.clone(),
+                            witness: p.witness,
+                        })
+                        .collect(),
+                    data_dir: cfg.server.data_dir.clone(),
+                    cluster_secret: cfg.cluster.cluster_secret.clone(),
+                    tick_ms: cfg.yrp.tick_ms,
+                    election_ticks: (cfg.yrp.election_ticks_min, cfg.yrp.election_ticks_max),
+                    heartbeat_ticks: cfg.yrp.heartbeat_ticks,
+                };
+                let handle = crate::yrp::runtime::spawn(runtime_cfg, local.clone(), applier)
+                    .map_err(|e| anyhow::anyhow!("YRP assembly failed: {e}"))?;
+                tracing::info!(
+                    node_id = cfg.cluster.node_id,
+                    cluster_id = cfg.yrp.cluster_id,
+                    peers = cfg.yrp.peers.len(),
+                    "YRP assembled — YrpCommitter now driving writes (RFC 028)"
+                );
+                let committer: Arc<dyn crate::commit::MutationCommitter> = Arc::new(
+                    crate::yrp::runtime::YrpCommitter::new(handle.clone(), local),
+                );
+                (committer, None, Some(handle))
             }
             crate::raft::RaftClusterMode::OpenRaft => {
                 let raft_log_path = cfg.server.data_dir.join("raft_log.sqlite");
@@ -2150,7 +2207,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                 let committer: Arc<dyn crate::commit::MutationCommitter> =
                     Arc::new(assembly.committer.clone());
                 let assembly_arc = Arc::new(assembly);
-                (committer, Some(assembly_arc))
+                (committer, Some(assembly_arc), None)
             }
         };
 
@@ -2183,10 +2240,14 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         let write_gate = {
             let raft = raft_assembly.clone();
             let cluster = cluster_ctx.clone();
+            let yrp = yrp_handle.clone();
             background::WriteAcceptanceGate::from_fn(move || {
                 if let Some(ref assembly) = raft {
                     let m = assembly.raft.metrics().borrow().clone();
                     return matches!(m.state, openraft::ServerState::Leader);
+                }
+                if let Some(ref h) = yrp {
+                    return h.is_leader();
                 }
                 if let Some(ref c) = cluster {
                     return c.state.accepts_writes();
@@ -2207,6 +2268,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
             control_runtime: control_runtime_handle.clone(),
             commit_log,
             raft: raft_assembly,
+            yrp: yrp_handle.clone(),
             fault_registry,
             jobs,
             data_dir: cfg.server.data_dir.clone(),

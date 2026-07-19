@@ -490,6 +490,14 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         if let Some(reasons) = yrp.quarantine_reasons() {
             payload["status"] = json!("quarantined");
             payload["yrp_quarantine_reasons"] = json!(reasons);
+        } else if yrp.engine_incomplete() {
+            // RFC 028 Phase C: protocol-current but engine still
+            // backfilling a compacted range — not read/lead eligible.
+            let s = *yrp.status.borrow();
+            payload["status"] = json!("engine_backfilling");
+            payload["yrp_engine_incomplete"] = json!(true);
+            payload["yrp_backfill_applied"] = json!(s.applied);
+            payload["yrp_backfill_target"] = json!(s.backfill_target);
         }
     }
     Json(payload)
@@ -1153,6 +1161,46 @@ async fn yrp_msg(
     yrp.deliver(from, msg)
         .map_err(|e| app_error(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// RFC 028 Phase C: serve an engine-backfill range to a beyond-GC
+/// straggler. Cluster-secret gated; body is JSON `BackfillRequest`;
+/// response is a bincode `Vec<(u64, LogEntry)>` the requester feeds to
+/// its apply worker. A node that cannot fully cover the range refuses
+/// (503) rather than serving a hole.
+async fn yrp_backfill(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<crate::yrp::runtime::BackfillRequest>,
+) -> Result<Vec<u8>, AppError> {
+    let Some(yrp) = &state.yrp else {
+        return Err(app_error(StatusCode::NOT_FOUND, "yrp mode not enabled"));
+    };
+    if let Some(secret) = &yrp.cluster_secret {
+        let presented = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "));
+        if presented != Some(secret.as_str()) {
+            return Err(app_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid cluster secret",
+            ));
+        }
+    }
+    if req.cluster_id != yrp.cluster_id {
+        return Err(app_error(StatusCode::BAD_REQUEST, "cluster_id mismatch"));
+    }
+    let rows = yrp
+        .serve_backfill(req.from_index, req.to_index)
+        .await
+        .map_err(|e| app_error(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    bincode::serialize(&rows).map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("encode backfill: {e}"),
+        )
+    })
 }
 
 /// Issue #58: keyed `/v1/remember/batch` — the engine's atomic batch path.
@@ -5128,6 +5176,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster/promote", post(cluster_promote))
         // RFC 028: YRP peer wire (bincode envelope; cluster-secret gated)
         .route("/v1/yrp/msg", post(yrp_msg))
+        // RFC 028 Phase C: engine backfill for beyond-GC stragglers
+        .route("/v1/yrp/backfill", post(yrp_backfill))
         // v0.8.3 #24: openraft membership management
         .route("/v1/cluster/initialize", post(cluster_initialize))
         .route("/v1/cluster/add-learner", post(cluster_add_learner))

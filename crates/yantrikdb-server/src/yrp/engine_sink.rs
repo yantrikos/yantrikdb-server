@@ -181,6 +181,48 @@ impl OutcomeStore {
         )
     }
 
+    /// Outcome rows in `(from_exclusive, to_inclusive]`, ascending — the
+    /// serve side of Phase C backfill. Contiguity is the caller's to
+    /// verify (a gap here means this node cannot fully cover the range and
+    /// must refuse rather than serve a partial answer, codex source-
+    /// completeness invariant).
+    pub fn outcomes_in_range(
+        &self,
+        from_exclusive: u64,
+        to_inclusive: u64,
+    ) -> Result<Vec<AppliedOutcome>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT yrp_index, term, tenant_id, op_id, key_hash, key_str, rid,
+                        tenant_log_index, applied_at_unix_micros
+                 FROM yrp_outcome
+                 WHERE yrp_index > ?1 AND yrp_index <= ?2
+                 ORDER BY yrp_index ASC",
+            )
+            .map_err(|e| format!("prepare range: {e}"))?;
+        let rows = stmt
+            .query_map([from_exclusive as i64, to_inclusive as i64], |r| {
+                Ok(AppliedOutcome {
+                    yrp_index: r.get::<_, i64>(0)? as u64,
+                    term: r.get::<_, i64>(1)? as u64,
+                    tenant_id: r.get(2)?,
+                    op_id: r.get(3)?,
+                    key_hash: r.get::<_, Option<i64>>(4)?.map(|k| k as u64),
+                    key_str: r.get(5)?,
+                    rid: r.get(6)?,
+                    tenant_log_index: r.get::<_, i64>(7)? as u64,
+                    applied_at_unix_micros: r.get(8)?,
+                })
+            })
+            .map_err(|e| format!("query range: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("row: {e}"))?);
+        }
+        Ok(out)
+    }
+
     fn query_one(
         conn: &Connection,
         sql: &str,

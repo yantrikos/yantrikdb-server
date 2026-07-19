@@ -43,7 +43,9 @@ use rusqlite::Connection;
 use super::driver::ApplySink;
 use super::op::YrpOp;
 use super::replica::{LogEntry, Payload};
-use crate::commit::{Applier, ApplyError, CommitError, CommitOptions, MemoryMutation, MutationCommitter, TenantId};
+use crate::commit::{
+    Applier, ApplyError, CommitError, CommitOptions, MemoryMutation, MutationCommitter, TenantId,
+};
 
 /// One applied entry's durable outcome — everything the gateway needs to
 /// answer a deduped retry (the original rid), verify the full idempotency
@@ -107,9 +109,11 @@ impl OutcomeStore {
         )
         .map_err(|e| format!("init yrp_apply schema: {e}"))?;
         let applied: i64 = conn
-            .query_row("SELECT applied_index FROM yrp_applied WHERE id = 1", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT applied_index FROM yrp_applied WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
             .map_err(|e| format!("read applied marker: {e}"))?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -125,9 +129,7 @@ impl OutcomeStore {
     /// Record an applied op's outcome AND advance the marker, atomically.
     pub fn record(&self, out: &AppliedOutcome) -> Result<(), String> {
         let mut conn = self.conn.lock();
-        let tx = conn
-            .transaction()
-            .map_err(|e| format!("outcome tx: {e}"))?;
+        let tx = conn.transaction().map_err(|e| format!("outcome tx: {e}"))?;
         tx.execute(
             "INSERT OR REPLACE INTO yrp_outcome
                  (yrp_index, term, tenant_id, op_id, key_hash, key_str, rid,
@@ -249,7 +251,9 @@ impl ApplySink for EngineApplySink {
             // A Test payload on the production sink is a wiring bug —
             // fail-stop rather than silently skip (contract clause 3).
             Payload::Test(n) => {
-                return Err(format!("Test payload {n} reached production sink at {index}"))
+                return Err(format!(
+                    "Test payload {n} reached production sink at {index}"
+                ))
             }
             Payload::Op(b) => b,
         };
@@ -283,7 +287,11 @@ impl ApplySink for EngineApplySink {
             // posture as the openraft state machine (the commit-log row is
             // the durable truth; the engine wiring lands with its RFC).
             Err(ApplyError::NotYetWired { variant, .. }) => {
-                tracing::warn!(variant, index, "YRP apply: mutation not yet wired to engine");
+                tracing::warn!(
+                    variant,
+                    index,
+                    "YRP apply: mutation not yet wired to engine"
+                );
             }
             Err(e) => return Err(format!("engine apply at {index}: {e}")),
         }
@@ -364,7 +372,10 @@ mod tests {
         let mut sink = EngineApplySink::new(committer.clone(), applier, outcomes.clone());
 
         let op = sample_op(Some("k1"));
-        let key = Some(crate::yrp::op::claim_key_for_idempotency(op.tenant_id, "k1"));
+        let key = Some(crate::yrp::op::claim_key_for_idempotency(
+            op.tenant_id,
+            "k1",
+        ));
         let entry = op_entry(3, key, &op);
 
         sink.apply(5, &entry).await.expect("first apply");

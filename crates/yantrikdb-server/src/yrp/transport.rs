@@ -183,9 +183,9 @@ pub fn deliver_inbound(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::replica::Payload;
     use super::super::types::{LogPosition, Term};
+    use super::*;
 
     /// The wire envelope must round-trip through bincode — including an
     /// AppendEntries carrying real Op bytes (the exact production shape).

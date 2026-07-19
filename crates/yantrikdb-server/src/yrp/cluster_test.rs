@@ -137,8 +137,15 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
     // 3. Silent HIT: identical retry answers the ORIGINAL rid.
     let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body1).await;
     assert_eq!(st, reqwest::StatusCode::OK);
-    assert_eq!(resp["rid"].as_str(), Some(rid.as_str()), "retry must dedupe to the original rid");
-    assert!(resp.get("idempotency_conflict").is_none(), "same text must be a silent HIT: {resp}");
+    assert_eq!(
+        resp["rid"].as_str(),
+        Some(rid.as_str()),
+        "retry must dedupe to the original rid"
+    );
+    assert!(
+        resp.get("idempotency_conflict").is_none(),
+        "same text must be a silent HIT: {resp}"
+    );
 
     // 4. Same key + different text → 200 conflict shape, original rid.
     let body_conflict = json!({
@@ -148,7 +155,11 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
     });
     let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body_conflict).await;
     assert_eq!(st, reqwest::StatusCode::OK);
-    assert_eq!(resp["idempotency_conflict"], json!(true), "conflict shape expected: {resp}");
+    assert_eq!(
+        resp["idempotency_conflict"],
+        json!(true),
+        "conflict shape expected: {resp}"
+    );
     assert_eq!(resp["stored"], json!(false));
     assert_eq!(resp["rid"].as_str(), Some(rid.as_str()));
 
@@ -164,7 +175,10 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
     let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body_unkeyed).await;
     assert_eq!(st, reqwest::StatusCode::OK, "unkeyed write failed: {resp}");
     let rid2 = resp["rid"].as_str().expect("rid").to_string();
-    assert!(resp["log_index"].as_u64().is_some(), "receipt log_index missing: {resp}");
+    assert!(
+        resp["log_index"].as_u64().is_some(),
+        "receipt log_index missing: {resp}"
+    );
     wait_for_recall(&follower, &emb2, &rid2).await;
 
     // 7. Writes against the follower are refused with leader info — the
@@ -190,12 +204,7 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
         assert_eq!(v["cluster"]["raft_mode"], json!("yrp"), "health: {v}");
     }
     assert_eq!(
-        leader
-            .state
-            .yrp
-            .as_ref()
-            .unwrap()
-            .quarantine_reasons(),
+        leader.state.yrp.as_ref().unwrap().quarantine_reasons(),
         None
     );
 }
@@ -247,9 +256,10 @@ async fn spawn_node_inner(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node 
     let admission = crate::admission::AdmissionState::new(Default::default());
     let jobs: Arc<dyn crate::jobs::JobQueue> =
         Arc::new(crate::jobs::LocalSqliteJobQueue::open_in_memory().expect("jobs"));
-    let auth_provider: Arc<dyn crate::auth::AuthProvider> = Arc::new(
-        ControlDbAuthProvider::new(Arc::clone(&control), Some(SECRET.to_string())),
-    );
+    let auth_provider: Arc<dyn crate::auth::AuthProvider> = Arc::new(ControlDbAuthProvider::new(
+        Arc::clone(&control),
+        Some(SECRET.to_string()),
+    ));
 
     let local: Arc<dyn crate::commit::MutationCommitter> = Arc::new(
         crate::commit::LocalSqliteCommitter::open(data_dir.join("commit_log.sqlite"))

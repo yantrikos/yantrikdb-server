@@ -123,8 +123,9 @@ fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
             match s.role {
                 crate::yrp::replica::Role::Leader => "leader",
                 crate::yrp::replica::Role::Follower => "follower",
-                crate::yrp::replica::Role::Candidate
-                | crate::yrp::replica::Role::PreCandidate => "candidate",
+                crate::yrp::replica::Role::Candidate | crate::yrp::replica::Role::PreCandidate => {
+                    "candidate"
+                }
             }
         };
         return Some(ClusterStateView {

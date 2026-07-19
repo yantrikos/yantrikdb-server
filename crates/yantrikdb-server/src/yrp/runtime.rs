@@ -321,7 +321,11 @@ pub fn spawn(
 
     match inspect(cluster, u32::MAX, &recovered) {
         BootDecision::Healthy { .. } => {
-            tracing::info!(node = cfg.node_id, cluster = cfg.cluster_id, "YRP boot: healthy");
+            tracing::info!(
+                node = cfg.node_id,
+                cluster = cfg.cluster_id,
+                "YRP boot: healthy"
+            );
             let mut driver = YrpDriver::new(
                 driver_cfg(),
                 restored,
@@ -334,7 +338,10 @@ pub fn spawn(
             spawn_driver(driver, owner_rx, handle.clone());
         }
         BootDecision::Quarantine { reasons, term_hint } => {
-            tracing::error!(?reasons, "YRP boot: QUARANTINED (fail closed, serving diagnostics)");
+            tracing::error!(
+                ?reasons,
+                "YRP boot: QUARANTINED (fail closed, serving diagnostics)"
+            );
             handle.set_quarantine(Some(reasons.iter().map(|r| format!("{r:?}")).collect()));
             let node = QuarantinedNode::new(me, cluster, reasons, term_hint);
             let ctx = QuarantineCtx {
@@ -378,7 +385,10 @@ fn spawn_driver(
             other => {
                 // Fail-stop posture: surface it on health and refuse
                 // writes; the operator restarts through boot inspection.
-                tracing::error!(?other, "YRP driver FAILED — node degraded to quarantine posture");
+                tracing::error!(
+                    ?other,
+                    "YRP driver FAILED — node degraded to quarantine posture"
+                );
                 handle.set_quarantine(Some(vec![format!("driver exit: {other:?}")]));
             }
         }
@@ -470,7 +480,10 @@ fn run_bootstrap_effect(ctx: &mut QuarantineCtx, eff: BootstrapEffect) {
             }
         }
         BootstrapEffect::Alarm { reasons } => {
-            tracing::error!(?reasons, "YRP QUARANTINE ALARM: corruption evidence — operator attention required");
+            tracing::error!(
+                ?reasons,
+                "YRP QUARANTINE ALARM: corruption evidence — operator attention required"
+            );
         }
         BootstrapEffect::Send { to, msg } => {
             ctx.transport.send(to, WireMsg::Rejoin(msg));
@@ -522,9 +535,7 @@ impl MutationCommitter for YrpCommitter {
     ) -> Result<CommitReceipt, CommitError> {
         if let Some(expected) = opts.expected_log_index {
             return Err(CommitError::StorageFailure {
-                message: format!(
-                    "expected_log_index ({expected}) is not supported in yrp mode"
-                ),
+                message: format!("expected_log_index ({expected}) is not supported in yrp mode"),
             });
         }
         // Codex F2: refuse unimplemented grammar variants BEFORE they

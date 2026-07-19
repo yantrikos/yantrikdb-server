@@ -123,6 +123,14 @@ impl YrpHandle {
         let _ = self.owner_tx.send(DriverEvent::Shutdown);
     }
 
+    /// True once the owning loop has exited (its receiver dropped). A
+    /// killer that intends to mutate the node's on-disk state MUST wait
+    /// for this — Shutdown is queued behind in-flight events, and a
+    /// still-draining driver may persist over external modifications.
+    pub fn is_stopped(&self) -> bool {
+        self.owner_tx.is_closed()
+    }
+
     /// Current leader hint as (id, http addr).
     pub fn leader_hint(&self) -> (Option<u64>, Option<String>) {
         let leader = self.status.borrow().leader.map(|n| n.0);

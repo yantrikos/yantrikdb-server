@@ -70,10 +70,23 @@ pub struct DeadNode {
 }
 
 impl TestNode {
-    /// Stop the driver loop and the HTTP server. The data dir survives.
-    pub fn kill(self) -> DeadNode {
+    /// Stop the driver loop and the HTTP server; WAIT for the driver to
+    /// actually exit before returning. The wait is load-bearing:
+    /// Shutdown queues behind in-flight events, and a still-draining
+    /// driver can persist yrp.state AFTER kill() — silently undoing any
+    /// state corruption a chaos scenario applies next (the exact race
+    /// the torn-state test hit on fast runners). The data dir survives.
+    pub async fn kill(self) -> DeadNode {
         self.handle.shutdown();
         self.server.abort();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !self.handle.is_stopped() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "driver did not exit within 5s of Shutdown"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         DeadNode {
             node_id: self.node_id,
             token: self.token,

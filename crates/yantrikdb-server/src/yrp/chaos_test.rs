@@ -58,7 +58,7 @@ async fn kill_leader_under_keyed_load_never_double_writes() {
 
     // Kill the current leader.
     let leader_idx = wait_leader(&live.iter().collect::<Vec<_>>()).await;
-    let dead = live.remove(leader_idx).kill();
+    let dead = live.remove(leader_idx).kill().await;
 
     // Phase 2: writes against the survivors (forces re-election).
     let survivors: Vec<&TestNode> = live.iter().collect();
@@ -204,7 +204,8 @@ async fn torn_state_boots_quarantined_then_rejoins_via_grant() {
                 .position(|n| !n.handle.is_leader())
                 .expect("some follower")
         });
-    let dead = live.remove(victim_idx).kill();
+    let victim_id = live[victim_idx].node_id as u32;
+    let dead = live.remove(victim_idx).kill().await;
     std::fs::write(dead.data_dir.join("yrp.state"), b"CORRUPT GARBAGE BYTES").unwrap();
 
     // Meanwhile the cluster keeps committing.
@@ -212,24 +213,49 @@ async fn torn_state_boots_quarantined_then_rejoins_via_grant() {
     let (rid_b, _) =
         keyed_write_until_accepted(&survivors, "chaos-torn-b", "post-tear write", &emb).await;
 
-    // Restart: boot inspection must quarantine, honestly, on /v1/health.
+    // Isolate the victim BEFORE restarting it: its rejoin Requests are
+    // dropped at every survivor's receive seam, so no grant can arrive.
+    // This both removes the observation race (on a fast machine the very
+    // first rejoin retry heals within milliseconds) and proves the
+    // stronger property: quarantine HOLDS under repeated retries until a
+    // quorum-authorized grant actually lands (fail closed, not
+    // fail-until-lucky).
+    let survivor_ids: Vec<u32> = survivors.iter().map(|n| n.node_id as u32).collect();
+    for n in &survivors {
+        n.state.fault_registry.inject(
+            FaultKind::Partition {
+                side_a: vec![victim_id],
+                side_b: survivor_ids.clone(),
+            },
+            None,
+        );
+    }
+
+    // Restart: boot inspection must quarantine, honestly, on /v1/health —
+    // and STAY quarantined across several 2s rejoin-retry cycles.
     let revived = dead.restart().await;
     let client = reqwest::Client::new();
-    let health: serde_json::Value = client
-        .get(format!("{}/v1/health", revived.base))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(
-        health["status"],
-        json!("quarantined"),
-        "torn state must surface as quarantine: {health}"
-    );
+    for _ in 0..2 {
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+        let health: serde_json::Value = client
+            .get(format!("{}/v1/health", revived.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            health["status"],
+            json!("quarantined"),
+            "torn state must surface (and hold) as quarantine: {health}"
+        );
+    }
 
-    // Rejoin loop → leader grant → adoption → quarantine clears.
+    // Heal the isolation: rejoin loop → leader grant → adoption.
+    for n in &survivors {
+        n.state.fault_registry.clear();
+    }
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     while revived.handle.quarantine_reasons().is_some() {
         assert!(
@@ -280,7 +306,7 @@ async fn straggler_beyond_gc_catches_up_and_compacted_claims_survive() {
         .iter()
         .position(|n| !n.handle.is_leader())
         .expect("some follower");
-    let dead = live.remove(victim_idx).kill();
+    let dead = live.remove(victim_idx).kill().await;
 
     let survivors: Vec<&TestNode> = live.iter().collect();
     let mut last_rid = String::new();

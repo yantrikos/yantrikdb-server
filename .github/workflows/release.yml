@@ -9,7 +9,18 @@ permissions:
   contents: write
 
 jobs:
+  # RFC 028 / saga 237: a release tag CANNOT produce binaries without the
+  # cluster-mode chaos gate passing first (v0.8.18 lesson made permanent).
+  chaos-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: YRP cluster-mode gate (sim + runtime + chaos)
+        run: "cargo test -p yantrikdb-server --bin yantrikdb yrp::"
+
   build:
+    needs: chaos-gate
     strategy:
       fail-fast: false
       matrix:

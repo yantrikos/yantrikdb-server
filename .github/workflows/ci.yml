@@ -64,6 +64,30 @@ jobs:
       - name: CLI smoke test
         run: cargo run -p yantrikdb-server -- --help
 
+  # RFC 028 / saga 237: the cluster-mode release gate, as its own named
+  # job so a red gate is visible at a glance (the v0.8.18 lesson —
+  # single-node green is NOT cluster validation). Runs the full YRP
+  # suite: sim invariants, driver runtime, the 2-node HTTP cluster test,
+  # and the chaos scenarios (kill-leader, partition+heal, torn-state
+  # quarantine/rejoin, beyond-GC snapshot install).
+  chaos-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: YRP cluster-mode gate (sim + runtime + chaos)
+        run: "cargo test -p yantrikdb-server --bin yantrikdb yrp::"
+
   clippy:
     runs-on: ubuntu-latest
     steps:

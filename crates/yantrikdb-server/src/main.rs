@@ -2078,6 +2078,8 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                     tick_ms: cfg.yrp.tick_ms,
                     election_ticks: (cfg.yrp.election_ticks_min, cfg.yrp.election_ticks_max),
                     heartbeat_ticks: cfg.yrp.heartbeat_ticks,
+                    compact_after_entries: cfg.yrp.compact_after_entries,
+                    leader_retain_entries: cfg.yrp.leader_retain_entries,
                 };
                 let handle = crate::yrp::runtime::spawn(runtime_cfg, local.clone(), applier)
                     .map_err(|e| anyhow::anyhow!("YRP assembly failed: {e}"))?;

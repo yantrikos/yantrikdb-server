@@ -63,6 +63,12 @@ pub struct YrpRuntimeConfig {
     pub tick_ms: u64,
     pub election_ticks: (u32, u32),
     pub heartbeat_ticks: u32,
+    /// Compact once the applied span exceeds this (0 = disabled — the
+    /// production default until Phase C ships engine-checkpoint transfer
+    /// for beyond-GC stragglers; the protocol path is chaos-tested).
+    pub compact_after_entries: u64,
+    /// Leader retention margin (entries kept above the compaction base).
+    pub leader_retain_entries: u64,
 }
 
 /// How long a proposer waits for the driver's reply / the apply marker.
@@ -108,8 +114,21 @@ impl YrpHandle {
 
     /// Forward a decoded inbound wire message to whichever loop currently
     /// owns the funnel (driver or quarantine).
-    pub fn deliver_inbound(&self, body: &[u8]) -> Result<(), String> {
-        super::transport::deliver_inbound(&self.owner_tx, body)
+    pub fn deliver(&self, from: u64, msg: WireMsg) -> Result<(), String> {
+        super::transport::deliver(&self.owner_tx, from, msg)
+    }
+
+    /// Graceful stop of whichever loop owns the funnel (tests/shutdown).
+    pub fn shutdown(&self) {
+        let _ = self.owner_tx.send(DriverEvent::Shutdown);
+    }
+
+    /// True once the owning loop has exited (its receiver dropped). A
+    /// killer that intends to mutate the node's on-disk state MUST wait
+    /// for this — Shutdown is queued behind in-flight events, and a
+    /// still-draining driver may persist over external modifications.
+    pub fn is_stopped(&self) -> bool {
+        self.owner_tx.is_closed()
     }
 
     /// Current leader hint as (id, http addr).
@@ -199,6 +218,21 @@ pub fn spawn(
     }
     if !cfg.peers.iter().any(|p| p.node_id == cfg.node_id) {
         return Err("[yrp] peers must include this node's node_id".into());
+    }
+
+    if cfg.compact_after_entries > 0 {
+        // Codex chaos-review P0, made loud: until Phase C ships
+        // engine-checkpoint transfer, a straggler that falls below the
+        // compaction base receives a PROTOCOL snapshot (claims/active)
+        // but no engine backfill for the compacted range. Enabling
+        // compaction is a chaos-test/operator-experiment posture, not a
+        // production default.
+        tracing::warn!(
+            compact_after = cfg.compact_after_entries,
+            "[yrp] log compaction ENABLED: beyond-GC stragglers rejoin without \
+             engine backfill for the compacted range until Phase C \
+             (engine-checkpoint transfer). Not recommended in production."
+        );
     }
 
     let me = NodeId(cfg.node_id);
@@ -317,6 +351,8 @@ pub fn spawn(
         supported: u32::MAX,
         election_ticks: cfg.election_ticks,
         heartbeat_ticks: cfg.heartbeat_ticks,
+        compact_after: (cfg.compact_after_entries > 0).then_some(cfg.compact_after_entries),
+        leader_retain: cfg.leader_retain_entries,
     };
 
     match inspect(cluster, u32::MAX, &recovered) {

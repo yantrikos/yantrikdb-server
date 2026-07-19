@@ -191,6 +191,86 @@ impl FaultRegistry {
     pub fn active_count(&self) -> usize {
         self.list().len()
     }
+
+    /// Decide the fate of one peer message `from → to`. Consulted by the
+    /// YRP receive route (`POST /v1/yrp/msg`) BEFORE any protocol
+    /// handling, per the chaos-gate design (codex D1: receive-side
+    /// injection is externally controllable across process restarts and
+    /// exercises the real HTTP path).
+    ///
+    /// Precedence: any matching Drop-class fault wins over delays; among
+    /// delays the LONGEST matching delay applies. `CorruptBytes` is not
+    /// evaluated here — the receive route's bincode decode rejecting
+    /// corrupt bytes is covered separately.
+    pub fn verdict(&self, from: u32, to: u32) -> FaultVerdict {
+        let now = Instant::now();
+        let faults = self.inner.faults.read();
+        let mut delay_ms: Option<u64> = None;
+        for r in faults.values() {
+            if r.is_expired(now) {
+                continue;
+            }
+            match &r.kind {
+                FaultKind::Partition { side_a, side_b } => {
+                    let crosses = (side_a.contains(&from) && side_b.contains(&to))
+                        || (side_b.contains(&from) && side_a.contains(&to));
+                    if crosses {
+                        return FaultVerdict::Drop;
+                    }
+                }
+                FaultKind::PauseLeader { node_id } => {
+                    if *node_id == from {
+                        return FaultVerdict::Drop;
+                    }
+                }
+                FaultKind::DropMessages {
+                    from_peer,
+                    to_peer,
+                    probability,
+                } => {
+                    let matches =
+                        from_peer.map_or(true, |f| f == from) && to_peer.map_or(true, |t| t == to);
+                    if matches && rand::Rng::gen::<f64>(&mut rand::thread_rng()) < *probability {
+                        return FaultVerdict::Drop;
+                    }
+                }
+                FaultKind::InjectLatency {
+                    from_peer,
+                    to_peer,
+                    min_ms,
+                    max_ms,
+                } => {
+                    let matches =
+                        from_peer.map_or(true, |f| f == from) && to_peer.map_or(true, |t| t == to);
+                    if matches {
+                        let hi = (*max_ms).max(*min_ms);
+                        let picked = if hi == *min_ms {
+                            *min_ms
+                        } else {
+                            rand::Rng::gen_range(&mut rand::thread_rng(), *min_ms..=hi)
+                        };
+                        delay_ms = Some(delay_ms.map_or(picked, |d| d.max(picked)));
+                    }
+                }
+                FaultKind::CorruptBytes { .. } => {}
+            }
+        }
+        match delay_ms {
+            Some(ms) => FaultVerdict::Delay(Duration::from_millis(ms)),
+            None => FaultVerdict::Deliver,
+        }
+    }
+}
+
+/// Outcome of [`FaultRegistry::verdict`] for one message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultVerdict {
+    Deliver,
+    Drop,
+    /// Deliver after this delay (the DELIVERY is delayed, not the HTTP
+    /// response — otherwise latency faults just manufacture client
+    /// timeouts, codex D1 pitfall).
+    Delay(Duration),
 }
 
 impl Default for FaultRegistry {

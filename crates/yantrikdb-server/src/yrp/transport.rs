@@ -165,14 +165,19 @@ async fn run_peer_sender(
     }
 }
 
-/// Decode an inbound `POST /v1/yrp/msg` body and forward it to the owner
-/// funnel. Returns Err on malformed bytes (HTTP 400 at the route).
-pub fn deliver_inbound(
+/// Decode an inbound `POST /v1/yrp/msg` body. Returns Err on malformed
+/// bytes (HTTP 400 at the route). Split from delivery so the route can
+/// consult the fault registry BETWEEN decode and delivery (chaos gate).
+pub fn decode_envelope(body: &[u8]) -> Result<WireEnvelope, String> {
+    bincode::deserialize(body).map_err(|e| format!("malformed YRP envelope: {e}"))
+}
+
+/// Forward a decoded message to the owner funnel.
+pub fn deliver(
     owner: &mpsc::UnboundedSender<DriverEvent>,
-    body: &[u8],
+    from: u64,
+    msg: WireMsg,
 ) -> Result<(), String> {
-    let (from, msg): WireEnvelope =
-        bincode::deserialize(body).map_err(|e| format!("malformed YRP envelope: {e}"))?;
     owner
         .send(DriverEvent::Inbound {
             from: NodeId(from),

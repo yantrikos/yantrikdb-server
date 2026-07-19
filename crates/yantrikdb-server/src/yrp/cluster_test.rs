@@ -65,6 +65,7 @@ async fn post_json(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
+    let _serial = crate::yrp::testkit::serial_guard().await;
     let _ = tracing_subscriber::fmt()
         .with_env_filter("yantrikdb=info")
         .with_test_writer()
@@ -281,6 +282,8 @@ async fn spawn_node_inner(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node 
             tick_ms: 20,
             election_ticks: (5, 10),
             heartbeat_ticks: 2,
+            compact_after_entries: 0,
+            leader_retain_entries: 0,
         },
         local.clone(),
         applier,

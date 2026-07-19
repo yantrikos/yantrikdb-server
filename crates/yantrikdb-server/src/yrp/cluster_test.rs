@@ -191,6 +191,25 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
         "follower must refuse writes: {resp}"
     );
 
+    // ensure_linearizable: the leader's committer passes a REAL barrier
+    // (noop through the replicated commit path); the follower's answers
+    // NotLeader with the leader's address for redirect.
+    leader
+        .state
+        .commit_log
+        .ensure_linearizable()
+        .await
+        .expect("leader read barrier must succeed");
+    match follower.state.commit_log.ensure_linearizable().await {
+        Err(crate::commit::CommitError::NotLeader { leader_addr, .. }) => {
+            assert!(
+                leader_addr.is_some(),
+                "follower barrier refusal must carry the leader address"
+            );
+        }
+        other => panic!("follower barrier must answer NotLeader, got {other:?}"),
+    }
+
     // Health surfaces yrp mode honestly on both nodes.
     let client = reqwest::Client::new();
     for n in [&leader, &follower] {

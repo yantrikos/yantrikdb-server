@@ -48,6 +48,6 @@ pub mod fault;
 pub mod history;
 
 pub use fault::{
-    FaultId, FaultKind, FaultRecord, FaultRegistry, FaultyNetwork, NoopFaultyNetwork,
-    RegistryFaultyNetwork,
+    FaultId, FaultKind, FaultRecord, FaultRegistry, FaultVerdict, FaultyNetwork,
+    NoopFaultyNetwork, RegistryFaultyNetwork,
 };

@@ -231,6 +231,14 @@ pub struct DriverConfig {
     pub election_ticks: (u32, u32),
     /// Heartbeat every N ticks while leader.
     pub heartbeat_ticks: u32,
+    /// Compact the log once the retained span exceeds this many entries.
+    /// `None` = never (the production default until Phase C ships engine
+    /// checkpoint transfer — see `maybe_compact` for why).
+    pub compact_after: Option<u64>,
+    /// Leader retention margin: leaders compact only to `frontier - M` so
+    /// briefly-lagging followers catch up from the log instead of
+    /// forcing a snapshot transfer (codex chaos-consult D2).
+    pub leader_retain: u64,
 }
 
 /// The YRP runtime driver. Construct with restored state, then run the
@@ -387,9 +395,40 @@ impl YrpDriver {
             if let Some(e) = exit {
                 return e;
             }
+            if let Some(e) = self.maybe_compact() {
+                return e;
+            }
             self.publish_status();
         }
         DriverExit::Shutdown
+    }
+
+    /// Runtime compaction trigger (RFC 028 §6 bound to real I/O).
+    ///
+    /// The frontier is `min(commit, durable_applied)` — NEVER bare
+    /// commit: compacting an entry the apply sink has not durably
+    /// applied would make crash-replay impossible (the re-dispatch loop
+    /// reads entries from the log; a compacted, unapplied index would be
+    /// silently skipped, leaving a permanent hole in engine state).
+    /// Leaders additionally retain `leader_retain` entries so transient
+    /// follower lag is served from the log, not a snapshot.
+    fn maybe_compact(&mut self) -> Option<DriverExit> {
+        let threshold = self.cfg.compact_after?;
+        let base = self.core.base().index;
+        let frontier = self.core.commit_index().min(self.applied);
+        if frontier.saturating_sub(base) <= threshold {
+            return None;
+        }
+        let target = if self.core.role() == Role::Leader {
+            frontier.saturating_sub(self.cfg.leader_retain)
+        } else {
+            frontier
+        };
+        if target <= base {
+            return None;
+        }
+        let (_snapshot, effects) = self.core.compact(target)?;
+        self.execute(effects)
     }
 
     fn on_inbound(&mut self, from: NodeId, msg: WireMsg) -> Option<DriverExit> {
@@ -682,6 +721,8 @@ mod tests {
                 supported: u32::MAX,
                 election_ticks: (5, 10),
                 heartbeat_ticks: 2,
+                compact_after: None,
+                leader_retain: 0,
             },
             restored,
             store,
@@ -836,6 +877,8 @@ mod tests {
                 supported: u32::MAX,
                 election_ticks: (1, 2),
                 heartbeat_ticks: 2,
+                compact_after: None,
+                leader_retain: 0,
             },
             None,
             store,

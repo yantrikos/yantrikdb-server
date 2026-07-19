@@ -1126,7 +1126,31 @@ async fn yrp_msg(
             ));
         }
     }
-    yrp.deliver_inbound(&body)
+    let (from, msg) = crate::yrp::transport::decode_envelope(&body)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, e))?;
+    // Chaos gate (RFC 010 PR-5 registry, codex D1): faults are evaluated
+    // at the receive seam, BEFORE protocol handling. Drop answers 200 —
+    // to the protocol, a dropped delivery is indistinguishable from
+    // network loss, and its timers re-drive. Delays defer the DELIVERY,
+    // not the HTTP response.
+    match state
+        .fault_registry
+        .verdict(from as u32, yrp.node_id.0 as u32)
+    {
+        crate::debug::FaultVerdict::Drop => {
+            return Ok(Json(json!({ "ok": true, "faulted": "dropped" })));
+        }
+        crate::debug::FaultVerdict::Delay(d) => {
+            let yrp = yrp.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(d).await;
+                let _ = yrp.deliver(from, msg);
+            });
+            return Ok(Json(json!({ "ok": true, "faulted": "delayed" })));
+        }
+        crate::debug::FaultVerdict::Deliver => {}
+    }
+    yrp.deliver(from, msg)
         .map_err(|e| app_error(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "ok": true })))
 }

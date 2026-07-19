@@ -335,6 +335,13 @@ pub struct YrpSection {
     pub election_ticks_max: u32,
     /// Leader heartbeat cadence, in ticks.
     pub heartbeat_ticks: u32,
+    /// Log compaction: compact once the durably-applied span exceeds
+    /// this many entries. 0 = disabled — the production default until
+    /// Phase C ships engine-checkpoint transfer for beyond-GC stragglers.
+    pub compact_after_entries: u64,
+    /// Entries a LEADER retains above its compaction base so transient
+    /// follower lag is served from the log, not a snapshot.
+    pub leader_retain_entries: u64,
     /// All cluster members (including this node).
     pub peers: Vec<YrpPeerConfig>,
 }
@@ -359,6 +366,8 @@ impl Default for YrpSection {
             election_ticks_min: 10,
             election_ticks_max: 20,
             heartbeat_ticks: 2,
+            compact_after_entries: 0,
+            leader_retain_entries: 512,
             peers: Vec::new(),
         }
     }

@@ -63,6 +63,12 @@ pub struct YrpRuntimeConfig {
     pub tick_ms: u64,
     pub election_ticks: (u32, u32),
     pub heartbeat_ticks: u32,
+    /// Compact once the applied span exceeds this (0 = disabled — the
+    /// production default until Phase C ships engine-checkpoint transfer
+    /// for beyond-GC stragglers; the protocol path is chaos-tested).
+    pub compact_after_entries: u64,
+    /// Leader retention margin (entries kept above the compaction base).
+    pub leader_retain_entries: u64,
 }
 
 /// How long a proposer waits for the driver's reply / the apply marker.
@@ -108,8 +114,8 @@ impl YrpHandle {
 
     /// Forward a decoded inbound wire message to whichever loop currently
     /// owns the funnel (driver or quarantine).
-    pub fn deliver_inbound(&self, body: &[u8]) -> Result<(), String> {
-        super::transport::deliver_inbound(&self.owner_tx, body)
+    pub fn deliver(&self, from: u64, msg: WireMsg) -> Result<(), String> {
+        super::transport::deliver(&self.owner_tx, from, msg)
     }
 
     /// Current leader hint as (id, http addr).
@@ -317,6 +323,8 @@ pub fn spawn(
         supported: u32::MAX,
         election_ticks: cfg.election_ticks,
         heartbeat_ticks: cfg.heartbeat_ticks,
+        compact_after: (cfg.compact_after_entries > 0).then_some(cfg.compact_after_entries),
+        leader_retain: cfg.leader_retain_entries,
     };
 
     match inspect(cluster, u32::MAX, &recovered) {

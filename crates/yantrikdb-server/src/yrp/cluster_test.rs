@@ -281,6 +281,8 @@ async fn spawn_node_inner(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node 
             tick_ms: 20,
             election_ticks: (5, 10),
             heartbeat_ticks: 2,
+            compact_after_entries: 0,
+            leader_retain_entries: 0,
         },
         local.clone(),
         applier,

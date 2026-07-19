@@ -28,8 +28,8 @@ use super::bootstrap::{
     RejoinMessage,
 };
 use super::driver::{
-    run_apply_worker, spawn_ticker, DriverConfig, DriverEvent, DriverExit, DurableState, FileStore,
-    ProposeOutcome, Transport, WireMsg, YrpDriver, YrpStatus,
+    run_apply_worker, spawn_ticker, BarrierOutcome, DriverConfig, DriverEvent, DriverExit,
+    DurableState, FileStore, ProposeOutcome, Transport, WireMsg, YrpDriver, YrpStatus,
 };
 use super::engine_sink::{AppliedOutcome, EngineApplySink, OutcomeStore};
 use super::op::{claim_key_for_op, YrpOp};
@@ -116,6 +116,36 @@ impl YrpHandle {
     /// owns the funnel (driver or quarantine).
     pub fn deliver(&self, from: u64, msg: WireMsg) -> Result<(), String> {
         super::transport::deliver(&self.owner_tx, from, msg)
+    }
+
+    /// Linearizable-read barrier: resolves Ok once every write committed
+    /// before this call is durably applied locally, with the no-op commit
+    /// itself proving leadership at the linearization point. `Err` maps
+    /// exactly like propose failures (NotLeader with hint / Timeout).
+    pub async fn read_barrier(&self) -> Result<(), YrpProposeError> {
+        if let Some(reasons) = self.quarantine_reasons() {
+            return Err(YrpProposeError::Unavailable(format!(
+                "node quarantined: {reasons:?}"
+            )));
+        }
+        let (tx, rx) = oneshot::channel();
+        self.owner_tx
+            .send(DriverEvent::ReadBarrier { reply: tx })
+            .map_err(|_| YrpProposeError::Unavailable("YRP driver not running".into()))?;
+        let out = tokio::time::timeout(PROPOSE_TIMEOUT, rx)
+            .await
+            .map_err(|_| YrpProposeError::Timeout)?
+            .map_err(|_| YrpProposeError::Unavailable("YRP driver dropped reply".into()))?;
+        match out {
+            BarrierOutcome::Ok => Ok(()),
+            BarrierOutcome::Retry => {
+                let (leader_id, leader_addr) = self.leader_hint();
+                Err(YrpProposeError::NotLeader {
+                    leader_id,
+                    leader_addr,
+                })
+            }
+        }
     }
 
     /// Graceful stop of whichever loop owns the funnel (tests/shutdown).
@@ -652,19 +682,15 @@ impl MutationCommitter for YrpCommitter {
         self.local.list_active_tenants().await
     }
 
-    /// v1 approximation: leadership check only (no quorum read lease —
-    /// a deposed-but-unaware leader window exists, same as the legacy
-    /// raft-lite mode; the honest fix is a read-index barrier, tracked
-    /// for the chaos-gate slice).
+    /// Real linearizable-read barrier (replaces the v1 leadership-only
+    /// approximation): a protocol no-op committed through the normal
+    /// replicated path + a wait on the durable applied marker. A deposed
+    /// leader's no-op cannot commit in its term (Gate A #2), so the
+    /// stale-read window the approximation left open is closed.
     async fn ensure_linearizable(&self) -> Result<(), CommitError> {
-        if self.handle.is_leader() {
-            Ok(())
-        } else {
-            let (leader_id, leader_addr) = self.handle.leader_hint();
-            Err(CommitError::NotLeader {
-                leader_id,
-                leader_addr,
-            })
-        }
+        self.handle
+            .read_barrier()
+            .await
+            .map_err(|e| propose_err_to_commit(e, OpId::new_random()))
     }
 }

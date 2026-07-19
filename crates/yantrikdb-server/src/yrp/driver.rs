@@ -146,6 +146,21 @@ pub enum ProposeOutcome {
     Retry,
 }
 
+/// Outcome of a linearizable-read barrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BarrierOutcome {
+    /// Every write committed before the barrier was requested is durably
+    /// applied LOCALLY. Reads served from local state after this reflect
+    /// them. This is a linearization POINT, not a leadership lease —
+    /// writes committed by a newer leader after the barrier may be
+    /// absent, which is permitted for reads concurrent with them
+    /// (codex barrier-consult pitfall 2, made explicit).
+    Ok,
+    /// Not the leader (or leadership was lost while the barrier was
+    /// pending) — retry against the current leader.
+    Retry,
+}
+
 /// Events into the owner funnel.
 pub enum DriverEvent {
     Inbound {
@@ -156,6 +171,14 @@ pub enum DriverEvent {
         key: u64,
         payload: Payload,
         reply: oneshot::Sender<ProposeOutcome>,
+    },
+    /// Linearizable-read barrier (codex-consulted design: a protocol
+    /// no-op through the NORMAL commit path — soundness rides entirely
+    /// on the proven current-term commit rule; committing the no-op IS
+    /// the fresh quorum contact that proves this node was still leader
+    /// at the barrier's linearization point).
+    ReadBarrier {
+        reply: oneshot::Sender<BarrierOutcome>,
     },
     /// Apply worker reports the highest contiguous durably-applied index.
     Applied {
@@ -252,6 +275,9 @@ pub struct YrpDriver {
     /// (index → reply) awaiting contiguous durable apply (volatile —
     /// connection state only, per codex F3).
     pending_acks: BTreeMap<u64, oneshot::Sender<ProposeOutcome>>,
+    /// (barrier no-op index → waiters). Resolved Ok when the durable
+    /// applied marker covers the index; failed Retry on step-down.
+    pending_barriers: BTreeMap<u64, Vec<oneshot::Sender<BarrierOutcome>>>,
     /// Highest contiguous durably-applied index (from the apply worker).
     applied: u64,
     /// Committed-but-not-yet-dispatched-to-apply frontier.
@@ -317,6 +343,7 @@ impl YrpDriver {
             apply_tx,
             cfg,
             pending_acks: BTreeMap::new(),
+            pending_barriers: BTreeMap::new(),
             applied: durable_applied,
             dispatched: durable_applied,
             election_ticks_left: None,
@@ -384,6 +411,7 @@ impl YrpDriver {
                     payload,
                     reply,
                 } => self.on_propose(key, payload, reply),
+                DriverEvent::ReadBarrier { reply } => self.on_read_barrier(reply),
                 DriverEvent::Applied { upto } => {
                     self.applied = self.applied.max(upto);
                     self.release_acks();
@@ -501,6 +529,41 @@ impl YrpDriver {
         }
     }
 
+    /// Linearizable-read barrier (codex barrier-consult, verdict A).
+    /// A protocol no-op is proposed through the NORMAL replicated commit
+    /// path; the barrier resolves when the durable applied marker covers
+    /// the no-op's index. Coalescing honors codex pitfall 1: a waiter may
+    /// only attach to an in-flight barrier no-op whose index is at least
+    /// the commit index THIS caller observed — otherwise writes committed
+    /// after that no-op was appended could be missed.
+    fn on_read_barrier(&mut self, reply: oneshot::Sender<BarrierOutcome>) -> Option<DriverExit> {
+        if self.core.role() != Role::Leader {
+            let _ = reply.send(BarrierOutcome::Retry);
+            return None;
+        }
+        let observed_commit = self.core.commit_index();
+        if let Some((&inflight, _)) = self.pending_barriers.iter().next_back() {
+            if inflight >= observed_commit && inflight > self.applied {
+                self.pending_barriers
+                    .entry(inflight)
+                    .or_default()
+                    .push(reply);
+                return None;
+            }
+        }
+        match self.core.propose(Payload::Noop) {
+            Some(effects) => {
+                let index = self.core.last_index();
+                self.pending_barriers.entry(index).or_default().push(reply);
+                self.execute(effects)
+            }
+            None => {
+                let _ = reply.send(BarrierOutcome::Retry);
+                None
+            }
+        }
+    }
+
     fn on_tick(&mut self) -> Option<DriverExit> {
         if self.core.role() == Role::Leader {
             self.heartbeat_ticks_left = self.heartbeat_ticks_left.saturating_sub(1);
@@ -571,6 +634,14 @@ impl YrpDriver {
                     for (_, tx) in std::mem::take(&mut self.pending_acks) {
                         let _ = tx.send(ProposeOutcome::Retry);
                     }
+                    // Pending barriers likewise: our reign can no longer
+                    // prove a linearization point — the caller retries
+                    // against the current leader.
+                    for (_, waiters) in std::mem::take(&mut self.pending_barriers) {
+                        for tx in waiters {
+                            let _ = tx.send(BarrierOutcome::Retry);
+                        }
+                    }
                 }
                 Effect::CommitAdvanced { to } => {
                     // Dispatch newly committed entries to the sequential
@@ -610,6 +681,19 @@ impl YrpDriver {
         for i in ready {
             if let Some(tx) = self.pending_acks.remove(&i) {
                 let _ = tx.send(ProposeOutcome::Applied { index: i });
+            }
+        }
+        let ready_barriers: Vec<u64> = self
+            .pending_barriers
+            .keys()
+            .copied()
+            .take_while(|i| *i <= self.applied)
+            .collect();
+        for i in ready_barriers {
+            if let Some(waiters) = self.pending_barriers.remove(&i) {
+                for tx in waiters {
+                    let _ = tx.send(BarrierOutcome::Ok);
+                }
             }
         }
     }
@@ -858,6 +942,64 @@ mod tests {
             ProposeOutcome::Applied { .. } => panic!("keyed retry double-applied after restart"),
             other => panic!("unexpected {other:?}"),
         }
+
+        for n in nodes.values() {
+            let _ = n.tx.send(DriverEvent::Shutdown);
+        }
+    }
+
+    /// Read barrier: Ok on the leader (noop committed + applied), Retry
+    /// on followers. Ordering: a write acked before the barrier is in
+    /// the sink before the barrier resolves.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn read_barrier_ok_on_leader_retry_on_follower() {
+        let _serial = crate::yrp::testkit::serial_guard().await;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let router = Arc::new(Mutex::new(BTreeMap::new()));
+        let mut nodes = BTreeMap::new();
+        for id in [1u64, 2, 3] {
+            let sink = Arc::new(Mutex::new(SinkState::default()));
+            nodes.insert(id, spawn_node(id, tmp.path(), &router, sink));
+        }
+        let (leader, out) = propose_until_settled(&nodes, 7, 777).await;
+        let index = match out {
+            ProposeOutcome::Applied { index } | ProposeOutcome::Duplicate { index } => index,
+            ProposeOutcome::Retry => unreachable!(),
+        };
+
+        // Barrier on the leader resolves Ok, and the pre-barrier write is
+        // in the leader's sink by then.
+        let (btx, brx) = oneshot::channel();
+        let _ = nodes[&leader]
+            .tx
+            .send(DriverEvent::ReadBarrier { reply: btx });
+        let out = tokio::time::timeout(Duration::from_secs(5), brx)
+            .await
+            .expect("barrier reply in time")
+            .expect("driver alive");
+        assert_eq!(out, BarrierOutcome::Ok);
+        assert!(
+            nodes[&leader]
+                .sink
+                .lock()
+                .unwrap()
+                .applied
+                .iter()
+                .any(|(i, _)| *i == index),
+            "barrier resolved before the pre-barrier write was applied"
+        );
+
+        // Barrier on a follower answers Retry immediately.
+        let follower = *nodes.keys().find(|id| **id != leader).unwrap();
+        let (btx, brx) = oneshot::channel();
+        let _ = nodes[&follower]
+            .tx
+            .send(DriverEvent::ReadBarrier { reply: btx });
+        let out = tokio::time::timeout(Duration::from_secs(5), brx)
+            .await
+            .expect("barrier reply in time")
+            .expect("driver alive");
+        assert_eq!(out, BarrierOutcome::Retry);
 
         for n in nodes.values() {
             let _ = n.tx.send(DriverEvent::Shutdown);

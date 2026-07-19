@@ -113,6 +113,35 @@ fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
             role_label: Some(role_label),
         });
     }
+    if let Some(ref yrp) = state.yrp {
+        let quarantined = yrp.quarantine_reasons().is_some();
+        let s = *yrp.status.borrow();
+        let (leader, leader_addr) = yrp.leader_hint();
+        let role_label: &'static str = if quarantined {
+            "quarantined"
+        } else {
+            match s.role {
+                crate::yrp::replica::Role::Leader => "leader",
+                crate::yrp::replica::Role::Follower => "follower",
+                crate::yrp::replica::Role::Candidate
+                | crate::yrp::replica::Role::PreCandidate => "candidate",
+            }
+        };
+        return Some(ClusterStateView {
+            node_id: yrp.node_id.0,
+            role: role_label.to_string(),
+            term: s.term,
+            leader,
+            leader_addr,
+            accepts_writes: !quarantined && s.role == crate::yrp::replica::Role::Leader,
+            healthy: !quarantined && leader.is_some(),
+            raft_mode: "yrp",
+            last_log_index: Some(s.commit),
+            last_applied_index: Some(s.applied),
+            replication_lag_log_entries: Some(s.commit.saturating_sub(s.applied)),
+            role_label: Some(role_label),
+        });
+    }
     if let Some(ref cluster) = state.cluster {
         return Some(ClusterStateView {
             node_id: cluster.node_id() as u64,
@@ -453,6 +482,15 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
             "role_label": view.role_label,
         });
     }
+    // RFC 028 §5: the honest quarantine surface. "Process up" and "data
+    // servable" are different health dimensions — a quarantined node
+    // answers this endpoint (that is the whole point) but says so loudly.
+    if let Some(yrp) = &state.yrp {
+        if let Some(reasons) = yrp.quarantine_reasons() {
+            payload["status"] = json!("quarantined");
+            payload["yrp_quarantine_reasons"] = json!(reasons);
+        }
+    }
     Json(payload)
 }
 
@@ -742,6 +780,14 @@ async fn remember(
         .and_then(|v| v.as_str())
         .map(String::from)
     {
+        // RFC 028 §7: in yrp mode the claim rides IN the replicated log
+        // (checked at origin ingress, committed with its op, truncated
+        // with its op) — the coupling the engine-atomic path provides on
+        // single-node. This replaces the historical cluster-mode 501.
+        if let Some(yrp) = state.yrp.clone() {
+            return remember_with_idempotency_yrp(&state, db_id, yrp, body, text, embedding, key)
+                .await;
+        }
         return remember_with_idempotency(&state, engine, body, text, embedding, key).await;
     }
 
@@ -752,13 +798,41 @@ async fn remember(
     // node. RID is allocated server-side (deterministic per-mutation,
     // not per-replica) and carried in the mutation body.
     let rid = uuid7::uuid7().to_string();
+    let mutation = upsert_mutation_from_body(&body, text, embedding, &rid);
+
+    let receipt = state
+        .commit_log
+        .commit(
+            crate::commit::TenantId::new(db_id),
+            mutation,
+            crate::commit::CommitOptions::default(),
+        )
+        .await
+        .map_err(commit_error_to_app_error)?;
+
+    let _ = engine; // engine handle is held only for quota check
+    Ok(Json(json!({
+        "rid": rid,
+        "log_index": receipt.log_index,
+    })))
+}
+
+/// Build the deterministic `UpsertMemory` mutation for a `/v1/remember`
+/// body. The rid is allocated by the CALLER before this (server-side,
+/// per-mutation — never per-replica) and the server timestamp is
+/// materialized here, so every node applies identical bytes.
+fn upsert_mutation_from_body(
+    body: &Value,
+    text: String,
+    embedding: Option<Vec<f32>>,
+    rid: &str,
+) -> crate::commit::MemoryMutation {
     let now_micros = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
         .unwrap_or(0);
-
-    let mutation = crate::commit::MemoryMutation::UpsertMemory {
-        rid: rid.clone(),
+    crate::commit::MemoryMutation::UpsertMemory {
+        rid: rid.to_string(),
         text,
         memory_type: body
             .get("memory_type")
@@ -802,23 +876,7 @@ async fn remember(
         extracted_entities: vec![],
         created_at_unix_micros: Some(now_micros),
         embedding_model: Some("default".into()),
-    };
-
-    let receipt = state
-        .commit_log
-        .commit(
-            crate::commit::TenantId::new(db_id),
-            mutation,
-            crate::commit::CommitOptions::default(),
-        )
-        .await
-        .map_err(commit_error_to_app_error)?;
-
-    let _ = engine; // engine handle is held only for quota check
-    Ok(Json(json!({
-        "rid": rid,
-        "log_index": receipt.log_index,
-    })))
+    }
 }
 
 /// Issue #58: the keyed `/v1/remember` path — engine-atomic claim + row.
@@ -949,6 +1007,127 @@ async fn remember_with_idempotency(
             format!("engine error: {e}"),
         )),
     }
+}
+
+/// RFC 028 §7: the keyed `/v1/remember` path in yrp mode — claim-in-log.
+///
+/// The claim is checked at the leader's origin ingress (the driver's
+/// `propose_keyed`), carried inside the committed entry, and never
+/// re-gated at apply. The response contract is byte-identical to the
+/// single-node engine path (issue #58 convergence with yantrikdb-mcp +
+/// hermes): fresh → `{rid}`; same key + same text → `{rid}` (original,
+/// silent HIT); same key + different text → 200 conflict shape; invalid
+/// key → 400. Retries during ANY replication state resolve through the
+/// claims table + durable outcome store — never a double-write.
+async fn remember_with_idempotency_yrp(
+    state: &Arc<AppState>,
+    db_id: i64,
+    yrp: Arc<crate::yrp::runtime::YrpHandle>,
+    body: Value,
+    text: String,
+    embedding: Option<Vec<f32>>,
+    key: String,
+) -> AppResult {
+    if key.trim().is_empty() || key.len() > 512 {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "invalid idempotency_key: must be non-blank and at most 512 bytes",
+        ));
+    }
+    // Replicated mutations must carry a materialized embedding — a None
+    // here would fail-stop the apply worker on every node. Refuse loudly.
+    let Some(embedding) = embedding else {
+        return Err(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "keyed writes in yrp mode require an embedding (server embedder \
+             unavailable and no client vector supplied)",
+        ));
+    };
+
+    let tenant = crate::commit::TenantId::new(db_id);
+    let rid = uuid7::uuid7().to_string();
+    let op = crate::yrp::op::YrpOp {
+        tenant_id: tenant,
+        op_id: crate::commit::OpId::new_random(),
+        mutation: upsert_mutation_from_body(&body, text.clone(), Some(embedding), &rid),
+        idempotency_key: Some(key.clone()),
+    };
+    let claim = crate::yrp::op::claim_key_for_idempotency(tenant, &key);
+
+    let outcome = match yrp.propose_and_wait(claim, &op).await {
+        Ok(o) => o,
+        Err(e) => {
+            return Err(commit_error_to_app_error(
+                crate::yrp::runtime::propose_err_to_commit(e, op.op_id),
+            ))
+        }
+    };
+
+    // Digest-collision guard: the durable outcome stores the FULL key
+    // string; a mismatch means two distinct keys share a 64-bit digest.
+    // Refuse rather than mis-dedupe (fail closed; astronomically rare).
+    if outcome.key_str.as_deref() != Some(key.as_str()) {
+        return Err(app_error(
+            StatusCode::CONFLICT,
+            "idempotency_key digest collision with a different stored key; \
+             use a different key",
+        ));
+    }
+    let original_rid = outcome.rid.clone().unwrap_or_default();
+    if original_rid == rid {
+        // Our entry won the claim: a fresh write.
+        return Ok(Json(json!({ "rid": rid })));
+    }
+
+    // Deduped against an earlier committed entry. Distinguish silent-HIT
+    // (same text) from conflict (different text) against the ORIGINAL
+    // mutation in the local commit log (materialized at apply).
+    let original_text = state
+        .commit_log
+        .read_range(tenant, outcome.tenant_log_index, 1)
+        .await
+        .ok()
+        .and_then(|entries| entries.into_iter().next())
+        .and_then(|e| match e.mutation {
+            crate::commit::MemoryMutation::UpsertMemory { text, .. } => Some(text),
+            _ => None,
+        });
+    match original_text {
+        Some(t) if t == text => Ok(Json(json!({ "rid": original_rid }))),
+        _ => Ok(Json(json!({
+            "stored": false,
+            "idempotency_conflict": true,
+            "rid": original_rid,
+        }))),
+    }
+}
+
+/// RFC 028: peer wire route — YRP messages ride the HTTP plane as a
+/// bincode envelope (see `yrp::transport`). Authenticated by the shared
+/// cluster secret when configured; malformed envelopes are a 400.
+async fn yrp_msg(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> AppResult {
+    let Some(yrp) = &state.yrp else {
+        return Err(app_error(StatusCode::NOT_FOUND, "yrp mode not enabled"));
+    };
+    if let Some(secret) = &yrp.cluster_secret {
+        let presented = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "));
+        if presented != Some(secret.as_str()) {
+            return Err(app_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid cluster secret",
+            ));
+        }
+    }
+    yrp.deliver_inbound(&body)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Issue #58: keyed `/v1/remember/batch` — the engine's atomic batch path.
@@ -4922,6 +5101,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/databases", get(list_databases))
         .route("/v1/cluster", get(cluster_status))
         .route("/v1/cluster/promote", post(cluster_promote))
+        // RFC 028: YRP peer wire (bincode envelope; cluster-secret gated)
+        .route("/v1/yrp/msg", post(yrp_msg))
         // v0.8.3 #24: openraft membership management
         .route("/v1/cluster/initialize", post(cluster_initialize))
         .route("/v1/cluster/add-learner", post(cluster_add_learner))
@@ -5614,6 +5795,7 @@ pub(crate) mod e2e_test_support {
             control_runtime: None,
             commit_log,
             raft: None,
+            yrp: None,
             fault_registry: crate::debug::FaultRegistry::new(),
             jobs,
             data_dir,

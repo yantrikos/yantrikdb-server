@@ -33,6 +33,9 @@ pub struct ServerConfig {
     /// RFC 014-A: cluster-transport mTLS. Optional in legacy cluster
     /// mode; production gate for RFC 010 PR-4 openraft.
     pub cluster_tls: crate::security::ClusterTlsConfig,
+    /// RFC 028: native replication. Active when
+    /// `cluster.raft_mode = "yrp"`.
+    pub yrp: YrpSection,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -312,6 +315,53 @@ pub struct ClusterSection {
     /// production gate at server startup (see
     /// [`crate::raft::build_raft_cluster`]).
     pub raft_mode: crate::raft::RaftClusterMode,
+}
+
+/// RFC 028 `[yrp]` section — native-replication knobs. Only read when
+/// `cluster.raft_mode = "yrp"`. Node identity comes from
+/// `cluster.node_id`; `peers` lists EVERY cluster member including this
+/// node (self is matched by node_id).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct YrpSection {
+    /// Immutable cluster identity (RFC 028 §3). Must be identical and
+    /// non-zero on every member; alien state quarantines at boot.
+    pub cluster_id: u64,
+    /// Driver tick period. All election/heartbeat timing is counted in
+    /// these ticks.
+    pub tick_ms: u64,
+    /// Randomized election timeout range, in ticks.
+    pub election_ticks_min: u32,
+    pub election_ticks_max: u32,
+    /// Leader heartbeat cadence, in ticks.
+    pub heartbeat_ticks: u32,
+    /// All cluster members (including this node).
+    pub peers: Vec<YrpPeerConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct YrpPeerConfig {
+    pub node_id: u64,
+    /// HTTP base url peers reach this member at (e.g. "http://10.0.0.2:7438").
+    /// YRP wire messages ride the HTTP plane (`POST /v1/yrp/msg`).
+    pub addr: String,
+    /// Witness: votes in elections, never stores data, never counts
+    /// toward commit durability (RFC 028 §4). At most one per cluster.
+    #[serde(default)]
+    pub witness: bool,
+}
+
+impl Default for YrpSection {
+    fn default() -> Self {
+        Self {
+            cluster_id: 0,
+            tick_ms: 50,
+            election_ticks_min: 10,
+            election_ticks_max: 20,
+            heartbeat_ticks: 2,
+            peers: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

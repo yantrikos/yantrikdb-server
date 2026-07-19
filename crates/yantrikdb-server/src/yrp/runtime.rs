@@ -498,7 +498,7 @@ impl YrpCommitter {
     }
 }
 
-fn propose_err_to_commit(e: YrpProposeError, op_id: OpId) -> CommitError {
+pub fn propose_err_to_commit(e: YrpProposeError, op_id: OpId) -> CommitError {
     match e {
         YrpProposeError::NotLeader {
             leader_id,

@@ -38,7 +38,10 @@
 pub mod m001_memory_commit_log;
 pub mod m002_durable_jobs;
 pub mod m003_hnsw_manifests;
-pub mod m004_raft_log;
+// m004_raft_log removed in Phase D (saga 239) — it created openraft-only
+// tables (raft_log_entries/raft_vote/raft_state). The runner is
+// forward-only and tolerates already-applied ids not present in this
+// list, so dropping it is safe on DBs that recorded id=4.
 
 use rusqlite::{Connection, Transaction};
 use thiserror::Error;
@@ -86,7 +89,6 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(m001_memory_commit_log::M001),
         Box::new(m002_durable_jobs::M002),
         Box::new(m003_hnsw_manifests::M003),
-        Box::new(m004_raft_log::M004),
     ]
 }
 

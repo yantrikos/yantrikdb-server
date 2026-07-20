@@ -98,38 +98,9 @@ pub struct MetricsStore {
     /// THIS IS THE ACCEPTANCE GATE for PR-1's CPU isolation: under
     /// saturation, p99 must stay < 10ms. See `tests/cpu_isolation.rs`.
     raft_task_poll_latency: Mutex<HistogramData>,
-    // RFC 010 PR-4 — openraft cluster gauges. Updated by the metrics
-    // recorder spawned from `raft::status::spawn_raft_metrics_recorder`,
-    // which subscribes to openraft's `RaftMetrics` watch channel.
-    //
-    // For Optional<u64> values we use `i64` with `-1` as the sentinel
-    // for `None` so Prometheus gauges can render the absence without
-    // a separate "_present" gauge. Operators read `-1` as "no value
-    // yet" — same idiom as `node_filesystem_files_free` reporting
-    // negative values for unsupported filesystems.
-    /// Gauge: current term as observed by this node.
-    openraft_current_term: std::sync::atomic::AtomicU64,
-    /// Gauge: 1 if this node is the leader, 0 otherwise.
-    openraft_is_leader: std::sync::atomic::AtomicI64,
-    /// Gauge: last log index appended on this node. `-1` = none.
-    openraft_last_log_index: std::sync::atomic::AtomicI64,
-    /// Gauge: last log index applied to the state machine. `-1` = none.
-    openraft_last_applied_index: std::sync::atomic::AtomicI64,
-    /// Gauge: last snapshot's last_log_index. `-1` = no snapshot.
-    openraft_snapshot_index: std::sync::atomic::AtomicI64,
-    /// Gauge: earliest log_index still in the log. `-1` = none.
-    openraft_purged_index: std::sync::atomic::AtomicI64,
-    /// Gauge: ms since quorum last acknowledged the leader. `-1`
-    /// when this node isn't the leader. Spike here = partition or
-    /// replication backpressure.
-    openraft_quorum_ack_lag_ms: std::sync::atomic::AtomicI64,
-    /// Gauge: 1 if openraft `running_state` is `Ok`, 0 after fatal.
-    openraft_running_state_healthy: std::sync::atomic::AtomicI64,
-    /// Gauge: number of voter members.
-    openraft_voters: std::sync::atomic::AtomicU64,
-    /// Gauge: number of learner members.
-    openraft_learners: std::sync::atomic::AtomicU64,
-
+    // (openraft cluster gauges removed in Phase D / saga 239. YRP
+    // replication surfaces its state via /v1/health, not /metrics gauges;
+    // a dedicated YRP metrics surface is tracked separately.)
     /// Counter: recall requests, labelled by api_version + expand.
     recall_request_counts: Mutex<HashMap<(&'static str, bool), u64>>,
     /// Histogram: requested top_k values, labelled by api_version.
@@ -200,16 +171,6 @@ impl MetricsStore {
             raft_elections: Mutex::new(HashMap::new()),
             raft_heartbeat_lag: Mutex::new(HistogramData::new()),
             raft_task_poll_latency: Mutex::new(HistogramData::new()),
-            openraft_current_term: std::sync::atomic::AtomicU64::new(0),
-            openraft_is_leader: std::sync::atomic::AtomicI64::new(0),
-            openraft_last_log_index: std::sync::atomic::AtomicI64::new(-1),
-            openraft_last_applied_index: std::sync::atomic::AtomicI64::new(-1),
-            openraft_snapshot_index: std::sync::atomic::AtomicI64::new(-1),
-            openraft_purged_index: std::sync::atomic::AtomicI64::new(-1),
-            openraft_quorum_ack_lag_ms: std::sync::atomic::AtomicI64::new(-1),
-            openraft_running_state_healthy: std::sync::atomic::AtomicI64::new(0),
-            openraft_voters: std::sync::atomic::AtomicU64::new(0),
-            openraft_learners: std::sync::atomic::AtomicU64::new(0),
             recall_request_counts: Mutex::new(HashMap::new()),
             recall_request_top_k: Mutex::new(HashMap::new()),
             embedder_failures: Mutex::new(HashMap::new()),
@@ -373,76 +334,6 @@ impl MetricsStore {
                 ));
             }
         }
-
-        // RFC 010 PR-4 — openraft cluster gauges. Always rendered (even
-        // at default values) so dashboards using these metrics don't
-        // disappear when the cluster is freshly bootstrapped.
-        let load_u64 =
-            |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
-        let load_i64 =
-            |a: &std::sync::atomic::AtomicI64| a.load(std::sync::atomic::Ordering::Relaxed);
-        out.push_str(
-            "# HELP yantrikdb_openraft_current_term Current Raft term observed by this node\n",
-        );
-        out.push_str("# TYPE yantrikdb_openraft_current_term gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_current_term {}\n",
-            load_u64(&self.openraft_current_term)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_is_leader 1 if this node is the cluster leader, 0 otherwise\n");
-        out.push_str("# TYPE yantrikdb_openraft_is_leader gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_is_leader {}\n",
-            load_i64(&self.openraft_is_leader)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_last_log_index Last log index appended on this node (-1 = none)\n");
-        out.push_str("# TYPE yantrikdb_openraft_last_log_index gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_last_log_index {}\n",
-            load_i64(&self.openraft_last_log_index)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_last_applied_index Last log index applied to state machine (-1 = none)\n");
-        out.push_str("# TYPE yantrikdb_openraft_last_applied_index gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_last_applied_index {}\n",
-            load_i64(&self.openraft_last_applied_index)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_snapshot_index Last log index included in the most recent snapshot (-1 = none)\n");
-        out.push_str("# TYPE yantrikdb_openraft_snapshot_index gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_snapshot_index {}\n",
-            load_i64(&self.openraft_snapshot_index)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_purged_index Largest log index purged from storage (-1 = none)\n");
-        out.push_str("# TYPE yantrikdb_openraft_purged_index gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_purged_index {}\n",
-            load_i64(&self.openraft_purged_index)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_quorum_ack_lag_ms Ms since quorum last acknowledged the leader (-1 = not leader)\n");
-        out.push_str("# TYPE yantrikdb_openraft_quorum_ack_lag_ms gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_quorum_ack_lag_ms {}\n",
-            load_i64(&self.openraft_quorum_ack_lag_ms)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_running_state_healthy 1 if openraft running_state is Ok, 0 after fatal\n");
-        out.push_str("# TYPE yantrikdb_openraft_running_state_healthy gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_running_state_healthy {}\n",
-            load_i64(&self.openraft_running_state_healthy)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_voters Number of voter members in cluster\n");
-        out.push_str("# TYPE yantrikdb_openraft_voters gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_voters {}\n",
-            load_u64(&self.openraft_voters)
-        ));
-        out.push_str("# HELP yantrikdb_openraft_learners Number of learner members in cluster\n");
-        out.push_str("# TYPE yantrikdb_openraft_learners gauge\n");
-        out.push_str(&format!(
-            "yantrikdb_openraft_learners {}\n",
-            load_u64(&self.openraft_learners)
-        ));
 
         // Recall request counter, labelled by api_version and expand.
         {
@@ -647,6 +538,9 @@ pub fn set_expansion_concurrent_gauge(value: i64) {
 }
 
 /// Record a Raft term increment. Term=1423 thrashing fingerprint.
+/// Legacy raft-lite metric — no live feeder after the Phase D openraft
+/// removal (kept for the raft-lite path / dashboard stability).
+#[allow(dead_code)]
 pub fn increment_raft_term_changes() {
     global()
         .raft_term_changes
@@ -655,6 +549,7 @@ pub fn increment_raft_term_changes() {
 
 /// Record a Raft election outcome. `result` MUST be one of
 /// "won" | "lost" | "stepped_down" — pinned for dashboard stability.
+#[allow(dead_code)]
 pub fn record_raft_election(result: &'static str) {
     debug_assert!(
         matches!(result, "won" | "lost" | "stepped_down"),
@@ -665,6 +560,7 @@ pub fn record_raft_election(result: &'static str) {
 }
 
 /// Record a heartbeat round-trip duration.
+#[allow(dead_code)]
 pub fn record_raft_heartbeat_lag(duration: std::time::Duration) {
     global()
         .raft_heartbeat_lag
@@ -680,48 +576,6 @@ pub fn record_raft_task_poll_latency(duration: std::time::Duration) {
         .raft_task_poll_latency
         .lock()
         .observe(duration.as_secs_f64());
-}
-
-/// Primitive-typed setter for the openraft cluster gauges. Kept on
-/// primitive args (not `&RaftStatus`) so this module stays a leaf —
-/// the integration tests for unrelated modules (cpu_isolation, etc.)
-/// re-include `metrics.rs` via `#[path]` and shouldn't be forced to
-/// pull in `raft/`. The `raft::status` module wraps this in a
-/// status-aware helper.
-#[allow(clippy::too_many_arguments)]
-pub fn record_openraft_gauges(
-    current_term: u64,
-    is_leader: bool,
-    last_log_index: Option<u64>,
-    last_applied_index: Option<u64>,
-    snapshot_index: Option<u64>,
-    purged_index: Option<u64>,
-    millis_since_quorum_ack: Option<u64>,
-    healthy: bool,
-    voters: u64,
-    learners: u64,
-) {
-    use std::sync::atomic::Ordering::Relaxed;
-    let g = global();
-    g.openraft_current_term.store(current_term, Relaxed);
-    g.openraft_is_leader
-        .store(if is_leader { 1 } else { 0 }, Relaxed);
-    g.openraft_last_log_index
-        .store(last_log_index.map(|n| n as i64).unwrap_or(-1), Relaxed);
-    g.openraft_last_applied_index
-        .store(last_applied_index.map(|n| n as i64).unwrap_or(-1), Relaxed);
-    g.openraft_snapshot_index
-        .store(snapshot_index.map(|n| n as i64).unwrap_or(-1), Relaxed);
-    g.openraft_purged_index
-        .store(purged_index.map(|n| n as i64).unwrap_or(-1), Relaxed);
-    g.openraft_quorum_ack_lag_ms.store(
-        millis_since_quorum_ack.map(|n| n as i64).unwrap_or(-1),
-        Relaxed,
-    );
-    g.openraft_running_state_healthy
-        .store(if healthy { 1 } else { 0 }, Relaxed);
-    g.openraft_voters.store(voters, Relaxed);
-    g.openraft_learners.store(learners, Relaxed);
 }
 
 /// Record an incoming recall request. `api_version` is "v1" or "v2";

@@ -320,7 +320,6 @@ async fn spawn_node_inner(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node 
         admission,
         control_runtime: None,
         commit_log,
-        raft: None,
         yrp: Some(handle.clone()),
         fault_registry: crate::debug::FaultRegistry::new(),
         jobs,

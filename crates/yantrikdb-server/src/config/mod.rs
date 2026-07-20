@@ -309,12 +309,30 @@ pub struct ClusterSection {
     /// Replication mode: async (default) or sync.
     pub replication_mode: ReplicationMode,
 
-    /// RFC 010 PR-4: which Raft engine drives the cluster. Defaults to
-    /// `Disabled` (single-node, no Raft). `OpenRaft` activates the
-    /// production-grade openraft engine — and triggers the mTLS
-    /// production gate at server startup (see
-    /// [`crate::raft::build_raft_cluster`]).
-    pub raft_mode: crate::raft::RaftClusterMode,
+    /// Which replication engine drives the cluster. `Disabled` =
+    /// single-node (no replication); `Yrp` = RFC 028 native replication.
+    /// The historical `openraft` engine was removed in Phase D (saga 239)
+    /// — a config with `raft_mode = "openraft"` is refused at load with a
+    /// migration hint (see [`ServerConfig::load`]).
+    pub raft_mode: RaftClusterMode,
+}
+
+/// Which replication engine drives the cluster. Relocated here from the
+/// deleted `raft` module (Phase D). `#[serde(rename_all = "lowercase")]`
+/// ⇒ accepts `"disabled"` / `"yrp"` in TOML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RaftClusterMode {
+    /// Single-node — no cluster transport, no replication. The default.
+    Disabled,
+    /// RFC 028 YRP native replication.
+    Yrp,
+}
+
+impl Default for RaftClusterMode {
+    fn default() -> Self {
+        RaftClusterMode::Disabled
+    }
 }
 
 /// RFC 028 `[yrp]` section — native-replication knobs. Only read when
@@ -415,7 +433,7 @@ impl Default for ClusterSection {
             election_timeout_ms: 5000,
             cluster_secret: None,
             replication_mode: ReplicationMode::Async,
-            raft_mode: crate::raft::RaftClusterMode::Disabled,
+            raft_mode: RaftClusterMode::Disabled,
         }
     }
 }
@@ -497,9 +515,34 @@ impl Default for LimitsSection {
     }
 }
 
+/// Detect a `raft_mode = "openraft"` assignment in raw TOML, tolerant of
+/// whitespace and case (ignores commented lines). Kept simple and
+/// line-oriented — a false positive only produces a clearer error.
+fn raft_mode_is_openraft(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim();
+        if line.starts_with('#') {
+            return false;
+        }
+        let normalized: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        normalized.eq_ignore_ascii_case("raft_mode=\"openraft\"")
+    })
+}
+
 impl ServerConfig {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
+        // Phase D deprecation (saga 239): the openraft cluster engine was
+        // removed. Refuse an "openraft" config loudly with a migration
+        // hint — the serde enum no longer has the variant, so without this
+        // the operator would get an opaque `unknown variant` error.
+        if raft_mode_is_openraft(&content) {
+            anyhow::bail!(
+                "cluster.raft_mode = \"openraft\" is no longer supported (removed in Phase D, \
+                 RFC 028). Migrate to raft_mode = \"yrp\" for native replication, or \
+                 \"disabled\" for single-node."
+            );
+        }
         let config: ServerConfig = toml::from_str(&content)?;
         Ok(config)
     }

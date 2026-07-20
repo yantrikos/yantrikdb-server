@@ -45,12 +45,6 @@ pub struct AppState {
     /// (a) durable commit-log persistence, (b) replay safety, (c)
     /// cross-implementation portability when cluster mode flips.
     pub commit_log: std::sync::Arc<dyn crate::commit::MutationCommitter>,
-    /// RFC 010 PR-4: openraft assembly when cluster runs in
-    /// `RaftClusterMode::OpenRaft`. `None` in single-node mode. Used
-    /// by the http_gateway to mount `/v1/cluster/raft` (status) and
-    /// `/v1/raft/*` (peer-to-peer RPC receive routes), and by the
-    /// metrics recorder.
-    pub raft: Option<std::sync::Arc<crate::raft::RaftAssembly>>,
     /// RFC 028: YRP native-replication handle when cluster runs in
     /// `RaftClusterMode::Yrp`. `None` otherwise. The gateway uses it for
     /// the `/v1/yrp/msg` peer route, the keyed write path, health, and
@@ -216,11 +210,10 @@ where
                 // has no quorum once openraft is the real write path).
                 if is_write_command(&cmd) {
                     let mut deny: Option<(Option<u64>, &'static str)> = None;
-                    if let Some(ref assembly) = state.raft {
-                        let m = assembly.raft.metrics().borrow().clone();
-                        let is_leader = matches!(m.state, openraft::ServerState::Leader);
-                        if !is_leader {
-                            deny = Some((m.current_leader.map(u64::from), "openraft"));
+                    if let Some(ref yrp) = state.yrp {
+                        if !yrp.is_leader() {
+                            let (leader, _) = yrp.leader_hint();
+                            deny = Some((leader, "yrp"));
                         }
                     } else if let Some(ref cluster) = state.cluster {
                         if !cluster.state.accepts_writes() {

@@ -120,6 +120,19 @@ pub struct YrpStatus {
     /// Last leader this node heard from (itself when leading). A HINT for
     /// redirects — may be stale.
     pub leader: Option<NodeId>,
+    /// RFC 028 Phase C: the engine-apply frontier a beyond-GC snapshot
+    /// install requires the sink to reach via backfill. `applied <
+    /// backfill_target` ⇒ engine-incomplete (no reads, no leadership).
+    /// 0 = no outstanding backfill.
+    pub backfill_target: u64,
+}
+
+impl YrpStatus {
+    /// True while this node's engine trails an adopted snapshot frontier
+    /// and must not serve reads or lead.
+    pub fn engine_incomplete(&self) -> bool {
+        self.applied < self.backfill_target
+    }
 }
 
 impl Default for YrpStatus {
@@ -130,6 +143,7 @@ impl Default for YrpStatus {
             commit: 0,
             applied: 0,
             leader: None,
+            backfill_target: 0,
         }
     }
 }
@@ -183,6 +197,13 @@ pub enum DriverEvent {
     /// Apply worker reports the highest contiguous durably-applied index.
     Applied {
         upto: u64,
+    },
+    /// RFC 028 Phase C: an engine mutation pulled by the backfill task
+    /// for the compacted range (its log entry is gone). The owner
+    /// sequences it into the apply stream in contiguous order.
+    Backfilled {
+        index: u64,
+        entry: LogEntry,
     },
     /// Periodic tick — the owner checks its own election/heartbeat
     /// deadlines (generation-tagged; a stale tick is a no-op).
@@ -255,8 +276,11 @@ pub struct DriverConfig {
     /// Heartbeat every N ticks while leader.
     pub heartbeat_ticks: u32,
     /// Compact the log once the retained span exceeds this many entries.
-    /// `None` = never (the production default until Phase C ships engine
-    /// checkpoint transfer — see `maybe_compact` for why).
+    /// `None` = never. Beyond-GC stragglers are healed by engine backfill
+    /// (RFC 028 Phase C slice A — `run_backfill_task`), so enabling this
+    /// is now correctness-safe; it stays off by DEFAULT only pending the
+    /// fuller interruption-test hardening (crash/leader-change mid-
+    /// backfill) before it becomes the shipped default.
     pub compact_after: Option<u64>,
     /// Leader retention margin: leaders compact only to `frontier - M` so
     /// briefly-lagging followers catch up from the log instead of
@@ -282,6 +306,16 @@ pub struct YrpDriver {
     applied: u64,
     /// Committed-but-not-yet-dispatched-to-apply frontier.
     dispatched: u64,
+    /// RFC 028 Phase C: the engine-apply frontier a beyond-GC snapshot
+    /// install requires the sink to reach via BACKFILL (the compacted
+    /// range's mutations are not in the log). `applied < backfill_target`
+    /// ⇒ this node is ENGINE-INCOMPLETE: it must not campaign and its
+    /// read barriers cannot resolve. 0 = no outstanding backfill.
+    backfill_target: u64,
+    /// Out-of-band backfilled entries awaiting in-order dispatch to the
+    /// apply worker (keyed by absolute yrp index). Drained by
+    /// `dispatch_ready` strictly in contiguous ascending order.
+    backfill_buffer: BTreeMap<u64, LogEntry>,
     /// Election deadline in ticks-remaining; None while leader. Reset on
     /// valid leader contact (the owner sees every inbound message, so the
     /// codex F5 race cannot occur: queued heartbeats are processed before
@@ -346,6 +380,17 @@ impl YrpDriver {
             pending_barriers: BTreeMap::new(),
             applied: durable_applied,
             dispatched: durable_applied,
+            // Boot-time resumption (codex pitfall: never trust HTTP
+            // completion): if the durable engine marker is below the
+            // adopted protocol frontier, an interrupted backfill must
+            // resume. `base.index` IS the adopted frontier for a
+            // compacted node; a healthy node has durable_applied ≥ base.
+            backfill_target: if durable_applied < base.index {
+                base.index
+            } else {
+                0
+            },
+            backfill_buffer: BTreeMap::new(),
             election_ticks_left: None,
             heartbeat_ticks_left: 0,
             rng: seed,
@@ -374,6 +419,7 @@ impl YrpDriver {
             } else {
                 self.leader_hint
             },
+            backfill_target: self.backfill_target,
         }
     }
 
@@ -415,6 +461,13 @@ impl YrpDriver {
                 DriverEvent::Applied { upto } => {
                     self.applied = self.applied.max(upto);
                     self.release_acks();
+                    None
+                }
+                DriverEvent::Backfilled { index, entry } => {
+                    if index > self.applied {
+                        self.backfill_buffer.insert(index, entry);
+                        self.dispatch_ready();
+                    }
                     None
                 }
                 DriverEvent::Tick => self.on_tick(),
@@ -574,6 +627,17 @@ impl YrpDriver {
             }
             return None;
         }
+        // Engine-incomplete nodes never campaign (RFC 028 Phase C / codex
+        // pitfall 1): they still receive AppendEntries and keep their log
+        // current, but must not win leadership before their engine is
+        // backfilled — a protocol-current, engine-behind leader would
+        // serve stale reads and could not source engine history. Keep the
+        // deadline re-armed so a genuinely stuck backfill still surfaces
+        // via health, not a spurious election.
+        if self.engine_incomplete() {
+            self.arm_election_deadline();
+            return None;
+        }
         if let Some(left) = self.election_ticks_left.as_mut() {
             *left = left.saturating_sub(1);
             if *left == 0 {
@@ -643,22 +707,33 @@ impl YrpDriver {
                         }
                     }
                 }
-                Effect::CommitAdvanced { to } => {
+                Effect::CommitAdvanced { .. } => {
                     // Dispatch newly committed entries to the sequential
                     // apply worker (codex F1: never apply in the owner).
-                    let from = self.dispatched + 1;
-                    for i in from..=to {
-                        if let Some(e) = self.core.entry(i) {
-                            let _ = self.apply_tx.send((i, e.clone()));
-                        }
-                    }
-                    self.dispatched = self.dispatched.max(to);
+                    // `dispatch_ready` sequences log entries and any
+                    // backfilled entries strictly in order, so a beyond-GC
+                    // gap cannot let a later index apply before an earlier.
+                    self.dispatch_ready();
                 }
                 Effect::InstallState { last_index } => {
-                    // v1: snapshots restricted to uncompacted rejoin — the
-                    // engine-checkpoint manifest protocol is Phase C.
-                    self.applied = self.applied.max(last_index);
-                    self.dispatched = self.dispatched.max(last_index);
+                    // RFC 028 Phase C: adopting the protocol snapshot does
+                    // NOT fast-forward the engine marker. The compacted
+                    // range's mutations are absent from the log; the sink
+                    // must apply them via backfill. Record the frontier
+                    // the engine must reach (engine-incomplete until then)
+                    // and let dispatch/backfill fill it. NEVER advance
+                    // `applied` here — that is the old hole.
+                    if last_index > self.applied {
+                        self.backfill_target = self.backfill_target.max(last_index);
+                        // Leave `dispatched` at the real engine frontier
+                        // so the gap [dispatched+1, last_index] is fed by
+                        // backfill (from `backfill_buffer`), NOT skipped.
+                    } else {
+                        // Snapshot at/below what we've already applied —
+                        // nothing to backfill.
+                        self.dispatched = self.dispatched.max(last_index);
+                    }
+                    self.dispatch_ready();
                 }
                 Effect::PeerIncompatible { peer } => {
                     tracing::error!(?peer, "YRP peer capability-incompatible; sends stalled");
@@ -667,6 +742,43 @@ impl YrpDriver {
         }
         self.release_acks();
         None
+    }
+
+    /// Dispatch committed entries to the apply worker in strictly
+    /// contiguous ascending order, pulling each index from the log or —
+    /// for a compacted beyond-GC gap — the backfill buffer. Stops at the
+    /// first index it does not yet hold (backfill will re-drive it) and
+    /// never dispatches past the commit index. This single sequencer is
+    /// what guarantees no later index applies before an earlier one, even
+    /// when a snapshot install leaves a hole below the log base.
+    fn dispatch_ready(&mut self) {
+        let commit = self.core.commit_index();
+        loop {
+            let next = self.dispatched + 1;
+            if next > commit {
+                break;
+            }
+            let entry = self
+                .core
+                .entry(next)
+                .cloned()
+                .or_else(|| self.backfill_buffer.remove(&next));
+            match entry {
+                Some(e) => {
+                    let _ = self.apply_tx.send((next, e));
+                    self.dispatched = next;
+                }
+                None => break, // gap — awaiting backfill for `next`
+            }
+        }
+    }
+
+    /// This node cannot serve reads or lead until its engine has been
+    /// backfilled up to the adopted snapshot frontier (RFC 028 Phase C /
+    /// codex pitfall 1): a protocol-current but engine-incomplete leader
+    /// would serve stale reads and be unable to source engine history.
+    fn engine_incomplete(&self) -> bool {
+        self.applied < self.backfill_target
     }
 
     /// Release client replies up to the highest contiguous durably-applied

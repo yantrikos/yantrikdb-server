@@ -280,8 +280,12 @@ async fn torn_state_boots_quarantined_then_rejoins_via_grant() {
 }
 
 /// A straggler that falls below the leader's compaction base catches up
-/// via InstallSnapshot — and claims RIDE the snapshot: a keyed retry of
-/// a COMPACTED entry still dedupes (P1-9, live on real HTTP).
+/// via InstallSnapshot — claims RIDE the snapshot (a keyed retry of a
+/// COMPACTED entry still dedupes, P1-9), AND its ENGINE state is
+/// backfilled: a memory written into the compacted range while the
+/// straggler was dead is RECALLABLE after rejoin (RFC 028 Phase C —
+/// the beyond-GC engine backfill, the correctness hole that gated
+/// compaction off).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn straggler_beyond_gc_catches_up_and_compacted_claims_survive() {
     let _serial = serial_guard().await;
@@ -293,11 +297,19 @@ async fn straggler_beyond_gc_catches_up_and_compacted_claims_survive() {
         },
     )
     .await;
-    let emb = embedding(3.3);
+    // DISTINCT embeddings per write (each seed unique) so recall can
+    // target a SPECIFIC memory — identical vectors would make recall
+    // unable to rank any one write within top_k.
+    let emb_first = embedding(100.0);
     let all: Vec<&TestNode> = nodes.iter().collect();
 
-    let (rid_first, _) =
-        keyed_write_until_accepted(&all, "chaos-gc-first", "the earliest keyed write", &emb).await;
+    let (rid_first, _) = keyed_write_until_accepted(
+        &all,
+        "chaos-gc-first",
+        "the earliest keyed write",
+        &emb_first,
+    )
+    .await;
 
     // Kill a follower, then push the cluster far past the compaction
     // threshold so the victim's next_index falls below the leader's base.
@@ -310,21 +322,50 @@ async fn straggler_beyond_gc_catches_up_and_compacted_claims_survive() {
 
     let survivors: Vec<&TestNode> = live.iter().collect();
     let mut last_rid = String::new();
+    let mut mid_rid = String::new();
+    let emb_mid = embedding(12.5);
+    let emb_last = embedding(29.5);
     for i in 0..30 {
+        // Each write gets its own vector; the middle and last ones use
+        // the exact vectors we later query with.
+        let e = if i == 12 {
+            emb_mid.clone()
+        } else if i == 29 {
+            emb_last.clone()
+        } else {
+            embedding(i as f32)
+        };
         let (rid, _) = keyed_write_until_accepted(
             &survivors,
             &format!("chaos-gc-{i}"),
             &format!("bulk write {i}"),
-            &emb,
+            &e,
         )
         .await;
+        // A write from the MIDDLE of the burst — its log entry is
+        // compacted away (below base) by the time the straggler rejoins,
+        // so it can only reach the straggler's engine via backfill, never
+        // via tail AppendEntries.
+        if i == 12 {
+            mid_rid = rid.clone();
+        }
         last_rid = rid;
     }
 
-    // Restart the straggler: it must converge (snapshot install + tail
-    // replication) to the newest write, LIVE.
+    // Sanity: mid_rid is genuinely committed (recallable on a survivor)
+    // before we test the revived straggler — guards against a phantom rid.
+    wait_for_recall(survivors[0], &emb_mid, &mid_rid).await;
+
+    // Restart the straggler: it must converge (snapshot install + engine
+    // backfill + tail replication) to the newest write, LIVE.
     let revived = dead.restart().await;
-    wait_for_recall(&revived, &emb, &last_rid).await;
+    wait_for_recall(&revived, &emb_last, &last_rid).await;
+
+    // THE PHASE C PROPERTY: the compacted-range memory is in the revived
+    // straggler's LIVE engine, not just its protocol state. Without
+    // engine backfill this recall never surfaces mid_rid (the driver
+    // fast-forwarded the marker past the mutation without applying it).
+    wait_for_recall(&revived, &emb_mid, &mid_rid).await;
 
     // The claim of the FIRST write — whose log entry is long compacted on
     // the leader — still dedupes to the original rid. Claims ride the
@@ -338,7 +379,7 @@ async fn straggler_beyond_gc_catches_up_and_compacted_claims_survive() {
         &with_revived,
         "chaos-gc-first",
         "the earliest keyed write",
-        &emb,
+        &emb_first,
         &rid_first,
     )
     .await;

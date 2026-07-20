@@ -33,7 +33,7 @@ use super::driver::{
 };
 use super::engine_sink::{AppliedOutcome, EngineApplySink, OutcomeStore};
 use super::op::{claim_key_for_op, YrpOp};
-use super::replica::{Payload, Role};
+use super::replica::{LogEntry, Payload, Role};
 use super::transport::HttpTransport;
 use super::types::{ClusterId, NodeId};
 use crate::commit::{
@@ -91,12 +91,16 @@ pub enum YrpProposeError {
 /// What the HTTP layer holds for a YRP node.
 pub struct YrpHandle {
     pub node_id: NodeId,
+    pub cluster_id: u64,
     owner_tx: mpsc::UnboundedSender<DriverEvent>,
     pub outcomes: Arc<OutcomeStore>,
     pub status: watch::Receiver<YrpStatus>,
     /// node id → HTTP base url, for leader redirects.
     peer_http: BTreeMap<u64, String>,
     pub cluster_secret: Option<String>,
+    /// Local commit log — the retained source of truth the backfill serve
+    /// path joins against the outcome store (RFC 028 Phase C).
+    local: Arc<dyn MutationCommitter>,
     /// `Some(reasons)` while quarantined (or after a fatal driver exit);
     /// `None` when replicating normally. The health surface reports it;
     /// the write path refuses on it.
@@ -148,6 +152,71 @@ impl YrpHandle {
         }
     }
 
+    /// Serve a Phase C backfill range: reconstruct the log entries for
+    /// `(from_index, to_index]` by joining the outcome store against the
+    /// retained commit log. Range-complete or `Err` — never a partial
+    /// answer (codex source-completeness invariant). An engine-incomplete
+    /// node refuses outright: it cannot prove it holds the range.
+    pub async fn serve_backfill(
+        &self,
+        from_index: u64,
+        to_index: u64,
+    ) -> Result<Vec<(u64, LogEntry)>, String> {
+        if self.status.borrow().engine_incomplete() {
+            return Err("node is engine-incomplete; cannot source backfill".into());
+        }
+        let outcomes = self
+            .outcomes
+            .outcomes_in_range(from_index, to_index)
+            .map_err(|e| format!("outcome range: {e}"))?;
+        // Contiguity check: the range must be dense (no missing yrp_index).
+        let expected = (to_index.saturating_sub(from_index)) as usize;
+        if outcomes.len() != expected {
+            return Err(format!(
+                "backfill range ({from_index},{to_index}] not fully retained: {} of {expected} rows",
+                outcomes.len()
+            ));
+        }
+        let mut rows = Vec::with_capacity(outcomes.len());
+        for o in outcomes {
+            let tenant = TenantId::new(o.tenant_id);
+            // Fetch the exact committed mutation (materialized — embedding
+            // inside) from the retained per-tenant commit log.
+            let entry = self
+                .local
+                .read_range(tenant, o.tenant_log_index, 1)
+                .await
+                .map_err(|e| format!("commit-log read: {e}"))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    format!(
+                        "commit-log row missing for tenant {tenant} idx {}",
+                        o.tenant_log_index
+                    )
+                })?;
+            let op_id = OpId::from_uuid(
+                o.op_id
+                    .parse()
+                    .map_err(|e| format!("bad op_id in outcome: {e}"))?,
+            );
+            let op = YrpOp {
+                tenant_id: tenant,
+                op_id,
+                mutation: entry.mutation,
+                idempotency_key: o.key_str.clone(),
+            };
+            let log_entry = LogEntry {
+                term: super::types::Term(o.term),
+                payload: Payload::Op(op.encode()?),
+                key: o.key_hash,
+                activate: None,
+            };
+            rows.push((o.yrp_index, log_entry));
+        }
+        Ok(rows)
+    }
+
     /// Graceful stop of whichever loop owns the funnel (tests/shutdown).
     pub fn shutdown(&self) {
         let _ = self.owner_tx.send(DriverEvent::Shutdown);
@@ -169,7 +238,14 @@ impl YrpHandle {
     }
 
     pub fn is_leader(&self) -> bool {
-        self.quarantine_reasons().is_none() && self.status.borrow().role == Role::Leader
+        let s = *self.status.borrow();
+        self.quarantine_reasons().is_none() && s.role == Role::Leader && !s.engine_incomplete()
+    }
+
+    /// True while this node's engine trails an adopted snapshot frontier
+    /// (RFC 028 Phase C) — surfaced on health, gates reads/leadership.
+    pub fn engine_incomplete(&self) -> bool {
+        self.status.borrow().engine_incomplete()
     }
 
     /// Propose a keyed op and wait for its durable outcome. This is the
@@ -361,13 +437,20 @@ pub fn spawn(
 
     let handle = Arc::new(YrpHandle {
         node_id: me,
+        cluster_id: cfg.cluster_id,
         owner_tx: owner_tx.clone(),
         outcomes: outcomes.clone(),
         status: status_rx,
         peer_http,
         cluster_secret: cfg.cluster_secret.clone(),
+        local: local.clone(),
         quarantine: std::sync::RwLock::new(None),
     });
+
+    // RFC 028 Phase C: pull engine backfill for compacted ranges after a
+    // snapshot install. Runs for the lifetime of the node; idle unless
+    // `status.backfill_target > applied`.
+    tokio::spawn(run_backfill_task(handle.clone(), owner_tx.clone()));
 
     let sink = EngineApplySink::new(local, applier, outcomes.clone());
     tokio::spawn(run_apply_worker(Box::new(sink), apply_rx, owner_tx.clone()));
@@ -426,6 +509,95 @@ pub fn spawn(
         }
     }
     Ok(handle)
+}
+
+/// Backfill request body (`POST /v1/yrp/backfill`, cluster-secret bearer).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BackfillRequest {
+    pub cluster_id: u64,
+    pub from_index: u64,
+    pub to_index: u64,
+}
+
+/// Backfill batch size per request round — bounds one pull's size.
+const BACKFILL_BATCH: u64 = 256;
+
+/// Pull engine backfill for compacted ranges after a snapshot install
+/// and feed each entry to the owner (which sequences it into the apply
+/// stream). Idle unless `status.backfill_target > applied`. Durably
+/// resumable: it always re-derives the outstanding gap from the live
+/// status, so a crash or interrupted stream simply re-pulls from the
+/// persisted marker.
+async fn run_backfill_task(handle: Arc<YrpHandle>, owner: mpsc::UnboundedSender<DriverEvent>) {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("reqwest client");
+    let mut status = handle.status.clone();
+    loop {
+        // Wait for engine-incomplete (or exit when the driver drops the
+        // status sender).
+        let (from, to, leader_id) = {
+            let s = *status.borrow();
+            (s.applied, s.backfill_target, s.leader.map(|n| n.0))
+        };
+        if to <= from {
+            if status.changed().await.is_err() {
+                return;
+            }
+            continue;
+        }
+        // Source = current leader (a complete node by the eligibility
+        // gate). If we don't know one yet, wait for status to move.
+        let Some(leader_id) = leader_id.filter(|id| *id != handle.node_id.0) else {
+            if status.changed().await.is_err() {
+                return;
+            }
+            continue;
+        };
+        let Some(base_url) = handle.peer_http.get(&leader_id).cloned() else {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            continue;
+        };
+
+        let batch_to = (from + BACKFILL_BATCH).min(to);
+        let req = BackfillRequest {
+            cluster_id: handle.cluster_id,
+            from_index: from,
+            to_index: batch_to,
+        };
+        let url = format!("{}/v1/yrp/backfill", base_url.trim_end_matches('/'));
+        let mut http = client.post(&url).json(&req);
+        if let Some(s) = &handle.cluster_secret {
+            http = http.bearer_auth(s);
+        }
+        match http.send().await {
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(bytes) => match bincode::deserialize::<Vec<(u64, LogEntry)>>(&bytes) {
+                    Ok(rows) => {
+                        for (index, entry) in rows {
+                            let _ = owner.send(DriverEvent::Backfilled { index, entry });
+                        }
+                        // Let the apply worker make progress before the
+                        // next batch; the status watch reflects it.
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "backfill decode failed; retrying");
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "backfill body read failed; retrying");
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            },
+            other => {
+                tracing::debug!(?other, from, batch_to, "backfill pull failed; retrying");
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+        }
+    }
 }
 
 /// `Transport` over a shared [`HttpTransport`] so the quarantine loop and

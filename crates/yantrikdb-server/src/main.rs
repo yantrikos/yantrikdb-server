@@ -19,7 +19,6 @@ mod jobs;
 mod key_provider;
 pub(crate) mod metrics;
 mod migrations;
-mod raft;
 mod restore;
 mod retrieval;
 mod runtime;
@@ -363,94 +362,6 @@ enum ClusterAction {
         /// Auth token (or YQL_TOKEN env)
         #[arg(short, long, env = "YQL_TOKEN")]
         token: String,
-    },
-    /// Show openraft cluster status (RFC 010 PR-4) by querying
-    /// `/v1/cluster/raft` on a running server. Distinct from `status`
-    /// which targets the legacy Raft-lite cluster.
-    RaftStatus {
-        /// Server HTTP URL
-        #[arg(long, default_value = "http://localhost:7438")]
-        url: String,
-        /// Auth token (or YQL_TOKEN env)
-        #[arg(short, long, env = "YQL_TOKEN")]
-        token: Option<String>,
-        /// Print raw JSON instead of human-readable summary.
-        #[arg(long)]
-        json: bool,
-    },
-    /// v0.8.3 #24: bootstrap a fresh openraft cluster on the seed node.
-    /// Run exactly once per cluster, on the first node. Subsequent voters
-    /// are added via `add-learner` + `promote-voter`.
-    InitializeCluster {
-        /// Leader HTTP URL (the seed node).
-        #[arg(long, default_value = "http://localhost:7438")]
-        leader: String,
-        /// Cluster master token.
-        #[arg(short, long, env = "YDB_CLUSTER_MASTER_TOKEN")]
-        master_token: String,
-    },
-    /// v0.8.3 #24: add a non-voting learner. It catches up via openraft
-    /// snapshot transfer without participating in elections (safe).
-    AddLearner {
-        /// New learner's node_id (must not collide with existing members).
-        #[arg(long)]
-        node_id: u64,
-        /// New learner's cluster transport address (host:cluster_port).
-        #[arg(long)]
-        addr: String,
-        /// Leader HTTP URL.
-        #[arg(long, default_value = "http://localhost:7438")]
-        leader: String,
-        /// Cluster master token.
-        #[arg(short, long, env = "YDB_CLUSTER_MASTER_TOKEN")]
-        master_token: String,
-    },
-    /// v0.8.3 #24: poll until the named node has caught up with the
-    /// leader's last_log_index (within `--max-lag`).
-    WaitCaughtUp {
-        /// Node id to wait on.
-        #[arg(long)]
-        node_id: u64,
-        /// Leader HTTP URL.
-        #[arg(long, default_value = "http://localhost:7438")]
-        leader: String,
-        /// Cluster master token.
-        #[arg(short, long, env = "YDB_CLUSTER_MASTER_TOKEN")]
-        master_token: String,
-        /// Max acceptable log index lag.
-        #[arg(long, default_value = "10")]
-        max_lag: u64,
-        /// Total wait timeout in seconds.
-        #[arg(long, default_value = "1800")]
-        timeout_secs: u64,
-    },
-    /// v0.8.3 #24: change voter membership. Body lists the FINAL voter
-    /// set. Promotes any existing learners listed; demotes any current
-    /// voters not listed. The leader's id MUST be in the list.
-    PromoteVoter {
-        /// Final voter set (comma-separated node_ids).
-        #[arg(long, value_delimiter = ',', num_args = 1..)]
-        voters: Vec<u64>,
-        /// Leader HTTP URL.
-        #[arg(long, default_value = "http://localhost:7438")]
-        leader: String,
-        /// Cluster master token.
-        #[arg(short, long, env = "YDB_CLUSTER_MASTER_TOKEN")]
-        master_token: String,
-    },
-    /// v0.8.3 #24: remove a node from the cluster (atomic
-    /// change-membership minus the named node). Refuses if removal
-    /// would leave the cluster with no voters.
-    RemoveNode {
-        /// Node id to remove.
-        #[arg(long)]
-        node_id: u64,
-        /// Leader HTTP URL.
-        #[arg(long, default_value = "http://localhost:7438")]
-        leader: String,
-        /// Cluster master token.
-        #[arg(short, long, env = "YDB_CLUSTER_MASTER_TOKEN")]
-        master_token: String,
     },
 }
 
@@ -955,207 +866,6 @@ cluster_secret = "{secret}"
                     let resp = reqwest::blocking::Client::new()
                         .post(&url)
                         .header("Authorization", format!("Bearer {}", token))
-                        .send()?;
-                    let status = resp.status();
-                    let text = resp.text()?;
-                    if !status.is_success() {
-                        eprintln!("error {}: {}", status, text);
-                        std::process::exit(1);
-                    }
-                    println!("{}", text);
-                    Ok(())
-                }
-                ClusterAction::RaftStatus { url, token, json } => {
-                    let url = format!("{}/v1/cluster/raft", url.trim_end_matches('/'));
-                    let mut req = reqwest::blocking::Client::new().get(&url);
-                    if let Some(ref t) = token {
-                        req = req.header("Authorization", format!("Bearer {}", t));
-                    }
-                    let resp = req.send()?;
-                    let status = resp.status();
-                    let text = resp.text()?;
-                    if !status.is_success() {
-                        eprintln!("error {}: {}", status, text);
-                        std::process::exit(1);
-                    }
-                    if json {
-                        println!("{}", text);
-                    } else {
-                        let s: crate::raft::RaftStatus = serde_json::from_str(&text)?;
-                        println!("openraft cluster status");
-                        println!("───────────────────────");
-                        println!("  this node    : node-{}  ({})", s.node_id, s.state);
-                        match s.current_leader {
-                            Some(id) if id == s.node_id => {
-                                println!("  leader       : SELF (node-{})", id)
-                            }
-                            Some(id) => println!("  leader       : node-{}", id),
-                            None => println!("  leader       : (none — election in progress)"),
-                        }
-                        println!("  current term : {}", s.current_term);
-                        println!(
-                            "  last log     : {}",
-                            s.last_log_index
-                                .map(|n| n.to_string())
-                                .unwrap_or_else(|| "(none)".into())
-                        );
-                        println!(
-                            "  last applied : {}",
-                            s.last_applied_index
-                                .map(|n| n.to_string())
-                                .unwrap_or_else(|| "(none)".into())
-                        );
-                        println!(
-                            "  snapshot @   : {}",
-                            s.snapshot_index
-                                .map(|n| n.to_string())
-                                .unwrap_or_else(|| "(no snapshot)".into())
-                        );
-                        if let Some(lag) = s.millis_since_quorum_ack {
-                            println!("  quorum ack   : {} ms ago", lag);
-                        }
-                        println!(
-                            "  health       : {}",
-                            if s.healthy { "OK" } else { "FATAL" }
-                        );
-                        println!();
-                        println!("  Members ({}):", s.members.len());
-                        for m in &s.members {
-                            let role = if m.is_voter { "voter" } else { "learner" };
-                            println!("    node-{:<3}  {:<8}  {}", m.node_id, role, m.addr);
-                        }
-                    }
-                    Ok(())
-                }
-                ClusterAction::InitializeCluster {
-                    leader,
-                    master_token,
-                } => {
-                    let url = format!("{}/v1/cluster/initialize", leader.trim_end_matches('/'));
-                    let resp = reqwest::blocking::Client::new()
-                        .post(&url)
-                        .header("Authorization", format!("Bearer {}", master_token))
-                        .send()?;
-                    let status = resp.status();
-                    let text = resp.text()?;
-                    if !status.is_success() {
-                        eprintln!("error {}: {}", status, text);
-                        std::process::exit(1);
-                    }
-                    println!("{}", text);
-                    Ok(())
-                }
-                ClusterAction::AddLearner {
-                    node_id,
-                    addr,
-                    leader,
-                    master_token,
-                } => {
-                    let url = format!("{}/v1/cluster/add-learner", leader.trim_end_matches('/'));
-                    let body = serde_json::json!({"node_id": node_id, "addr": addr});
-                    let resp = reqwest::blocking::Client::new()
-                        .post(&url)
-                        .header("Authorization", format!("Bearer {}", master_token))
-                        .header("Content-Type", "application/json")
-                        .body(body.to_string())
-                        .send()?;
-                    let status = resp.status();
-                    let text = resp.text()?;
-                    if !status.is_success() {
-                        eprintln!("error {}: {}", status, text);
-                        std::process::exit(1);
-                    }
-                    println!("{}", text);
-                    Ok(())
-                }
-                ClusterAction::WaitCaughtUp {
-                    node_id,
-                    leader,
-                    master_token: _,
-                    max_lag,
-                    timeout_secs,
-                } => {
-                    let url = format!("{}/v1/cluster/raft", leader.trim_end_matches('/'));
-                    let deadline =
-                        std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-                    let client = reqwest::blocking::Client::new();
-                    loop {
-                        if std::time::Instant::now() > deadline {
-                            eprintln!("timed out waiting for node {} to catch up", node_id);
-                            std::process::exit(1);
-                        }
-                        let resp = client.get(&url).send()?;
-                        if !resp.status().is_success() {
-                            std::thread::sleep(std::time::Duration::from_secs(2));
-                            continue;
-                        }
-                        let v: serde_json::Value = resp.json()?;
-                        let leader_idx = v
-                            .get("last_log_index")
-                            .and_then(|x| x.as_u64())
-                            .unwrap_or(0);
-                        let members = v
-                            .get("members")
-                            .and_then(|m| m.as_array())
-                            .cloned()
-                            .unwrap_or_default();
-                        let target = members
-                            .iter()
-                            .find(|m| m.get("node_id").and_then(|n| n.as_u64()) == Some(node_id));
-                        if target.is_none() {
-                            eprintln!(
-                                "node {} is not yet a member; call add-learner first",
-                                node_id
-                            );
-                            std::process::exit(1);
-                        }
-                        // Per-member last_log_index isn't always exposed by /v1/cluster/raft;
-                        // fall back to "if member is present and snapshot/log indices look
-                        // close, declare caught-up". For a stricter check, openraft's
-                        // metrics struct would need exposing — deferred.
-                        let lag_ok = true;
-                        let _ = max_lag;
-                        if lag_ok {
-                            println!("node {} present in membership; assuming caught up (lag tracking deferred)", node_id);
-                            return Ok(());
-                        }
-                        std::thread::sleep(std::time::Duration::from_secs(3));
-                    }
-                }
-                ClusterAction::PromoteVoter {
-                    voters,
-                    leader,
-                    master_token,
-                } => {
-                    let url = format!("{}/v1/cluster/promote-voter", leader.trim_end_matches('/'));
-                    let body = serde_json::json!({"voters": voters});
-                    let resp = reqwest::blocking::Client::new()
-                        .post(&url)
-                        .header("Authorization", format!("Bearer {}", master_token))
-                        .header("Content-Type", "application/json")
-                        .body(body.to_string())
-                        .send()?;
-                    let status = resp.status();
-                    let text = resp.text()?;
-                    if !status.is_success() {
-                        eprintln!("error {}: {}", status, text);
-                        std::process::exit(1);
-                    }
-                    println!("{}", text);
-                    Ok(())
-                }
-                ClusterAction::RemoveNode {
-                    node_id,
-                    leader,
-                    master_token,
-                } => {
-                    let url = format!("{}/v1/cluster/remove", leader.trim_end_matches('/'));
-                    let body = serde_json::json!({"node_id": node_id});
-                    let resp = reqwest::blocking::Client::new()
-                        .post(&url)
-                        .header("Authorization", format!("Bearer {}", master_token))
-                        .header("Content-Type", "application/json")
-                        .body(body.to_string())
                         .send()?;
                     let status = resp.status();
                     let text = resp.text()?;
@@ -1896,7 +1606,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
     // its heartbeat/election/sync loops would fight the YRP driver for
     // write acceptance. YRP runs its own transport on the HTTP plane.
     let cluster_ctx = if cfg.cluster.is_clustered()
-        && cfg.cluster.raft_mode != crate::raft::RaftClusterMode::Yrp
+        && cfg.cluster.raft_mode != crate::config::RaftClusterMode::Yrp
     {
         let raft_path = cfg.server.data_dir.join("raft.json");
         let node_state = Arc::new(cluster::NodeState::new(
@@ -2010,16 +1720,15 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
             "commit log opened"
         );
 
-        // RFC 010 PR-4: assemble openraft when the cluster section asks for
-        // it. Misconfig (openraft mode without cluster_tls) fails fast here
-        // — server refuses to start, which is the production-safety
-        // guarantee from `build_raft_cluster`.
-        let (commit_log, raft_assembly, yrp_handle): (
+        // Assemble the commit path per cluster mode. Single-node
+        // (`Disabled`) applies inline; `Yrp` (RFC 028) drives writes
+        // through the replicated log. The openraft path was removed in
+        // Phase D (saga 239).
+        let (commit_log, yrp_handle): (
             Arc<dyn crate::commit::MutationCommitter>,
-            Option<Arc<crate::raft::RaftAssembly>>,
             Option<Arc<crate::yrp::runtime::YrpHandle>>,
         ) = match cfg.cluster.raft_mode {
-            crate::raft::RaftClusterMode::Disabled => {
+            crate::config::RaftClusterMode::Disabled => {
                 // RFC 010 PR-6.4 — single-node also needs an Applier so
                 // committed mutations actually land in engine state. Without
                 // this wrapping, `commit_log.commit(...)` would write to the
@@ -2039,13 +1748,9 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                     local_committer.clone(),
                     applier,
                 ));
-                (
-                    submitter as Arc<dyn crate::commit::MutationCommitter>,
-                    None,
-                    None,
-                )
+                (submitter as Arc<dyn crate::commit::MutationCommitter>, None)
             }
-            crate::raft::RaftClusterMode::Yrp => {
+            crate::config::RaftClusterMode::Yrp => {
                 // RFC 028: native replication. The driver owns consensus;
                 // the apply sink lands committed ops in commit-log +
                 // engine on every node; YrpCommitter funnels all handler
@@ -2092,124 +1797,7 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                 let committer: Arc<dyn crate::commit::MutationCommitter> = Arc::new(
                     crate::yrp::runtime::YrpCommitter::new(handle.clone(), local),
                 );
-                (committer, None, Some(handle))
-            }
-            crate::raft::RaftClusterMode::OpenRaft => {
-                let raft_log_path = cfg.server.data_dir.join("raft_log.sqlite");
-                let raft_log_conn = rusqlite::Connection::open(&raft_log_path)
-                    .map_err(|e| anyhow::anyhow!("failed to open raft_log.sqlite: {e}"))?;
-                // Migrations m004 must already be in run_pending so the table
-                // exists. The committer construction above already ran them
-                // for commit_log.sqlite — we run them on raft_log.sqlite too.
-                let mut raft_log_conn = raft_log_conn;
-                crate::migrations::MigrationRunner::run_pending(&mut raft_log_conn)
-                    .map_err(|e| anyhow::anyhow!("raft_log migrations: {e}"))?;
-                let log_storage = crate::raft::SqliteRaftLogStorage::new(Arc::new(
-                    parking_lot::Mutex::new(raft_log_conn),
-                ));
-
-                let node_id = crate::raft::YantrikNodeId::new(cfg.cluster.node_id as u64);
-                let node_addr =
-                    cfg.cluster.advertise_addr.clone().unwrap_or_else(|| {
-                        format!("https://127.0.0.1:{}", cfg.cluster.cluster_port)
-                    });
-
-                // PR-6.5 boot invariant: full voter set including self.
-                // openraft member ids are u32-based; we mirror cfg.cluster.peers
-                // and append this node's address so the validation gate sees
-                // a coherent quorum view (peers.len() >= 2).
-                let mut peers: Vec<String> =
-                    cfg.cluster.peers.iter().map(|p| p.addr.clone()).collect();
-                if !peers.iter().any(|a| a == &node_addr) {
-                    peers.push(node_addr.clone());
-                }
-
-                // RFC 010 PR-6.4 — engine apply path. Wire `EngineApplier`
-                // over a `TenantPool`-backed resolver so every committed
-                // mutation (leader + followers) flows into engine state via
-                // the deterministic `record_with_rid` family. Without this,
-                // openraft replicates the commit log but engine state stays
-                // empty on followers — the cosmetic-openraft regression the
-                // architect surfaced on 2026-05-02.
-                let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
-                    pool.clone(),
-                    control.clone(),
-                )) as Arc<dyn crate::commit::EngineResolver>;
-                let applier: Arc<dyn crate::commit::Applier> =
-                    Arc::new(crate::commit::EngineApplier::new(engine_resolver));
-
-                let assembly_cfg = crate::raft::RaftAssemblyConfig {
-                    mode: crate::raft::RaftClusterMode::OpenRaft,
-                    node_id,
-                    node_addr: node_addr.clone(),
-                    cluster_tls: Some(cfg.cluster_tls.clone()),
-                    peers,
-                    // PR-6.5: openraft mode REQUIRES RaftSubmitter at the
-                    // handler level. Today's binary still uses the legacy
-                    // engine.record() path inside Command::Remember; the
-                    // declaration here is a forward-compat marker that
-                    // satisfies the validate() gate. The actual handler
-                    // migration happens in PR 6.4 (saga task #187), at
-                    // which point this stays unchanged but starts being
-                    // load-bearing.
-                    write_path: crate::raft::HandlerWritePath::RaftSubmitter,
-                    applier,
-                    request_timeout: std::time::Duration::from_secs(10),
-                    openraft_config: openraft::Config {
-                        cluster_name: "yantrikdb".into(),
-                        heartbeat_interval: cfg.cluster.heartbeat_interval_ms,
-                        election_timeout_min: cfg.cluster.election_timeout_ms,
-                        election_timeout_max: cfg.cluster.election_timeout_ms.saturating_mul(2),
-                        ..Default::default()
-                    },
-                };
-
-                tracing::info!(
-                    node_id = %node_id,
-                    node_addr = %node_addr,
-                    "assembling openraft cluster (RFC 010 PR-4)"
-                );
-                let assembly = crate::raft::build_raft_cluster(
-                    assembly_cfg,
-                    log_storage,
-                    local_committer.clone() as Arc<dyn crate::commit::MutationCommitter>,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("openraft assembly failed: {e}"))?;
-                tracing::info!("openraft assembled — RaftCommitter now driving writes");
-
-                // v0.8.3: auto-bootstrap removed (was a fragile node_id heuristic).
-                // For fresh openraft deployments, the seed operator runs:
-                //   yantrikdb cluster initialize-cluster --leader http://X:7438 --master-token T
-                // Subsequent nodes are added via add-learner + promote-voter.
-                //
-                // Existing v0.8.2 deployments where auto-bootstrap already wrote
-                // a membership record continue to work — openraft persists
-                // membership in raft_log.sqlite across restarts.
-                {
-                    let metrics = assembly.raft.metrics().borrow().clone();
-                    if metrics.membership_config.nodes().count() == 0 {
-                        tracing::warn!(
-                            node_id = cfg.cluster.node_id,
-                            "openraft membership empty. Run \
-                             `yantrikdb cluster initialize-cluster` on the seed node \
-                             (one time per cluster) or `cluster add-learner` from an \
-                             existing leader to add this node."
-                        );
-                    }
-                }
-
-                // Spawn the metrics recorder so /metrics gets live
-                // openraft gauges. Tied to a CancellationToken so we can
-                // drop it cleanly on shutdown — for now the token is
-                // never cancelled (server runs until SIGTERM kills us).
-                let cancel = tokio_util::sync::CancellationToken::new();
-                crate::raft::spawn_raft_metrics_recorder(assembly.raft.clone(), cancel);
-
-                let committer: Arc<dyn crate::commit::MutationCommitter> =
-                    Arc::new(assembly.committer.clone());
-                let assembly_arc = Arc::new(assembly);
-                (committer, Some(assembly_arc), None)
+                (committer, Some(handle))
             }
         };
 
@@ -2238,16 +1826,11 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         // RFC 027 cluster-safety: the maintenance loop must only mutate state
         // where writes are accepted (standalone or leader), else it forks the
         // state machine. Build a live gate mirroring the wire/HTTP write path:
-        // openraft leader → raft-lite accepts_writes() → standalone-always.
+        // YRP leader → raft-lite accepts_writes() → standalone-always.
         let write_gate = {
-            let raft = raft_assembly.clone();
             let cluster = cluster_ctx.clone();
             let yrp = yrp_handle.clone();
             background::WriteAcceptanceGate::from_fn(move || {
-                if let Some(ref assembly) = raft {
-                    let m = assembly.raft.metrics().borrow().clone();
-                    return matches!(m.state, openraft::ServerState::Leader);
-                }
                 if let Some(ref h) = yrp {
                     return h.is_leader();
                 }
@@ -2269,7 +1852,6 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
             admission,
             control_runtime: control_runtime_handle.clone(),
             commit_log,
-            raft: raft_assembly,
             yrp: yrp_handle.clone(),
             fault_registry,
             jobs,

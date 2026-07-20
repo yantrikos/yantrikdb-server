@@ -72,47 +72,6 @@ struct ClusterStateView {
 }
 
 fn cluster_state_view(state: &AppState) -> Option<ClusterStateView> {
-    if let Some(ref assembly) = state.raft {
-        let m = assembly.raft.metrics().borrow().clone();
-        let is_leader = matches!(m.state, openraft::ServerState::Leader);
-        let leader_id = m.current_leader.map(u64::from);
-        let leader_addr = leader_id.and_then(|lid| {
-            m.membership_config
-                .nodes()
-                .find(|(id, _)| u64::from(**id) == lid)
-                .map(|(_, n)| n.addr.clone())
-        });
-        let last_log_index = m.last_log_index;
-        let last_applied_index = m.last_applied.as_ref().map(|l| l.index);
-        // saturating_sub keeps the lag at 0 if the (rare) ordering
-        // momentarily reads applied > log_index between updates.
-        let replication_lag = match (last_log_index, last_applied_index) {
-            (Some(log), Some(applied)) => Some(log.saturating_sub(applied)),
-            (Some(log), None) => Some(log),
-            (None, _) => None,
-        };
-        let role_label: &'static str = match m.state {
-            openraft::ServerState::Leader => "leader",
-            openraft::ServerState::Follower => "follower",
-            openraft::ServerState::Candidate => "candidate",
-            openraft::ServerState::Learner => "learner",
-            openraft::ServerState::Shutdown => "shutdown",
-        };
-        return Some(ClusterStateView {
-            node_id: u64::from(m.id),
-            role: format!("{:?}", m.state),
-            term: m.current_term,
-            leader: leader_id,
-            leader_addr,
-            accepts_writes: is_leader,
-            healthy: m.current_leader.is_some(),
-            raft_mode: "openraft",
-            last_log_index,
-            last_applied_index,
-            replication_lag_log_entries: replication_lag,
-            role_label: Some(role_label),
-        });
-    }
     if let Some(ref yrp) = state.yrp {
         let quarantined = yrp.quarantine_reasons().is_some();
         let s = *yrp.status.borrow();
@@ -2249,180 +2208,6 @@ async fn cluster_promote(
     })))
 }
 
-// ---------- v0.8.3: openraft membership API (issue #24) ----------
-//
-// These three endpoints expose openraft's add_learner / change_membership
-// over HTTP so operators can grow / shrink / promote membership without
-// dropping into Rust. All require the cluster master token. They MUST be
-// called against the current leader; followers return 503 with a
-// "current leader" hint that the CLI uses to retry.
-
-#[derive(serde::Deserialize)]
-struct AddLearnerRequest {
-    node_id: u64,
-    addr: String,
-}
-
-#[derive(serde::Deserialize)]
-struct PromoteRequest {
-    /// Final voter set after the membership change. MUST include the
-    /// current leader to avoid the leader inadvertently demoting itself.
-    voters: Vec<u64>,
-}
-
-#[derive(serde::Deserialize)]
-struct RemoveRequest {
-    node_id: u64,
-}
-
-fn require_openraft(state: &AppState) -> Result<&Arc<crate::raft::RaftAssembly>, AppError> {
-    state.raft.as_ref().ok_or_else(|| {
-        app_error(
-            StatusCode::BAD_REQUEST,
-            "openraft mode is not active on this node — set cluster.raft_mode = \"openraft\"",
-        )
-    })
-}
-
-/// POST /v1/cluster/add-learner — add a non-voting learner to the cluster.
-/// Body: `{"node_id": <u64>, "addr": "<host:cluster_port>"}`.
-/// Auth: cluster master token.
-async fn cluster_add_learner(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<AddLearnerRequest>,
-) -> AppResult {
-    require_master_token(&state, &headers)?;
-    let assembly = require_openraft(&state)?;
-    let node = crate::raft::types::YantrikNode::new(body.addr.clone());
-    let node_id = crate::raft::types::YantrikNodeId::from(body.node_id);
-    match assembly.raft.add_learner(node_id, node, false).await {
-        Ok(_resp) => Ok(Json(json!({
-            "status": "learner_added",
-            "node_id": body.node_id,
-            "addr": body.addr,
-            "note": "use /v1/cluster/raft to watch catch-up; promote when last_log_index lag is acceptable",
-        }))),
-        Err(e) => Err(app_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("add_learner failed: {e}"),
-        )),
-    }
-}
-
-/// POST /v1/cluster/promote — change membership to the given voter set.
-/// Body: `{"voters": [<u64>, ...]}`.
-/// Auth: cluster master token.
-async fn cluster_promote_voter(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<PromoteRequest>,
-) -> AppResult {
-    require_master_token(&state, &headers)?;
-    let assembly = require_openraft(&state)?;
-    let voters: std::collections::BTreeSet<crate::raft::types::YantrikNodeId> = body
-        .voters
-        .iter()
-        .copied()
-        .map(crate::raft::types::YantrikNodeId::from)
-        .collect();
-    if voters.is_empty() {
-        return Err(app_error(
-            StatusCode::BAD_REQUEST,
-            "voters list cannot be empty",
-        ));
-    }
-    let voters_clone: Vec<u64> = voters.iter().map(|n| u64::from(*n)).collect();
-    match assembly.raft.change_membership(voters, false).await {
-        Ok(_resp) => Ok(Json(json!({
-            "status": "membership_changed",
-            "voters": voters_clone,
-        }))),
-        Err(e) => Err(app_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("change_membership failed: {e}"),
-        )),
-    }
-}
-
-/// POST /v1/cluster/remove — remove a node from the cluster (atomic
-/// membership change to current voters minus the named node).
-/// Body: `{"node_id": <u64>}`.
-/// Auth: cluster master token.
-async fn cluster_remove(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<RemoveRequest>,
-) -> AppResult {
-    require_master_token(&state, &headers)?;
-    let assembly = require_openraft(&state)?;
-    let metrics = assembly.raft.metrics().borrow().clone();
-    let mut voters: std::collections::BTreeSet<crate::raft::types::YantrikNodeId> =
-        metrics.membership_config.voter_ids().collect();
-    let target_id = crate::raft::types::YantrikNodeId::from(body.node_id);
-    if !voters.remove(&target_id) {
-        return Err(app_error(
-            StatusCode::BAD_REQUEST,
-            format!("node {} is not a current voter", body.node_id),
-        ));
-    }
-    if voters.is_empty() {
-        return Err(app_error(
-            StatusCode::BAD_REQUEST,
-            "refusing to remove the last voter — would lose quorum permanently",
-        ));
-    }
-    let remaining: Vec<u64> = voters.iter().map(|n| u64::from(*n)).collect();
-    match assembly.raft.change_membership(voters, false).await {
-        Ok(_resp) => Ok(Json(json!({
-            "status": "removed",
-            "removed_node_id": body.node_id,
-            "remaining_voters": remaining,
-        }))),
-        Err(e) => Err(app_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("change_membership failed: {e}"),
-        )),
-    }
-}
-
-/// POST /v1/cluster/initialize — bootstrap a fresh openraft cluster on
-/// THIS node alone. Use exactly once per cluster, on the seed node.
-/// Subsequent voters are added via `add-learner` + `promote`.
-/// Auth: cluster master token.
-async fn cluster_initialize(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-) -> AppResult {
-    require_master_token(&state, &headers)?;
-    let assembly = require_openraft(&state)?;
-    let metrics = assembly.raft.metrics().borrow().clone();
-    if metrics.membership_config.nodes().count() > 0 {
-        return Ok(Json(json!({
-            "status": "already_initialized",
-            "voters": metrics.membership_config.voter_ids().map(|n| u64::from(n)).collect::<Vec<_>>(),
-        })));
-    }
-    // Find this node's advertise address from the cluster config we
-    // captured at boot. ClusterContext (legacy raft-lite) holds it.
-    let node_addr = state
-        .cluster
-        .as_ref()
-        .and_then(|c| c.config.advertise_addr.clone())
-        .unwrap_or_else(|| "127.0.0.1:7440".to_string());
-    match crate::raft::initialize_single_node(assembly, node_addr.clone()).await {
-        Ok(()) => Ok(Json(json!({
-            "status": "initialized",
-            "node_id": u64::from(metrics.id),
-            "addr": node_addr,
-        }))),
-        Err(e) => Err(app_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("initialize failed: {e:?}"),
-        )),
-    }
-}
-
 /// GET /metrics — Prometheus-format metrics for monitoring.
 async fn metrics(State(state): State<Arc<AppState>>) -> String {
     let mut out = String::new();
@@ -2466,10 +2251,8 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
             if view.healthy { 1 } else { 0 }
         ));
     }
-    // Peer reachability is raft-lite-specific (openraft tracks this in
-    // its own metrics scrape via spawn_raft_metrics_recorder). Skip on
-    // openraft mode.
-    if state.raft.is_none() {
+    // Peer reachability is raft-lite-specific.
+    {
         if let Some(ref cluster) = state.cluster {
             out.push_str(
                 "# HELP yantrikdb_cluster_peer_reachable Whether each peer is reachable\n",
@@ -3161,9 +2944,8 @@ fn require_master_token(state: &AppState, headers: &axum::http::HeaderMap) -> Re
 /// Mirrors the wire/HTTP write-path gate so state-mutating admin actions
 /// (like a manual maintenance run) don't fork the cluster state machine.
 fn node_accepts_writes(state: &AppState) -> bool {
-    if let Some(ref assembly) = state.raft {
-        let m = assembly.raft.metrics().borrow().clone();
-        return matches!(m.state, openraft::ServerState::Leader);
+    if let Some(ref yrp) = state.yrp {
+        return yrp.is_leader();
     }
     if let Some(ref cluster) = state.cluster {
         return cluster.state.accepts_writes();
@@ -4961,16 +4743,16 @@ struct MemoryGetParams {
 /// Returns `Err(412 replica_behind)` if the replica hasn't caught up,
 /// `Ok(())` otherwise.
 ///
-/// Single-node mode (no `state.raft`) always satisfies the check —
-/// there is no replication lag to wait for.
+/// Single-node mode (no `state.yrp`) always satisfies the check —
+/// there is no replication lag to wait for. In YRP mode the check
+/// compares against the node's durably-applied index.
 fn check_min_seq(state: &AppState, min_seq: u64) -> Result<(), AppError> {
     use crate::api::errors::{api_error, ApiErrorCode};
 
-    let Some(raft) = state.raft.as_ref() else {
+    let Some(yrp) = state.yrp.as_ref() else {
         return Ok(());
     };
-    let metrics = raft.raft.metrics().borrow().clone();
-    let applied = metrics.last_applied.as_ref().map(|l| l.index).unwrap_or(0);
+    let applied = yrp.status.borrow().applied;
     if applied < min_seq {
         return Err(api_error(
             StatusCode::PRECONDITION_FAILED,
@@ -5113,18 +4895,6 @@ async fn memory_get(
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.admission.cfg.max_request_body_bytes;
-    // Build the openraft sub-router up-front so we can merge it AFTER
-    // the AppState-typed routes have all been chained. Order matters:
-    // axum's `.merge()` unifies state types, and merging a state=()
-    // router (these openraft routes set their own state via
-    // `with_state(raft)`, so they expose state=() upward) before the
-    // AppState routes confuses inference. Built here, merged at the
-    // bottom of the chain.
-    let raft_sub_router = state.raft.as_ref().map(|assembly| {
-        crate::raft::raft_status_router(assembly.raft.clone())
-            .merge(crate::raft::raft_receive_router(assembly.raft.clone()))
-    });
-
     // Issue #39 Phase 1: read endpoints that use the RFC 014-B
     // `Principal` substrate. The auth middleware runs on these routes
     // only — legacy routes still authenticate inline via `resolve_engine`.
@@ -5178,11 +4948,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/yrp/msg", post(yrp_msg))
         // RFC 028 Phase C: engine backfill for beyond-GC stragglers
         .route("/v1/yrp/backfill", post(yrp_backfill))
-        // v0.8.3 #24: openraft membership management
-        .route("/v1/cluster/initialize", post(cluster_initialize))
-        .route("/v1/cluster/add-learner", post(cluster_add_learner))
-        .route("/v1/cluster/promote-voter", post(cluster_promote_voter))
-        .route("/v1/cluster/remove", post(cluster_remove))
         .route("/v1/admin/control-snapshot", get(control_snapshot))
         .route("/v1/admin/snapshot", post(admin_snapshot))
         // RFC 027 / v0.8.24 — autonomous-maintenance operator surface.
@@ -5220,9 +4985,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(tower_http::limit::RequestBodyLimitLayer::new(body_limit))
         .with_state(state)
         .merge(principal_auth_router);
-    if let Some(raft_router) = raft_sub_router {
-        app = app.merge(raft_router);
-    }
     app
 }
 
@@ -5869,7 +5631,6 @@ pub(crate) mod e2e_test_support {
             admission,
             control_runtime: None,
             commit_log,
-            raft: None,
             yrp: None,
             fault_registry: crate::debug::FaultRegistry::new(),
             jobs,

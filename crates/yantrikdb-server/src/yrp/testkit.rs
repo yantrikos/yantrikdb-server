@@ -231,7 +231,6 @@ pub async fn spawn_node(
         admission,
         control_runtime: None,
         commit_log,
-        raft: None,
         yrp: Some(handle.clone()),
         fault_registry: crate::debug::FaultRegistry::new(),
         jobs,

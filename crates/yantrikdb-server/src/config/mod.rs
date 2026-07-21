@@ -560,6 +560,63 @@ impl ServerConfig {
 mod tests {
     use super::*;
 
+    /// A YRP config in the exact shape `yantrikdb cluster init` emits must
+    /// round-trip through the loader: raft_mode = Yrp, a [yrp] section, and
+    /// node-id'd peers including a witness. Guards the CLI↔loader contract.
+    #[test]
+    fn yrp_cluster_init_config_round_trips() {
+        let toml = r#"
+[server]
+http_port = 7438
+data_dir = "/var/lib/yantrikdb"
+
+[cluster]
+node_id = 2
+role = "voter"
+raft_mode = "yrp"
+cluster_secret = "ydb_cluster_x"
+
+[yrp]
+cluster_id = 28
+tick_ms = 50
+election_ticks_min = 10
+election_ticks_max = 20
+heartbeat_ticks = 2
+
+[[yrp.peers]]
+node_id = 1
+addr = "http://10.0.0.1:7438"
+
+[[yrp.peers]]
+node_id = 2
+addr = "http://10.0.0.2:7438"
+
+[[yrp.peers]]
+node_id = 3
+addr = "http://10.0.0.3:7438"
+
+[[yrp.peers]]
+node_id = 4
+addr = "http://10.0.0.4:7438"
+witness = true
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).expect("YRP config must parse");
+        assert_eq!(cfg.cluster.raft_mode, RaftClusterMode::Yrp);
+        assert_eq!(cfg.yrp.cluster_id, 28);
+        assert_eq!(cfg.yrp.peers.len(), 4);
+        assert_eq!(cfg.yrp.peers[0].node_id, 1);
+        assert!(cfg.yrp.peers[3].witness, "node 4 must be the witness");
+    }
+
+    /// The Phase D deprecation shim: raft_mode = "openraft" is refused.
+    #[test]
+    fn openraft_config_is_refused() {
+        assert!(raft_mode_is_openraft("raft_mode = \"openraft\""));
+        assert!(raft_mode_is_openraft("  raft_mode=\"openraft\"  "));
+        assert!(!raft_mode_is_openraft("# raft_mode = \"openraft\""));
+        assert!(!raft_mode_is_openraft("raft_mode = \"yrp\""));
+    }
+
     /// Issue #6 regression: YANTRIKDB_ENCRYPTION_KEY_HEX env var must be
     /// honored as the env-equivalent of `[encryption] key_hex` in TOML.
     /// Pre-fix: env var was silently ignored, encryption disabled.

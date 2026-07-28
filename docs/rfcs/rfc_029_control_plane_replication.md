@@ -109,6 +109,36 @@ control ops once the cluster is up. This is why `cluster_secret` stays a
 peer/bootstrap credential and is **not** promoted to a data-plane token
 (consistent with the finding corrected in the docs this cycle).
 
+## Increment 1 (shipped) vs increment 2 (follow-up)
+
+**Increment 1** delivers the replication mechanism: the `Payload::Control`
+log entry, the `ControlOp` grammar, `ControlApplySink` (idempotent,
+leader-assigned ids/timestamps, verifier-hash only), `propose_control`
+with verify-after-apply, and the master-token-gated admin endpoints. A
+token minted on the leader authenticates on every follower and survives
+failover — proven in the 2-node HTTP cluster test.
+
+Two **safety boundaries** hold increment 1 to the correctness bar (from an
+adversarial review):
+
+- **Compaction MUST be disabled** (`compact_after_entries = 0`, the
+  production default). Control ops write no outcome row and are not yet
+  carried in the YRP snapshot, so a compacted range containing a control op
+  cannot be backfilled — a rejoining node would be stuck engine-incomplete
+  and could miss a revoke. Enabling compaction now logs a loud `error!`.
+  **Increment 2** carries control state in the snapshot (and/or gives
+  control ops backfillable outcome rows), lifting this restriction.
+- **Upgrade every node before minting the first control op** (bootstrap
+  rule). A pre-`Control` binary rejects a `Payload::Control` AppendEntries
+  (fail-safe — no misapply, HTTP 400) but then cannot advance past that
+  index, stalling replication to it. Increment 2 gates control-op proposal
+  behind a capability bit so a half-upgraded cluster refuses to mint one.
+
+Increment 2 also adds the **auth-read barrier** (instantaneous cluster-wide
+revocation — until then revocation is bounded-staleness eventually
+consistent within replication lag) and the parallel `control_incomplete`
+health gate.
+
 ## Out of scope (follow-ups)
 
 External identity (OIDC/SSO/JWT) layers *on top of* this — it maps an

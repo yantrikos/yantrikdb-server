@@ -1826,8 +1826,13 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
                     compact_after_entries: cfg.yrp.compact_after_entries,
                     leader_retain_entries: cfg.yrp.leader_retain_entries,
                 };
-                let handle = crate::yrp::runtime::spawn(runtime_cfg, local.clone(), applier)
-                    .map_err(|e| anyhow::anyhow!("YRP assembly failed: {e}"))?;
+                let handle = crate::yrp::runtime::spawn(
+                    runtime_cfg,
+                    local.clone(),
+                    applier,
+                    control.clone(),
+                )
+                .map_err(|e| anyhow::anyhow!("YRP assembly failed: {e}"))?;
                 tracing::info!(
                     node_id = cfg.cluster.node_id,
                     cluster_id = cfg.yrp.cluster_id,

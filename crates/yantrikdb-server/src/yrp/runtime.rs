@@ -88,6 +88,24 @@ pub enum YrpProposeError {
     Unavailable(String),
 }
 
+/// Failures of a replicated control-plane write (RFC 029), richer than a
+/// bare propose error so the HTTP layer can distinguish a duplicate (409)
+/// from a redirect (503) from a genuine divergence (500).
+#[derive(Debug)]
+pub enum ControlWriteError {
+    /// The database name already exists — a create is a 409, not a phantom
+    /// success (review F2).
+    AlreadyExists,
+    /// The op committed but the expected row is absent after apply — a
+    /// claim-key collision or divergence (review F2 failover / F5). Fail
+    /// closed: never report success for a write that did not take effect.
+    Diverged(String),
+    /// A local error (e.g. control.db unreadable) before/after propose.
+    Internal(String),
+    /// Underlying propose failure (NotLeader redirect / Timeout / etc.).
+    Propose(YrpProposeError),
+}
+
 /// What the HTTP layer holds for a YRP node.
 pub struct YrpHandle {
     pub node_id: NodeId,
@@ -101,6 +119,13 @@ pub struct YrpHandle {
     /// Local commit log — the retained source of truth the backfill serve
     /// path joins against the outcome store (RFC 028 Phase C).
     local: Arc<dyn MutationCommitter>,
+    /// The node's control.db (RFC 029): read to allocate leader-assigned
+    /// database ids before proposing a `CreateDatabase` control op.
+    control: Arc<parking_lot::Mutex<crate::control::ControlDb>>,
+    /// Serializes control-plane database creates so two concurrent creates
+    /// on the leader never allocate the same id (RFC 029). Held across
+    /// allocate → propose → apply, so create N+1 sees create N's row.
+    control_propose_lock: tokio::sync::Mutex<()>,
     /// `Some(reasons)` while quarantined (or after a fatal driver exit);
     /// `None` when replicating normally. The health surface reports it;
     /// the write path refuses on it.
@@ -297,6 +322,174 @@ impl YrpHandle {
         self.wait_outcome(index).await
     }
 
+    /// Propose a control-plane op (RFC 029) and wait until it is durably
+    /// applied on this node. Returns the applied YRP index. Maps
+    /// `NotLeader`/`Timeout` exactly like [`propose_and_wait`]; control ops
+    /// write no outcome row, so it waits on the shared apply marker directly
+    /// (the marker crossing `index` IS the durability + apply signal). A
+    /// retried op with the same natural identity dedupes via its claim key
+    /// and resolves to the original entry's index.
+    pub async fn propose_control(
+        &self,
+        op: &super::control_op::ControlOp,
+    ) -> Result<u64, YrpProposeError> {
+        if let Some(reasons) = self.quarantine_reasons() {
+            return Err(YrpProposeError::Unavailable(format!(
+                "node quarantined: {reasons:?}"
+            )));
+        }
+        let bytes = op.encode().map_err(YrpProposeError::Unavailable)?;
+        let (tx, rx) = oneshot::channel();
+        self.owner_tx
+            .send(DriverEvent::Propose {
+                key: op.claim_key(),
+                payload: Payload::Control(bytes),
+                reply: tx,
+            })
+            .map_err(|_| YrpProposeError::Unavailable("YRP driver not running".into()))?;
+        let outcome = tokio::time::timeout(PROPOSE_TIMEOUT, rx)
+            .await
+            .map_err(|_| YrpProposeError::Timeout)?
+            .map_err(|_| YrpProposeError::Unavailable("YRP driver dropped reply".into()))?;
+        let index = match outcome {
+            ProposeOutcome::Applied { index } | ProposeOutcome::Duplicate { index } => index,
+            ProposeOutcome::Retry => {
+                let (leader_id, leader_addr) = self.leader_hint();
+                return Err(YrpProposeError::NotLeader {
+                    leader_id,
+                    leader_addr,
+                });
+            }
+        };
+        let deadline = tokio::time::Instant::now() + PROPOSE_TIMEOUT;
+        while self.outcomes.applied() < index {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(YrpProposeError::Timeout);
+            }
+            tokio::time::sleep(OUTCOME_POLL).await;
+        }
+        Ok(index)
+    }
+
+    /// Create a database as a replicated control op (RFC 029). The
+    /// serializing lock is held across name-check → allocate → propose →
+    /// apply, so a concurrent create both (a) sees this one's row and picks
+    /// the next id, and (b) sees an existing name and 409s rather than
+    /// silently no-op'ing on the id-PK `INSERT OR IGNORE`. The returned id
+    /// is READ BACK from `control.db` after apply, so it is always the id a
+    /// caller can actually use — never the pre-allocated guess (review F2).
+    pub async fn create_database_replicated(
+        &self,
+        name: &str,
+        path: &str,
+        config: &str,
+        created_at: String,
+    ) -> Result<i64, ControlWriteError> {
+        let _guard = self.control_propose_lock.lock().await;
+        // Name-existence + id allocation under the guard, so a concurrent
+        // create can neither duplicate the name nor race the id.
+        let db_id = {
+            let db = self.control.lock();
+            if db
+                .database_exists(name)
+                .map_err(|e| ControlWriteError::Internal(format!("name check: {e}")))?
+            {
+                return Err(ControlWriteError::AlreadyExists);
+            }
+            db.next_database_id()
+                .map_err(|e| ControlWriteError::Internal(format!("allocate db id: {e}")))?
+        };
+        let op = super::control_op::ControlOp::CreateDatabase {
+            db_id,
+            name: name.to_string(),
+            path: path.to_string(),
+            config: config.to_string(),
+            created_at,
+        };
+        self.propose_control(&op)
+            .await
+            .map_err(ControlWriteError::Propose)?;
+        // Verify-after-apply: the row must exist with our name. Return its
+        // actual id (the truth), and fail closed if it is missing (a claim
+        // collision that deduped our op away — review F2/F5).
+        match self
+            .control
+            .lock()
+            .get_database(name)
+            .map_err(|e| ControlWriteError::Internal(format!("read-back: {e}")))?
+        {
+            Some(rec) => Ok(rec.id),
+            None => Err(ControlWriteError::Diverged(format!(
+                "CreateDatabase({name}) committed but no row after apply"
+            ))),
+        }
+    }
+
+    /// Mint a token as a replicated control op (RFC 029), verifying after
+    /// apply that the hash actually resolves to `db_id` — fail closed on a
+    /// claim-key collision that would otherwise report a token that
+    /// authenticates nowhere (review F5). The caller must have already
+    /// verified `db_id` exists (else apply FK-fails and fail-stops the
+    /// node — review F3).
+    pub async fn create_token_replicated(
+        &self,
+        db_id: i64,
+        token_hash: String,
+        label: String,
+        created_at: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::CreateToken {
+            db_id,
+            token_hash: token_hash.clone(),
+            label,
+            created_at,
+        };
+        self.propose_control(&op)
+            .await
+            .map_err(ControlWriteError::Propose)?;
+        let resolved = self
+            .control
+            .lock()
+            .validate_token(&token_hash)
+            .map_err(|e| ControlWriteError::Internal(format!("verify token: {e}")))?;
+        if resolved == Some(db_id) {
+            Ok(())
+        } else {
+            Err(ControlWriteError::Diverged(
+                "CreateToken committed but token does not resolve after apply".into(),
+            ))
+        }
+    }
+
+    /// Revoke a token as a replicated control op (RFC 029), verifying after
+    /// apply that the token no longer resolves — fail closed if it still
+    /// authenticates (a collision that deduped the revoke away — review F5).
+    pub async fn revoke_token_replicated(
+        &self,
+        token_hash: String,
+        revoked_at: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::RevokeToken {
+            token_hash: token_hash.clone(),
+            revoked_at,
+        };
+        self.propose_control(&op)
+            .await
+            .map_err(ControlWriteError::Propose)?;
+        let resolved = self
+            .control
+            .lock()
+            .validate_token(&token_hash)
+            .map_err(|e| ControlWriteError::Internal(format!("verify revoke: {e}")))?;
+        if resolved.is_none() {
+            Ok(())
+        } else {
+            Err(ControlWriteError::Diverged(
+                "RevokeToken committed but token still resolves after apply".into(),
+            ))
+        }
+    }
+
     /// Wait for the durable-apply marker to cover `index`, then read its
     /// outcome. (An `Applied` reply already implies coverage; `Duplicate`
     /// may race a lagging apply worker — poll briefly.)
@@ -324,6 +517,7 @@ pub fn spawn(
     cfg: YrpRuntimeConfig,
     local: Arc<dyn MutationCommitter>,
     applier: Arc<dyn Applier>,
+    control: Arc<parking_lot::Mutex<crate::control::ControlDb>>,
 ) -> Result<Arc<YrpHandle>, String> {
     if cfg.cluster_id == 0 {
         return Err("[yrp] cluster_id must be non-zero".into());
@@ -347,6 +541,19 @@ pub fn spawn(
             "[yrp] log compaction ENABLED: beyond-GC stragglers rejoin without \
              engine backfill for the compacted range until Phase C \
              (engine-checkpoint transfer). Not recommended in production."
+        );
+        // RFC 029: control ops (tokens/databases) write no outcome row and
+        // are not yet carried in the snapshot, so a compacted range that
+        // contains a control op cannot be backfilled — a rejoining/new node
+        // would be stuck engine-incomplete and could miss a token revoke.
+        // Control-plane replication is only correctness-safe with compaction
+        // DISABLED until the snapshot carries control state (RFC 029 inc 2).
+        tracing::error!(
+            compact_after = cfg.compact_after_entries,
+            "[yrp] compaction + RFC 029 control-plane replication is NOT safe: \
+             control ops in a compacted range are lost to rejoiners. Set \
+             compact_after_entries = 0 until RFC 029 increment 2 (control \
+             state in the snapshot) ships."
         );
     }
 
@@ -453,6 +660,8 @@ pub fn spawn(
         peer_http,
         cluster_secret: cfg.cluster_secret.clone(),
         local: local.clone(),
+        control: control.clone(),
+        control_propose_lock: tokio::sync::Mutex::new(()),
         quarantine: std::sync::RwLock::new(None),
     });
 
@@ -461,7 +670,8 @@ pub fn spawn(
     // `status.backfill_target > applied`.
     tokio::spawn(run_backfill_task(handle.clone(), owner_tx.clone()));
 
-    let sink = EngineApplySink::new(local, applier, outcomes.clone());
+    let control_sink = Arc::new(super::control_op::ControlApplySink::new(control));
+    let sink = EngineApplySink::new(local, applier, outcomes.clone()).with_control(control_sink);
     tokio::spawn(run_apply_worker(Box::new(sink), apply_rx, owner_tx.clone()));
     spawn_ticker(owner_tx.clone(), Duration::from_millis(cfg.tick_ms.max(1)));
 

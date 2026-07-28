@@ -259,6 +259,128 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
         admin.text().await.unwrap().contains("YantrikDB"),
         "/admin must serve the studio page"
     );
+
+    // ── RFC 029: control-plane replication ──────────────────────────
+    // A database + token minted on the LEADER via the replicated admin
+    // endpoints (master-token gated) must materialize on the FOLLOWER's
+    // control.db — closing the exact gap (per-node tokens don't survive
+    // failover) that made an enterprise cluster undeployable.
+    let (st, resp) = post_json(
+        &leader.base,
+        SECRET,
+        "/v1/admin/databases",
+        &json!({ "name": "rfc029db" }),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK, "admin create db: {resp}");
+    assert_eq!(resp["replicated"], json!(true), "must replicate: {resp}");
+    let db_id = resp["id"].as_i64().expect("db id");
+
+    let (st, resp) = post_json(
+        &leader.base,
+        SECRET,
+        "/v1/admin/tokens",
+        &json!({ "database_id": db_id }),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK, "admin mint token: {resp}");
+    let minted = resp["token"].as_str().expect("token").to_string();
+    let minted_hash = crate::auth::hash_token(&minted);
+
+    // The FOLLOWER's control.db resolves the replicated token to the same
+    // database id — i.e. `ControlDbAuthProvider` on the follower will now
+    // authenticate a token minted on the leader (the auth path IS
+    // `validate_token`). This is the headline RFC 029 guarantee.
+    let poll_follower_token = |want: Option<i64>| {
+        let follower_control = follower.state.control.clone();
+        let hash = minted_hash.clone();
+        async move {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let got = follower_control.lock().validate_token(&hash).unwrap();
+                if got == want {
+                    return;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "follower control.db never converged: got {got:?}, want {want:?}"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+    };
+    poll_follower_token(Some(db_id)).await;
+
+    // Control writes funnel through the leader: a control write against the
+    // FOLLOWER is refused (leader redirect), exactly like a data write.
+    let (st, _) = post_json(
+        &follower.base,
+        SECRET,
+        "/v1/admin/databases",
+        &json!({ "name": "should-redirect" }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        "follower must redirect control writes to the leader"
+    );
+
+    // Revocation replicates too: revoke on the leader → the follower stops
+    // resolving the token.
+    let (st, _) = post_json(
+        &leader.base,
+        SECRET,
+        "/v1/admin/tokens/revoke",
+        &json!({ "token": minted }),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK, "admin revoke");
+    poll_follower_token(None).await;
+
+    // Hardening (review F2): a duplicate database name is a 409, not a
+    // phantom-id success.
+    let (st, _) = post_json(
+        &leader.base,
+        SECRET,
+        "/v1/admin/databases",
+        &json!({ "name": "rfc029db" }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::CONFLICT,
+        "duplicate db name must 409, not return a phantom id"
+    );
+
+    // Hardening (review F3): a token mint against a nonexistent database_id
+    // is rejected at the handler — it must NEVER reach apply (an FK failure
+    // there would fail-stop the apply worker on every node).
+    let (st, _) = post_json(
+        &leader.base,
+        SECRET,
+        "/v1/admin/tokens",
+        &json!({ "database_id": 999_999 }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::NOT_FOUND,
+        "token mint for a bogus db id must be refused, not wedge the cluster"
+    );
+    // Prove the cluster is still healthy after the rejected bad-id mint —
+    // apply did not fail-stop; a normal write still replicates.
+    let body_after = json!({
+        "text": "post-hardening write still replicates",
+        "embedding": emb2,
+        "idempotency_key": "yrp-e2e-key-after",
+    });
+    let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body_after).await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::OK,
+        "cluster must still accept writes after a rejected bad mint: {resp}"
+    );
 }
 
 async fn spawn_node_on(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node {
@@ -338,6 +460,7 @@ async fn spawn_node_inner(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node 
         },
         local.clone(),
         applier,
+        control.clone(),
     )
     .expect("yrp spawn");
     let commit_log: Arc<dyn crate::commit::MutationCommitter> =

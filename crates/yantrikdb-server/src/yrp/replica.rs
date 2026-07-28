@@ -74,6 +74,15 @@ pub enum Payload {
     /// a retry answered from the claims table recovers its outcome from
     /// the entry itself.
     Op(Vec<u8>),
+    /// A serialized control-plane mutation (`super::control_op::ControlOp`,
+    /// RFC 029) applied to `control.db` on every node — the replicated
+    /// identity/authorization plane (tokens, databases). A *distinct*
+    /// variant rather than a re-wrapping of [`Op`], so a mixed-version
+    /// cluster keeps replicating **data** ops unchanged; only nodes that
+    /// understand control ops are ever sent them (the operator upgrades
+    /// every node before the first replicated control op is minted —
+    /// RFC 029 bootstrap).
+    Control(Vec<u8>),
 }
 
 /// Test-only ergonomic comparison against the sim's numeric payloads:

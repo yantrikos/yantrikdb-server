@@ -28,6 +28,7 @@
 //!    index)` election freshness, never a watermark.
 
 pub mod bootstrap;
+pub mod control_op;
 pub mod driver;
 pub mod engine_sink;
 pub mod op;

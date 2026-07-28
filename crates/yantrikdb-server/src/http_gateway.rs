@@ -2593,6 +2593,208 @@ async fn list_databases(
     Ok(Json(json!({ "databases": list })))
 }
 
+/// Map a control-plane propose failure (RFC 029) to an HTTP response. A
+/// follower answers 503 with the leader's address so the caller (studio or
+/// operator CLI) redirects the admin write to the leader — the same posture
+/// as a data-plane write against a follower.
+fn control_propose_err(e: crate::yrp::runtime::YrpProposeError) -> AppError {
+    use crate::yrp::runtime::YrpProposeError as E;
+    match e {
+        E::NotLeader { leader_addr, .. } => app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "not the leader; retry this admin write against the leader{}",
+                leader_addr.map(|a| format!(" at {a}")).unwrap_or_default()
+            ),
+        ),
+        E::Timeout => app_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "control op timed out awaiting quorum",
+        ),
+        E::Unavailable(m) => app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("control plane unavailable: {m}"),
+        ),
+    }
+}
+
+/// Map a replicated control-write failure (RFC 029) to an HTTP response:
+/// duplicate → 409, redirect/timeout → via [`control_propose_err`],
+/// divergence/internal → 500 (fail closed — never report success for a
+/// write that did not take effect).
+fn control_write_err(e: crate::yrp::runtime::ControlWriteError) -> AppError {
+    use crate::yrp::runtime::ControlWriteError as E;
+    match e {
+        E::AlreadyExists => app_error(StatusCode::CONFLICT, "database name already exists"),
+        E::Propose(p) => control_propose_err(p),
+        E::Diverged(m) => app_error(StatusCode::INTERNAL_SERVER_ERROR, m),
+        E::Internal(m) => app_error(StatusCode::INTERNAL_SERVER_ERROR, m),
+    }
+}
+
+/// POST /v1/admin/databases — create a database as a replicated control op
+/// (RFC 029). Body: `{"name": "...", "path"?: "...", "config"?: {...}}`.
+/// Master-token gated. Returns `{"id", "name", "replicated"}`. In yrp mode
+/// the create is committed through YRP and applied on every node; in
+/// single-node mode it writes `control.db` directly.
+async fn admin_create_database(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    require_master_token(&state, &headers)?;
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'name'"))?
+        .to_string();
+    let path = body
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&name)
+        .to_string();
+    let config = body
+        .get("config")
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "{}".to_string());
+
+    if let Some(yrp) = &state.yrp {
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let id = yrp
+            .create_database_replicated(&name, &path, &config, created_at)
+            .await
+            .map_err(control_write_err)?;
+        Ok(Json(json!({ "id": id, "name": name, "replicated": true })))
+    } else {
+        let id = tokio::task::spawn_blocking({
+            let control = state.control.clone();
+            let (name, path) = (name.clone(), path.clone());
+            move || control.lock().create_database(&name, &path)
+        })
+        .await
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        Ok(Json(json!({ "id": id, "name": name, "replicated": false })))
+    }
+}
+
+/// POST /v1/admin/tokens — mint a token for a database, replicated (RFC
+/// 029). Body: `{"database_id": N}` or `{"database": "name"}`, optional
+/// `"label"`. Master-token gated. Returns `{"token"}` — the plaintext is
+/// shown ONCE and never stored; only its SHA-256 hash is replicated
+/// (Invariant 3).
+async fn admin_create_token(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    require_master_token(&state, &headers)?;
+    let db_id = if let Some(id) = body.get("database_id").and_then(|v| v.as_i64()) {
+        id
+    } else if let Some(dbname) = body.get("database").and_then(|v| v.as_str()) {
+        let rec = tokio::task::spawn_blocking({
+            let control = state.control.clone();
+            let dbname = dbname.to_string();
+            move || control.lock().get_database(&dbname)
+        })
+        .await
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        rec.ok_or_else(|| app_error(StatusCode::NOT_FOUND, format!("no database '{dbname}'")))?
+            .id
+    } else {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "provide 'database_id' or 'database'",
+        ));
+    };
+    // Validate the target database EXISTS before proposing (review F3): a
+    // CreateToken for a nonexistent db FK-fails at apply, and apply errors
+    // fail-stop the worker on EVERY node — one bad id would wedge the whole
+    // cluster. Reject here instead.
+    let db_present = tokio::task::spawn_blocking({
+        let control = state.control.clone();
+        move || control.lock().get_database_by_id(db_id)
+    })
+    .await
+    .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .is_some();
+    if !db_present {
+        return Err(app_error(
+            StatusCode::NOT_FOUND,
+            format!("database_id {db_id} does not exist"),
+        ));
+    }
+    let label = body
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let raw = crate::auth::generate_token();
+    let hash = crate::auth::hash_token(&raw);
+
+    if let Some(yrp) = &state.yrp {
+        yrp.create_token_replicated(db_id, hash, label, chrono::Utc::now().to_rfc3339())
+            .await
+            .map_err(control_write_err)?;
+        Ok(Json(
+            json!({ "token": raw, "database_id": db_id, "replicated": true }),
+        ))
+    } else {
+        tokio::task::spawn_blocking({
+            let control = state.control.clone();
+            move || control.lock().create_token(&hash, db_id, &label)
+        })
+        .await
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        Ok(Json(
+            json!({ "token": raw, "database_id": db_id, "replicated": false }),
+        ))
+    }
+}
+
+/// POST /v1/admin/tokens/revoke — revoke a token, replicated (RFC 029).
+/// Body: `{"token": "ydb_..."}` or `{"hash": "..."}`. Master-token gated.
+/// Because revocation replicates, a token revoked on the leader is refused
+/// cluster-wide (the auth-read barrier that makes this instantaneous on
+/// every node lands in RFC 029 increment 2).
+async fn admin_revoke_token(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    require_master_token(&state, &headers)?;
+    let hash = if let Some(t) = body.get("token").and_then(|v| v.as_str()) {
+        crate::auth::hash_token(t)
+    } else if let Some(h) = body.get("hash").and_then(|v| v.as_str()) {
+        h.to_string()
+    } else {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "provide 'token' or 'hash'",
+        ));
+    };
+
+    if let Some(yrp) = &state.yrp {
+        yrp.revoke_token_replicated(hash, chrono::Utc::now().to_rfc3339())
+            .await
+            .map_err(control_write_err)?;
+        Ok(Json(json!({ "revoked": true, "replicated": true })))
+    } else {
+        let revoked = tokio::task::spawn_blocking({
+            let control = state.control.clone();
+            move || control.lock().revoke_token(&hash)
+        })
+        .await
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        Ok(Json(json!({ "revoked": revoked, "replicated": false })))
+    }
+}
+
 /// GET /v1/admin/control-snapshot — returns a full snapshot of the control
 /// plane (databases + active tokens) for replication to followers.
 ///
@@ -3017,12 +3219,22 @@ fn require_master_token(state: &AppState, headers: &axum::http::HeaderMap) -> Re
             }
         }
     }
+    // In yrp mode the master/bootstrap secret lives on the YRP handle
+    // (`state.cluster` may be `None`) — accept it there too. This is the
+    // RFC 029 bootstrap-admin credential.
+    if let Some(ref yrp) = state.yrp {
+        if let Some(ref secret) = yrp.cluster_secret {
+            if token == secret.as_str() {
+                return Ok(());
+            }
+        }
+    }
     // Single-node mode without a configured cluster secret: deny outright.
     // Safer than auto-allowing any valid bearer; debug endpoints SHOULD
     // require explicit operator opt-in via cluster_secret.
     Err(app_error(
         StatusCode::FORBIDDEN,
-        "debug endpoints require the cluster master token",
+        "control-plane admin requires the cluster master token",
     ))
 }
 
@@ -5038,6 +5250,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster/topology", get(yrp_topology))
         .route("/admin", get(admin_studio))
         .route("/v1/admin/control-snapshot", get(control_snapshot))
+        // RFC 029: replicated control-plane admin (master-token gated).
+        // Databases + tokens minted here commit through YRP and apply on
+        // every node, so identity survives failover.
+        .route("/v1/admin/databases", post(admin_create_database))
+        .route("/v1/admin/tokens", post(admin_create_token))
+        .route("/v1/admin/tokens/revoke", post(admin_revoke_token))
         .route("/v1/admin/snapshot", post(admin_snapshot))
         // RFC 027 / v0.8.24 — autonomous-maintenance operator surface.
         .route("/v1/admin/maintenance/run", post(admin_maintenance_run))

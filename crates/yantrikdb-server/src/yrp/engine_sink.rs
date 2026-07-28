@@ -267,6 +267,10 @@ pub struct EngineApplySink {
     committer: Arc<dyn MutationCommitter>,
     applier: Arc<dyn Applier>,
     outcomes: Arc<OutcomeStore>,
+    /// RFC 029: applies `Payload::Control` entries to `control.db`. `None`
+    /// on the pure data-plane wiring (tests); `Some` in the production
+    /// runtime, where control ops ride the same log + apply marker.
+    control: Option<Arc<super::control_op::ControlApplySink>>,
 }
 
 impl EngineApplySink {
@@ -279,7 +283,16 @@ impl EngineApplySink {
             committer,
             applier,
             outcomes,
+            control: None,
         }
+    }
+
+    /// Attach the RFC 029 control-plane sink so committed `Payload::Control`
+    /// entries are applied to `control.db`. Without it, a control entry is a
+    /// fail-stop (a control op reached a node with no control sink wired).
+    pub fn with_control(mut self, control: Arc<super::control_op::ControlApplySink>) -> Self {
+        self.control = Some(control);
+        self
     }
 }
 
@@ -296,6 +309,19 @@ impl ApplySink for EngineApplySink {
                 return Err(format!(
                     "Test payload {n} reached production sink at {index}"
                 ))
+            }
+            // RFC 029: control-plane op — apply to control.db, then advance
+            // the shared marker. Idempotent apply; an Err fail-stops the
+            // whole worker (Invariant 2: never serve stale authorization).
+            Payload::Control(b) => {
+                let op = super::control_op::ControlOp::decode(b)?;
+                self.control
+                    .as_ref()
+                    .ok_or_else(|| {
+                        format!("Payload::Control at {index} but no control sink wired")
+                    })?
+                    .apply(&op)?;
+                return self.outcomes.advance(index);
             }
             Payload::Op(b) => b,
         };

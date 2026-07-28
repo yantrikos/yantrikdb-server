@@ -1162,6 +1162,92 @@ async fn yrp_backfill(
     })
 }
 
+/// Admin studio: aggregated cluster topology. Fans out to every YRP
+/// member's `/v1/health` (public, like this endpoint) and returns one
+/// array the dashboard renders. Own-node state is read directly; peers
+/// are fetched concurrently with a short timeout (unreachable peers are
+/// marked `reachable: false`). Read-only cluster metadata — no auth, same
+/// posture as `/v1/health`.
+async fn yrp_topology(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let Some(yrp) = &state.yrp else {
+        return Json(json!({ "raft_mode": cluster_state_view(&state)
+            .map(|v| v.raft_mode).unwrap_or("disabled"), "nodes": [] }));
+    };
+    let self_id = yrp.node_id.0;
+    let peers = yrp.peer_urls();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+
+    let fetches = peers.into_iter().map(|(id, url)| {
+        let client = client.clone();
+        let own = id == self_id;
+        // Own node: read the local view directly (no self-HTTP).
+        let local = if own {
+            cluster_state_view(&state)
+        } else {
+            None
+        };
+        async move {
+            if own {
+                let v = local;
+                json!({
+                    "node_id": id, "addr": url, "reachable": true, "self": true,
+                    "role": v.as_ref().map(|c| c.role_label).unwrap_or(Some("unknown")),
+                    "term": v.as_ref().map(|c| c.term),
+                    "leader": v.as_ref().and_then(|c| c.leader),
+                    "healthy": v.as_ref().map(|c| c.healthy),
+                    "last_applied_index": v.as_ref().and_then(|c| c.last_applied_index),
+                    "replication_lag": v.as_ref().and_then(|c| c.replication_lag_log_entries),
+                })
+            } else {
+                match client
+                    .get(format!("{}/v1/health", url.trim_end_matches('/')))
+                    .send()
+                    .await
+                {
+                    Ok(resp) => match resp.json::<Value>().await {
+                        Ok(h) => {
+                            let c = h.get("cluster").cloned().unwrap_or(json!({}));
+                            json!({
+                                "node_id": id, "addr": url, "reachable": true, "self": false,
+                                "role": c.get("role_label").or(c.get("role")),
+                                "term": c.get("term"),
+                                "leader": c.get("leader"),
+                                "healthy": c.get("healthy"),
+                                "last_applied_index": c.get("last_applied_index"),
+                                "replication_lag": c.get("replication_lag_log_entries"),
+                                "status": h.get("status"),
+                            })
+                        }
+                        Err(_) => {
+                            json!({ "node_id": id, "addr": url, "reachable": false, "self": false })
+                        }
+                    },
+                    Err(_) => {
+                        json!({ "node_id": id, "addr": url, "reachable": false, "self": false })
+                    }
+                }
+            }
+        }
+    });
+    let nodes: Vec<Value> = futures::future::join_all(fetches).await;
+    Json(json!({
+        "raft_mode": "yrp",
+        "cluster_id": yrp.cluster_id,
+        "viewed_from": self_id,
+        "nodes": nodes,
+    }))
+}
+
+/// Admin studio: a single self-contained page served from the binary at
+/// `/admin` — no build step, no external assets (works air-gapped). Polls
+/// `/v1/cluster/topology` and renders the live cluster. Theme-aware.
+async fn admin_studio() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("admin/studio.html"))
+}
+
 /// Issue #58: keyed `/v1/remember/batch` — the engine's atomic batch path.
 /// Claims + rows commit in one transaction; a key conflict fails the WHOLE
 /// batch (all-or-nothing), returning the same 200-conflict shape as the
@@ -4948,6 +5034,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/yrp/msg", post(yrp_msg))
         // RFC 028 Phase C: engine backfill for beyond-GC stragglers
         .route("/v1/yrp/backfill", post(yrp_backfill))
+        // Admin studio: aggregated cluster topology + the embedded console
+        .route("/v1/cluster/topology", get(yrp_topology))
+        .route("/admin", get(admin_studio))
         .route("/v1/admin/control-snapshot", get(control_snapshot))
         .route("/v1/admin/snapshot", post(admin_snapshot))
         // RFC 027 / v0.8.24 — autonomous-maintenance operator surface.

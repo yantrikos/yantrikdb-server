@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>YantrikDB Studio — Cluster</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1a1d21; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #4f46e5; --ok: #16a34a; --warn: #d97706;
+    --bad: #dc2626; --leader: #4f46e5; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --panel: #161b22; --ink: #e6edf3; --muted: #8b949e;
+      --line: #21262d; --accent: #7c8cff; --ok: #3fb950; --warn: #d29922;
+      --bad: #f85149; --leader: #7c8cff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1.1rem 1.5rem; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  header .sub { color: var(--muted); font-size: .82rem; }
+  header .meta { margin-left: auto; font-family: var(--mono); font-size: .78rem; color: var(--muted); }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1rem 1.1rem; position: relative; overflow: hidden;
+  }
+  .card.leader { border-color: var(--leader); box-shadow: 0 0 0 1px var(--leader) inset; }
+  .card.unreachable { opacity: .55; }
+  .card .top { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
+  .node-id { font-family: var(--mono); font-weight: 650; font-size: .95rem; }
+  .badge {
+    font-size: .68rem; font-weight: 600; padding: .12rem .5rem; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  .badge.leader { background: color-mix(in srgb, var(--leader) 18%, transparent); color: var(--leader); }
+  .badge.follower { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
+  .badge.witness { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+  .badge.candidate, .badge.quarantined { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-left: auto; }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+  .rows { display: grid; grid-template-columns: auto 1fr; gap: .25rem .75rem; font-size: .8rem; margin-top: .5rem; }
+  .rows dt { color: var(--muted); } .rows dd { margin: 0; font-family: var(--mono); text-align: right; }
+  .lagbar { height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--muted) 25%, transparent); margin-top: .1rem; overflow: hidden; }
+  .lagbar > i { display: block; height: 100%; background: var(--ok); width: 100%; }
+  .lagbar.lag > i { background: var(--warn); }
+  .empty, .err { color: var(--muted); padding: 2rem; text-align: center; }
+  .err { color: var(--bad); }
+  footer { color: var(--muted); font-size: .74rem; text-align: center; padding: 1.5rem; }
+  .pulse { animation: p 1.2s ease-in-out infinite; }
+  @keyframes p { 50% { opacity: .4; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>YantrikDB <span style="color:var(--accent)">Studio</span></h1>
+  <span class="sub">cluster console</span>
+  <span class="meta" id="meta">connecting…</span>
+</header>
+<div class="wrap">
+  <div id="view" class="grid"></div>
+  <div id="msg" class="empty">Loading cluster topology…</div>
+</div>
+<footer>Read-only cluster view · polls <code>/v1/cluster/topology</code> every 3s · identity &amp; config management coming with control-plane replication (RFC 029)</footer>
+<script>
+(function () {
+  const view = document.getElementById('view');
+  const msg = document.getElementById('msg');
+  const meta = document.getElementById('meta');
+  const roleClass = r => ({leader:'leader',follower:'follower',witness:'witness',candidate:'candidate',quarantined:'quarantined'}[r] || 'follower');
+  const num = v => (v === null || v === undefined) ? '—' : v;
+
+  function render(data) {
+    const nodes = (data && data.nodes) || [];
+    if (!data || data.raft_mode !== 'yrp') {
+      view.innerHTML = ''; msg.style.display = 'block';
+      msg.className = 'empty';
+      msg.textContent = 'This node is not running in cluster (yrp) mode — nothing to show.';
+      meta.textContent = 'mode: ' + ((data && data.raft_mode) || 'unknown');
+      return;
+    }
+    msg.style.display = nodes.length ? 'none' : 'block';
+    meta.textContent = `cluster ${num(data.cluster_id)} · ${nodes.length} member${nodes.length===1?'':'s'} · viewed from node ${num(data.viewed_from)}`;
+    view.innerHTML = nodes.map(n => {
+      const role = (n.role || (n.reachable ? 'unknown' : 'unreachable')) + '';
+      const rc = roleClass(role);
+      const reach = n.reachable !== false;
+      const healthy = n.healthy === true;
+      const dot = !reach ? 'bad' : (healthy ? 'ok' : 'warn');
+      const lag = (n.replication_lag == null) ? null : Number(n.replication_lag);
+      const lagPct = lag == null ? 0 : Math.max(0, Math.min(100, 100 - Math.min(lag, 100)));
+      return `<div class="card ${rc==='leader'?'leader':''} ${reach?'':'unreachable'}">
+        <div class="top">
+          <span class="node-id">node ${num(n.node_id)}</span>
+          <span class="badge ${rc}">${reach ? role : 'unreachable'}</span>
+          <span class="dot ${dot}" title="${reach ? (healthy?'healthy':'unhealthy') : 'unreachable'}"></span>
+        </div>
+        <div style="font-family:var(--mono);font-size:.72rem;color:var(--muted);word-break:break-all">${n.addr||''}${n.self?' · this node':''}</div>
+        <dl class="rows">
+          <dt>term</dt><dd>${num(n.term)}</dd>
+          <dt>leader</dt><dd>${num(n.leader)}</dd>
+          <dt>applied</dt><dd>${num(n.last_applied_index)}</dd>
+          <dt>lag</dt><dd>${lag==null?'—':lag}</dd>
+        </dl>
+        <div class="lagbar ${lag?'lag':''}"><i style="width:${lagPct}%"></i></div>
+      </div>`;
+    }).join('');
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('/v1/cluster/topology', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      render(await r.json());
+      meta.classList.remove('pulse');
+    } catch (e) {
+      meta.classList.add('pulse');
+      meta.textContent = 'reconnecting… (' + e.message + ')';
+      if (!view.children.length) { msg.className = 'err'; msg.style.display='block'; msg.textContent = 'Cannot reach the server.'; }
+    }
+  }
+  poll();
+  setInterval(poll, 3000);
+})();
+</script>
+</body>
+</html>

@@ -112,6 +112,15 @@ impl YrpHandle {
         self.quarantine.read().expect("quarantine lock").clone()
     }
 
+    /// All cluster members as `(node_id, http_base_url)`, including self —
+    /// used by the admin studio's topology aggregator.
+    pub fn peer_urls(&self) -> Vec<(u64, String)> {
+        self.peer_http
+            .iter()
+            .map(|(id, url)| (*id, url.clone()))
+            .collect()
+    }
+
     fn set_quarantine(&self, reasons: Option<Vec<String>>) {
         *self.quarantine.write().expect("quarantine lock") = reasons;
     }

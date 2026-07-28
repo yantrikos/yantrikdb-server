@@ -227,6 +227,38 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
         leader.state.yrp.as_ref().unwrap().quarantine_reasons(),
         None
     );
+
+    // Admin studio: /v1/cluster/topology aggregates BOTH members (fan-out
+    // to peers' /v1/health), and /admin serves the embedded console.
+    let topo: Value = client
+        .get(format!("{}/v1/cluster/topology", leader.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(topo["raft_mode"], json!("yrp"));
+    let nodes = topo["nodes"].as_array().expect("nodes array");
+    assert_eq!(nodes.len(), 2, "topology must list both members: {topo}");
+    assert!(
+        nodes.iter().any(|n| n["role"] == json!("leader")),
+        "topology must show a leader: {topo}"
+    );
+    assert!(
+        nodes.iter().all(|n| n["reachable"] == json!(true)),
+        "both members reachable: {topo}"
+    );
+    let admin = client
+        .get(format!("{}/admin", leader.base))
+        .send()
+        .await
+        .unwrap();
+    assert!(admin.status().is_success());
+    assert!(
+        admin.text().await.unwrap().contains("YantrikDB"),
+        "/admin must serve the studio page"
+    );
 }
 
 async fn spawn_node_on(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node {

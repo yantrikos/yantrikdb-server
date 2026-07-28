@@ -255,9 +255,10 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
         .await
         .unwrap();
     assert!(admin.status().is_success());
+    let admin_html = admin.text().await.unwrap();
     assert!(
-        admin.text().await.unwrap().contains("YantrikDB"),
-        "/admin must serve the studio page"
+        admin_html.contains("YantrikDB") && admin_html.contains("Identity"),
+        "/admin must serve the studio page with the identity panel"
     );
 
     // ── RFC 029: control-plane replication ──────────────────────────

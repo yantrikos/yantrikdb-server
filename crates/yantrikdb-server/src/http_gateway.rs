@@ -285,6 +285,17 @@ fn resolve_engine(
         }
     }
 
+    // RFC 029 inc2: refuse data-plane auth on a node that has not caught up
+    // on the replicated control log — it may not yet have applied a
+    // committed token revoke (fail closed). The master-token path above is
+    // intentionally exempt so operators can still reach a catching-up node.
+    if let Some(reason) = crate::server::control_auth_stale(state) {
+        return Err(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("control plane not ready for auth: {reason}"),
+        ));
+    }
+
     let token_hash = auth::hash_token(token);
     let control = state.control.lock();
     let db_id = control

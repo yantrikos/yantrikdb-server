@@ -78,6 +78,35 @@ pub struct AppState {
 /// Default: 256 (tokio's default blocking pool is 512, shed at 50%).
 pub const MAX_INFLIGHT: u32 = 256;
 
+/// RFC 029 inc2 — control-plane freshness gate (Invariant 1: control-
+/// incomplete ⇒ not auth-eligible).
+///
+/// Because tokens/databases now replicate through YRP (RFC 029) and share
+/// the data plane's apply marker, a node that is **quarantined** or still
+/// **backfilling** the replicated log may not yet have applied a committed
+/// token *revoke*. Such a node must refuse to authenticate data-plane
+/// tokens — fail closed rather than honor a token the cluster has revoked.
+///
+/// Returns `Some(reason)` when authentication must be refused (HTTP 503).
+/// Steady-state followers are caught up and pass. The residual window
+/// between a revoke's commit and its replication to an otherwise-caught-up
+/// follower is bounded by replication lag (documented bounded staleness);
+/// closing it fully would require a consensus round-trip per auth check,
+/// which is deliberately out of scope for the hot read path.
+///
+/// The operator/bootstrap master token bypasses this gate at its call site
+/// so a catching-up node stays reachable for diagnostics.
+pub fn control_auth_stale(state: &AppState) -> Option<String> {
+    let yrp = state.yrp.as_ref()?;
+    if let Some(reasons) = yrp.quarantine_reasons() {
+        return Some(format!("node quarantined: {reasons:?}"));
+    }
+    if yrp.engine_incomplete() {
+        return Some("node is catching up on the replicated control log".to_string());
+    }
+    None
+}
+
 pub async fn run_wire_server(
     listener: TcpListener,
     state: Arc<AppState>,

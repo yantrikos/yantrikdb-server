@@ -134,10 +134,43 @@ adversarial review):
   index, stalling replication to it. Increment 2 gates control-op proposal
   behind a capability bit so a half-upgraded cluster refuses to mint one.
 
-Increment 2 also adds the **auth-read barrier** (instantaneous cluster-wide
-revocation — until then revocation is bounded-staleness eventually
-consistent within replication lag) and the parallel `control_incomplete`
-health gate.
+### Increment 2 — status
+
+**Shipped (inc2-A): the control-freshness auth gate.** A node that is
+quarantined or still backfilling the replicated log refuses to authenticate
+data-plane tokens (HTTP 503, fail closed) — Invariant 1, "control-incomplete
+⇒ not auth-eligible." Implemented as `server::control_auth_stale` gating
+`resolve_engine` and the principal auth middleware, reading the existing
+`quarantine`/`engine_incomplete` signals (no consensus round-trip on the hot
+path). The operator/bootstrap master token is exempt at its call site so a
+catching-up node stays reachable for diagnostics.
+
+This gives cluster-wide revocation consistency for the state that matters:
+a node never authenticates a token while it *knows* it is behind. The
+residual window — a revoke committed on the leader but not yet replicated to
+an otherwise-caught-up follower — is bounded by replication lag (sub-second
+in practice). Closing it to *zero* would require a consensus round-trip per
+auth check (a linearizable read barrier on every request); that strict mode
+is deliberately deferred as opt-in, not the default hot-path cost.
+
+**Deferred, with reasons (do NOT rush these into a release):**
+
+- **Control state in the snapshot (closes F1).** This changes the
+  `Snapshot`/`DurableState`/rejoin-`Grant` **bincode** wire+persist format,
+  which is positional and not cross-version tolerant — a rolling upgrade
+  (mixed v_old/v_new nodes exchanging snapshots, or v_new reading a
+  v_old-written `DurableState`) would break without explicit versioning.
+  Until it lands with a versioned envelope, **compaction MUST stay disabled**
+  (the production default) — the operational mitigation for F1.
+- **Capability-gated control-op proposal (F4).** The capability mechanism
+  gates on advertised `supported` bits, but production nodes advertise
+  `u32::MAX` ("support everything"), so the gate is vacuous for the current
+  transition — an old node falsely claims support. Making it real means
+  advertising a *precise* capability mask instead of `u32::MAX`, which also
+  affects election-safety gating, and it only protects *future* upgrades.
+  For the current transition the operational rule (upgrade every node before
+  minting the first control op) is the actual mitigation, and it holds by
+  construction during a controlled rolling redeploy.
 
 ## Out of scope (follow-ups)
 

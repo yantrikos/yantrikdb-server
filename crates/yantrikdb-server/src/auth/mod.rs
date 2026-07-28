@@ -20,6 +20,7 @@
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
+pub mod admin;
 pub mod audit;
 pub mod control_provider;
 pub mod middleware;

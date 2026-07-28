@@ -65,6 +65,29 @@ pub enum ControlOp {
         token_hash: String,
         revoked_at: String,
     },
+    /// RFC 030: create an admin account. `password_hash` is argon2id,
+    /// computed by the leader before proposing (never re-hashed per node).
+    CreateUser {
+        username: String,
+        password_hash: String,
+        role: String,
+        created_at: String,
+    },
+    /// RFC 030: change an admin account's role.
+    SetUserRole { username: String, role: String },
+    /// RFC 030: rotate an admin account's password (argon2id hash).
+    SetUserPassword {
+        username: String,
+        password_hash: String,
+    },
+    /// RFC 030: soft-disable an admin account (revoke the operator).
+    DisableUser {
+        username: String,
+        disabled_at: String,
+    },
+    /// RFC 030 (H3): seed/rotate the replicated admin session-signing key.
+    /// `value` is base64 of 32 random bytes; `kid` identifies it in tokens.
+    SetAdminSessionKey { kid: String, value: String },
 }
 
 impl ControlOp {
@@ -97,8 +120,115 @@ impl ControlOp {
                 buf.extend_from_slice(b"ctl:revoketok:");
                 buf.extend_from_slice(token_hash.as_bytes());
             }
+            // User ops key on username + a per-shape discriminator. Role /
+            // password / disable each get a distinct claim so back-to-back
+            // changes to the same user do NOT dedupe against each other;
+            // the password/role content is also folded in so a retried
+            // identical change dedupes but a new value re-appends.
+            ControlOp::CreateUser { username, .. } => {
+                buf.extend_from_slice(b"ctl:createuser:");
+                buf.extend_from_slice(username.as_bytes());
+            }
+            ControlOp::SetUserRole { username, role } => {
+                buf.extend_from_slice(b"ctl:userrole:");
+                buf.extend_from_slice(username.as_bytes());
+                buf.push(b':');
+                buf.extend_from_slice(role.as_bytes());
+            }
+            ControlOp::SetUserPassword {
+                username,
+                password_hash,
+            } => {
+                buf.extend_from_slice(b"ctl:userpw:");
+                buf.extend_from_slice(username.as_bytes());
+                buf.push(b':');
+                buf.extend_from_slice(password_hash.as_bytes());
+            }
+            ControlOp::DisableUser { username, .. } => {
+                buf.extend_from_slice(b"ctl:userdisable:");
+                buf.extend_from_slice(username.as_bytes());
+            }
+            ControlOp::SetAdminSessionKey { kid, .. } => {
+                buf.extend_from_slice(b"ctl:sesskey:");
+                buf.extend_from_slice(kid.as_bytes());
+            }
         }
         super::op::fnv1a64(&buf)
+    }
+
+    /// Audit descriptor `(action, target)` for the replicated audit_log
+    /// (RFC 030 M1). Secrets/hashes are never placed in the target.
+    pub fn audit_action(&self) -> (&'static str, String) {
+        match self {
+            ControlOp::CreateDatabase { name, db_id, .. } => {
+                ("create_database", format!("{name} (#{db_id})"))
+            }
+            ControlOp::CreateToken { db_id, label, .. } => {
+                ("mint_token", format!("db #{db_id} [{label}]"))
+            }
+            ControlOp::RevokeToken { .. } => ("revoke_token", String::new()),
+            ControlOp::CreateUser { username, role, .. } => {
+                ("create_user", format!("{username} ({role})"))
+            }
+            ControlOp::SetUserRole { username, role } => {
+                ("set_user_role", format!("{username} -> {role}"))
+            }
+            ControlOp::SetUserPassword { username, .. } => ("set_user_password", username.clone()),
+            ControlOp::DisableUser { username, .. } => ("disable_user", username.clone()),
+            ControlOp::SetAdminSessionKey { kid, .. } => ("rotate_session_key", kid.clone()),
+        }
+    }
+}
+
+/// RFC 030 (M1): the replicated unit inside `Payload::Control` — a control op
+/// plus the `actor` who initiated it, so `ControlApplySink` can write a
+/// quorum-durable, tamper-evident audit row as it applies on every node.
+///
+/// **Back-compat:** [`decode`](Self::decode) accepts BOTH this envelope and a
+/// bare pre-RFC-030 `ControlOp` (actor defaults to empty), so control entries
+/// already in the log (RFC 029) still replay on an RFC-030 node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlEnvelope {
+    #[serde(default)]
+    pub actor: String,
+    /// Leader-stamped RFC-3339 timestamp (F3) so the replicated audit row is
+    /// byte-identical on every node. Empty for legacy bare-op entries.
+    #[serde(default)]
+    pub at: String,
+    pub op: ControlOp,
+}
+
+impl ControlEnvelope {
+    /// Build an envelope, stamping `at` with the leader's clock once (the
+    /// caller is the request-terminating/proposing node).
+    pub fn new(actor: impl Into<String>, op: ControlOp) -> Self {
+        Self {
+            actor: actor.into(),
+            at: chrono_now_rfc3339(),
+            op,
+        }
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(self).map_err(|e| format!("encode ControlEnvelope: {e}"))
+    }
+
+    /// Envelope first; on failure fall back to a legacy bare `ControlOp`
+    /// (actor unknown → ""). The two shapes are unambiguous: the envelope has
+    /// an `op` field, a bare op is an externally-tagged variant.
+    pub fn decode(bytes: &[u8]) -> Result<Self, String> {
+        match serde_json::from_slice::<ControlEnvelope>(bytes) {
+            Ok(env) => Ok(env),
+            Err(_) => ControlOp::decode(bytes).map(|op| ControlEnvelope {
+                actor: String::new(),
+                at: String::new(),
+                op,
+            }),
+        }
+    }
+
+    pub fn claim_key(&self) -> u64 {
+        self.op.claim_key()
     }
 }
 
@@ -115,9 +245,26 @@ impl ControlApplySink {
         Self { control }
     }
 
-    /// Apply one control op to `control.db`. Idempotent (safe to replay).
-    pub fn apply(&self, op: &ControlOp) -> Result<(), String> {
+    /// Apply one control envelope at YRP `index`. Writes the replicated audit
+    /// row (M1) keyed on the index (idempotent on replay), then applies the
+    /// op. Idempotent overall (safe to replay).
+    pub fn apply(&self, index: u64, env: &ControlEnvelope) -> Result<(), String> {
         let db = self.control.lock();
+        // M1: durable, deterministic audit — same row on every node. The
+        // timestamp is leader-stamped in the envelope (F3) so the row is
+        // byte-identical across nodes; legacy entries (no `at`) fall back to
+        // apply-time, which is acceptable since they carry no actor anyway.
+        if !env.actor.is_empty() {
+            let (action, target) = env.op.audit_action();
+            let at = if env.at.is_empty() {
+                chrono_now_rfc3339()
+            } else {
+                env.at.clone()
+            };
+            db.apply_audit(index, &env.actor, action, &target, &at)
+                .map_err(|e| format!("control audit write at {index}: {e}"))?;
+        }
+        let op = &env.op;
         match op {
             ControlOp::CreateDatabase {
                 db_id,
@@ -145,8 +292,44 @@ impl ControlApplySink {
                 .apply_revoke_token(token_hash, revoked_at)
                 .map(|_| ())
                 .map_err(|e| format!("control apply RevokeToken: {e}")),
+            ControlOp::CreateUser {
+                username,
+                password_hash,
+                role,
+                created_at,
+            } => db
+                .apply_create_user(username, password_hash, role, created_at)
+                .map(|_| ())
+                .map_err(|e| format!("control apply CreateUser({username}): {e}")),
+            ControlOp::SetUserRole { username, role } => db
+                .apply_set_user_role(index, username, role)
+                .map(|_| ())
+                .map_err(|e| format!("control apply SetUserRole({username}): {e}")),
+            ControlOp::SetUserPassword {
+                username,
+                password_hash,
+            } => db
+                .apply_set_user_password(index, username, password_hash)
+                .map(|_| ())
+                .map_err(|e| format!("control apply SetUserPassword({username}): {e}")),
+            ControlOp::DisableUser {
+                username,
+                disabled_at,
+            } => db
+                .apply_disable_user(index, username, disabled_at)
+                .map(|_| ())
+                .map_err(|e| format!("control apply DisableUser({username}): {e}")),
+            ControlOp::SetAdminSessionKey { kid, value } => db
+                .apply_set_admin_session_key(kid, value)
+                .map_err(|e| format!("control apply SetAdminSessionKey({kid}): {e}")),
         }
     }
+}
+
+/// RFC-3339 now, used for audit timestamps at apply. (Server code, not a
+/// workflow script — `chrono` is available.)
+fn chrono_now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
 
 #[cfg(test)]
@@ -197,11 +380,14 @@ mod tests {
             created_at: "2026-07-27T00:00:00Z".into(),
         };
         // Apply twice — the second is a no-op, not an error.
-        sink.apply(&tok).unwrap();
-        sink.apply(&tok).unwrap();
+        let env = ControlEnvelope::new("tester", tok);
+        sink.apply(10, &env).unwrap();
+        sink.apply(10, &env).unwrap();
         assert_eq!(
             sink.control.lock().validate_token("deadbeef").unwrap(),
             Some(id)
         );
+        // The audit row was written (M1), keyed on the index.
+        assert_eq!(sink.control.lock().list_audit(10).unwrap().len(), 1);
     }
 }

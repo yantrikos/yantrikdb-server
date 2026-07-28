@@ -6,305 +6,312 @@
 <title>YantrikDB Studio</title>
 <style>
   :root {
-    --bg: #f6f7f9; --panel: #ffffff; --ink: #1a1d21; --muted: #6b7280;
-    --line: #e5e7eb; --accent: #4f46e5; --ok: #16a34a; --warn: #d97706;
-    --bad: #dc2626; --leader: #4f46e5; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --bg:#f6f7f9; --panel:#fff; --ink:#1a1d21; --muted:#6b7280; --line:#e5e7eb;
+    --accent:#4f46e5; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; --leader:#4f46e5;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0d1117; --panel: #161b22; --ink: #e6edf3; --muted: #8b949e;
-      --line: #21262d; --accent: #7c8cff; --ok: #3fb950; --warn: #d29922;
-      --bad: #f85149; --leader: #7c8cff;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased;
-  }
-  header {
-    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-    padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); background: var(--panel);
-  }
-  header h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
-  nav { display: flex; gap: .3rem; }
-  nav button {
-    font: inherit; font-size: .82rem; border: 0; background: transparent; color: var(--muted);
-    padding: .35rem .75rem; border-radius: 8px; cursor: pointer;
-  }
-  nav button.active { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 600; }
-  header .meta { margin-left: auto; font-family: var(--mono); font-size: .78rem; color: var(--muted); }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; }
-  .card {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-    padding: 1rem 1.1rem; position: relative; overflow: hidden;
-  }
-  .card.leader { border-color: var(--leader); box-shadow: 0 0 0 1px var(--leader) inset; }
-  .card.unreachable { opacity: .55; }
-  .card .top { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
-  .node-id { font-family: var(--mono); font-weight: 650; font-size: .95rem; }
-  .badge {
-    font-size: .68rem; font-weight: 600; padding: .12rem .5rem; border-radius: 999px;
-    text-transform: uppercase; letter-spacing: .03em;
-  }
-  .badge.leader { background: color-mix(in srgb, var(--leader) 18%, transparent); color: var(--leader); }
-  .badge.follower { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
-  .badge.witness { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
-  .badge.candidate, .badge.quarantined { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-left: auto; }
-  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
-  .rows { display: grid; grid-template-columns: auto 1fr; gap: .25rem .75rem; font-size: .8rem; margin-top: .5rem; }
-  .rows dt { color: var(--muted); } .rows dd { margin: 0; font-family: var(--mono); text-align: right; }
-  .lagbar { height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--muted) 25%, transparent); margin-top: .1rem; overflow: hidden; }
-  .lagbar > i { display: block; height: 100%; background: var(--ok); width: 100%; }
-  .lagbar.lag > i { background: var(--warn); }
-  .empty, .err { color: var(--muted); padding: 2rem; text-align: center; }
-  .err { color: var(--bad); }
-  footer { color: var(--muted); font-size: .74rem; text-align: center; padding: 1.5rem; }
-  .pulse { animation: p 1.2s ease-in-out infinite; }
-  @keyframes p { 50% { opacity: .4; } }
-  .hidden { display: none !important; }
-  /* Identity panel */
-  .authbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1.25rem;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: .8rem 1rem; }
-  .authbar label { font-size: .8rem; color: var(--muted); }
-  input, select {
-    font: inherit; font-size: .85rem; padding: .4rem .6rem; border-radius: 8px;
-    border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-width: 0;
-  }
-  input:focus, select:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 0; }
-  button.btn {
-    font: inherit; font-size: .82rem; font-weight: 600; border: 0; cursor: pointer;
-    background: var(--accent); color: #fff; padding: .42rem .9rem; border-radius: 8px;
-  }
-  button.btn.ghost { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--ink); }
-  button.btn.danger { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); padding: .25rem .6rem; font-size: .74rem; }
-  button.btn:disabled { opacity: .5; cursor: not-allowed; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; }
-  .panel h2 { font-size: .82rem; margin: 0 0 .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-  .list { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .9rem; }
-  .item { display: flex; align-items: center; gap: .6rem; font-size: .82rem; padding: .45rem .6rem;
-    border: 1px solid var(--line); border-radius: 8px; }
-  .item .mono { font-family: var(--mono); font-size: .75rem; color: var(--muted); word-break: break-all; }
-  .item .grow { flex: 1; min-width: 0; }
-  .form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
-  .form input, .form select { flex: 1; }
-  .note { font-size: .74rem; color: var(--muted); margin-top: .5rem; }
-  .toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .6rem 1rem;
-    font-size: .82rem; box-shadow: 0 6px 24px rgba(0,0,0,.18); max-width: 90vw; }
-  .toast.bad { border-color: var(--bad); color: var(--bad); }
-  .toast.ok { border-color: var(--ok); }
-  .reveal { font-family: var(--mono); font-size: .8rem; background: color-mix(in srgb, var(--ok) 12%, transparent);
-    border: 1px solid var(--ok); border-radius: 8px; padding: .6rem .7rem; margin-bottom: .9rem; word-break: break-all; }
-  .reveal b { display:block; font-family: system-ui; font-size:.72rem; color: var(--muted); margin-bottom:.25rem; text-transform: uppercase; letter-spacing:.04em;}
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0d1117; --panel:#161b22; --ink:#e6edf3; --muted:#8b949e; --line:#21262d;
+    --accent:#7c8cff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --leader:#7c8cff;}}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+  header{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.9rem 1.5rem;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:1.05rem;margin:0;font-weight:650;letter-spacing:-.01em}
+  nav{display:flex;gap:.2rem;flex-wrap:wrap}
+  nav button{font:inherit;font-size:.82rem;border:0;background:transparent;color:var(--muted);padding:.35rem .7rem;border-radius:8px;cursor:pointer}
+  nav button.active{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);font-weight:600}
+  header .right{margin-left:auto;display:flex;align-items:center;gap:.6rem;font-size:.8rem;color:var(--muted)}
+  .who b{color:var(--ink)}
+  .pill{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:.1rem .45rem;border-radius:999px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+  .wrap{max-width:1080px;margin:0 auto;padding:1.5rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;overflow:hidden}
+  .card.leader{border-color:var(--leader);box-shadow:0 0 0 1px var(--leader) inset}
+  .card .top{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem}
+  .node-id{font-family:var(--mono);font-weight:650}
+  .badge{font-size:.66rem;font-weight:700;padding:.1rem .45rem;border-radius:999px;text-transform:uppercase;letter-spacing:.03em}
+  .badge.leader{background:color-mix(in srgb,var(--leader) 18%,transparent);color:var(--leader)}
+  .badge.follower{background:color-mix(in srgb,var(--muted) 20%,transparent);color:var(--muted)}
+  .badge.witness{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+  .badge.candidate,.badge.quarantined{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
+  .dot{width:8px;height:8px;border-radius:50%;margin-left:auto}
+  .dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}.dot.warn{background:var(--warn)}
+  .rows{display:grid;grid-template-columns:auto 1fr;gap:.2rem .7rem;font-size:.8rem;margin-top:.4rem}
+  .rows dt{color:var(--muted)}.rows dd{margin:0;font-family:var(--mono);text-align:right}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.1rem;margin-bottom:1.1rem}
+  .panel h2{font-size:.82rem;margin:0 0 .8rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:.85rem}
+  th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);font-weight:600}
+  td .mono{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+  tr:last-child td{border-bottom:0}
+  input,select{font:inherit;font-size:.85rem;padding:.4rem .55rem;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);max-width:100%}
+  input:focus,select:focus{outline:2px solid color-mix(in srgb,var(--accent) 40%,transparent)}
+  button.btn{font:inherit;font-size:.8rem;font-weight:600;border:0;cursor:pointer;background:var(--accent);color:#fff;padding:.42rem .85rem;border-radius:8px}
+  button.btn.ghost{background:color-mix(in srgb,var(--muted) 16%,transparent);color:var(--ink)}
+  button.btn.sm{padding:.25rem .55rem;font-size:.74rem}
+  button.btn.danger{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+  button.btn.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+  button.btn:disabled{opacity:.5;cursor:not-allowed}
+  .form{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.8rem}
+  .form input,.form select{flex:1;min-width:120px}
+  .rowacts{display:flex;gap:.35rem;justify-content:flex-end}
+  .note{font-size:.74rem;color:var(--muted);margin-top:.5rem}
+  .empty{color:var(--muted);padding:1.5rem;text-align:center}
+  .reveal{font-family:var(--mono);font-size:.8rem;background:color-mix(in srgb,var(--ok) 12%,transparent);border:1px solid var(--ok);border-radius:8px;padding:.6rem .7rem;margin:.6rem 0;word-break:break-all;display:flex;gap:.5rem;align-items:center;justify-content:space-between}
+  .toast{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.6rem 1rem;font-size:.82rem;box-shadow:0 6px 24px rgba(0,0,0,.18);max-width:90vw;z-index:50}
+  .toast.bad{border-color:var(--bad);color:var(--bad)}.toast.ok{border-color:var(--ok)}
+  .hidden{display:none!important}
+  /* Login */
+  .login{max-width:340px;margin:8vh auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:1.6rem}
+  .login h2{margin:0 0 .3rem;font-size:1.1rem}
+  .login .sub{color:var(--muted);font-size:.82rem;margin-bottom:1.2rem}
+  .login label{display:block;font-size:.76rem;color:var(--muted);margin:.6rem 0 .25rem}
+  .login input{width:100%}
+  .login button{width:100%;margin-top:1.1rem;padding:.55rem}
+  .rolegate{display:contents}
 </style>
 </head>
 <body>
-<header>
+<header class="hidden" id="appheader">
   <h1>YantrikDB <span style="color:var(--accent)">Studio</span></h1>
-  <nav>
-    <button id="tab-cluster" class="active" onclick="showTab('cluster')">Cluster</button>
-    <button id="tab-identity" onclick="showTab('identity')">Identity</button>
-  </nav>
-  <span class="meta" id="meta">connecting…</span>
+  <nav id="nav"></nav>
+  <div class="right">
+    <span class="who" id="who"></span>
+    <button class="btn ghost sm" onclick="logout()">Sign out</button>
+  </div>
 </header>
 
-<!-- CLUSTER -->
-<div class="wrap" id="pane-cluster">
-  <div id="view" class="grid"></div>
-  <div id="msg" class="empty">Loading cluster topology…</div>
-</div>
-
-<!-- IDENTITY -->
-<div class="wrap hidden" id="pane-identity">
-  <div class="authbar">
-    <label for="master">Master token</label>
-    <input id="master" type="password" placeholder="cluster secret" style="flex:1" />
-    <button class="btn" onclick="unlock()">Unlock</button>
-    <button class="btn ghost" onclick="lock()">Forget</button>
-    <span class="note" style="margin:0">Held only in this browser tab. Use over TLS.</span>
-  </div>
-  <div id="identity-locked" class="empty">Enter the cluster master token to manage databases &amp; tokens.</div>
-  <div id="identity-body" class="cols hidden">
-    <div class="panel">
-      <h2>Databases</h2>
-      <div class="list" id="db-list"></div>
-      <div class="form">
-        <input id="db-name" placeholder="new database name" />
-        <button class="btn" onclick="createDb()">Create</button>
-      </div>
-      <div class="note">Replicated through YRP — created on every node, survives failover.</div>
+<!-- LOGIN -->
+<div id="loginview">
+  <div class="login">
+    <div id="signinbox">
+      <h2>Sign in</h2>
+      <div class="sub">Enterprise control console</div>
+      <label for="lu">Username</label>
+      <input id="lu" autocomplete="username" />
+      <label for="lp">Password</label>
+      <input id="lp" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()" />
+      <button class="btn" onclick="doLogin()">Sign in</button>
+      <div class="note" style="text-align:center"><a href="#" onclick="showBootstrap(true);return false" style="color:var(--accent)">First-time setup →</a></div>
     </div>
-    <div class="panel">
-      <h2>Tokens</h2>
-      <div id="token-reveal"></div>
-      <div class="list" id="token-list"></div>
-      <div class="form">
-        <select id="tok-db"></select>
-        <input id="tok-label" placeholder="label (optional)" style="flex:.7" />
-        <button class="btn" onclick="mintToken()">Mint</button>
-      </div>
-      <div class="note">The plaintext token is shown once. Only its hash is stored + replicated.</div>
+    <div id="bootstrapbox" class="hidden">
+      <h2>First-time setup</h2>
+      <div class="sub">Create the first <b>owner</b> account using the cluster master token. Do this once; afterwards, sign in with the account.</div>
+      <label for="bt">Cluster master token</label>
+      <input id="bt" type="password" placeholder="ydb_cluster_…" />
+      <label for="bu">Owner username</label>
+      <input id="bu" autocomplete="off" />
+      <label for="bp">Owner password (≥8)</label>
+      <input id="bp" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')doBootstrap()" />
+      <button class="btn" onclick="doBootstrap()">Create owner</button>
+      <div class="note" style="text-align:center"><a href="#" onclick="showBootstrap(false);return false" style="color:var(--accent)">← Back to sign in</a></div>
     </div>
   </div>
 </div>
 
-<footer>Cluster view polls <code>/v1/cluster/topology</code> · Identity uses the replicated control plane (RFC 029)</footer>
+<!-- APP -->
+<div class="wrap hidden" id="appview"></div>
+
 <div id="toast" class="toast hidden"></div>
-
 <script>
-(function () {
-  const $ = id => document.getElementById(id);
-  const num = v => (v === null || v === undefined) ? '—' : v;
-  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+(function(){
+  const $=id=>document.getElementById(id);
+  const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const num=v=>(v==null?'—':v);
+  let toastT; function toast(m,k){const t=$('toast');t.textContent=m;t.className='toast '+(k||'');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.add('hidden'),4200);}
 
-  // ── Toast ──
-  let toastT;
-  function toast(msg, kind) {
-    const t = $('toast'); t.textContent = msg; t.className = 'toast ' + (kind || '');
-    clearTimeout(toastT); toastT = setTimeout(() => t.classList.add('hidden'), 4000);
+  // ── session state ──
+  const tok=()=>sessionStorage.getItem('ydb_sess')||'';
+  let me={username:'',role:'readonly'};
+  const rank={readonly:0,admin:1,owner:2};
+  const can=r=>rank[me.role]>=rank[r];
+
+  async function api(path,opts){
+    const o=opts||{}; o.headers=Object.assign({},o.headers||{});
+    if(tok()) o.headers['Authorization']='Bearer '+tok();
+    if(o.body) o.headers['Content-Type']='application/json';
+    const r=await fetch(path,o);
+    if(r.status===401){ logout(); throw new Error('session expired — sign in again'); }
+    let b={}; try{b=await r.json();}catch(_){}
+    if(!r.ok) throw new Error(b.message||b.error||('HTTP '+r.status));
+    return b;
   }
 
-  // ── Tabs ──
-  window.showTab = function (name) {
-    for (const t of ['cluster', 'identity']) {
-      $('pane-' + t).classList.toggle('hidden', t !== name);
-      $('tab-' + t).classList.toggle('active', t === name);
+  // ── login ──
+  window.doLogin=async function(){
+    const username=$('lu').value.trim(), password=$('lp').value;
+    if(!username||!password) return;
+    try{
+      const r=await api('/v1/admin/session',{method:'POST',body:JSON.stringify({username,password})});
+      sessionStorage.setItem('ydb_sess',r.token); $('lp').value='';
+      await boot();
+    }catch(e){ toast(e.message,'bad'); }
+  };
+  window.logout=function(){ sessionStorage.removeItem('ydb_sess'); me={username:'',role:'readonly'};
+    $('appheader').classList.add('hidden'); $('appview').classList.add('hidden'); $('loginview').classList.remove('hidden'); };
+  window.showBootstrap=function(on){ $('signinbox').classList.toggle('hidden',on); $('bootstrapbox').classList.toggle('hidden',!on); };
+  window.doBootstrap=async function(){
+    const master=$('bt').value.trim(), username=$('bu').value.trim(), password=$('bp').value;
+    if(!master||!username||password.length<8){ toast('master token + username + password ≥8','bad'); return; }
+    try{
+      const r=await fetch('/v1/admin/users',{method:'POST',headers:{'Authorization':'Bearer '+master,'Content-Type':'application/json'},
+        body:JSON.stringify({username,password,role:'owner'})});
+      if(!r.ok){ const b=await r.json().catch(()=>({})); throw new Error(b.message||b.error||('HTTP '+r.status)); }
+      toast('Owner created — signing in…','ok');
+      // Auto sign-in as the new owner.
+      const s=await api('/v1/admin/session',{method:'POST',body:JSON.stringify({username,password})});
+      sessionStorage.setItem('ydb_sess',s.token); showBootstrap(false); await boot();
+    }catch(e){ toast(e.message,'bad'); }
+  };
+
+  // ── nav / tabs ──
+  const TABS=[
+    {id:'cluster',label:'Cluster',min:null},
+    {id:'databases',label:'Databases',min:'readonly'},
+    {id:'tokens',label:'Tokens',min:'readonly'},
+    {id:'users',label:'Users',min:'owner'},
+    {id:'audit',label:'Audit',min:'admin'},
+  ];
+  let cur='cluster';
+  function renderNav(){
+    $('nav').innerHTML=TABS.filter(t=>!t.min||can(t.min)).map(t=>
+      `<button class="${t.id===cur?'active':''}" onclick="go('${t.id}')">${t.label}</button>`).join('');
+    $('who').innerHTML=`<b>${esc(me.username)}</b> <span class="pill">${esc(me.role)}</span>`;
+  }
+  window.go=function(id){ cur=id; renderNav(); render(); };
+
+  async function boot(){
+    try{ me=await api('/v1/admin/me'); }
+    catch(e){ logout(); return; }
+    $('loginview').classList.add('hidden'); $('appheader').classList.remove('hidden'); $('appview').classList.remove('hidden');
+    if(cur==='users'&&!can('owner')) cur='cluster';
+    renderNav(); render();
+  }
+
+  // ── render dispatch ──
+  function render(){ ({cluster:renderCluster,databases:renderDatabases,tokens:renderTokens,users:renderUsers,audit:renderAudit}[cur]||renderCluster)(); }
+
+  // ── Cluster (topology, public) ──
+  let topoTimer=null;
+  function renderCluster(){
+    if(topoTimer)clearInterval(topoTimer);
+    $('appview').innerHTML=`<div id="topo" class="grid"></div><div id="topomsg" class="empty">Loading topology…</div>`;
+    const roleClass=r=>({leader:'leader',follower:'follower',witness:'witness',candidate:'candidate',quarantined:'quarantined'}[r]||'follower');
+    async function poll(){
+      try{
+        const r=await fetch('/v1/cluster/topology',{cache:'no-store'}); const d=await r.json();
+        const nodes=(d&&d.nodes)||[];
+        if(!d||d.raft_mode!=='yrp'){ $('topo').innerHTML=''; $('topomsg').textContent='Not in cluster (yrp) mode.'; return; }
+        $('topomsg').style.display=nodes.length?'none':'block';
+        $('topo').innerHTML=nodes.map(n=>{const role=(n.role||(n.reachable?'unknown':'unreachable'))+'',rc=roleClass(role),reach=n.reachable!==false,healthy=n.healthy===true;
+          return `<div class="card ${rc==='leader'?'leader':''}"><div class="top"><span class="node-id">node ${num(n.node_id)}</span>
+            <span class="badge ${rc}">${reach?esc(role):'unreachable'}</span><span class="dot ${!reach?'bad':(healthy?'ok':'warn')}"></span></div>
+            <div class="mono" style="font-size:.72rem;word-break:break-all">${esc(n.addr||'')}${n.self?' · this node':''}</div>
+            <dl class="rows"><dt>term</dt><dd>${num(n.term)}</dd><dt>applied</dt><dd>${num(n.last_applied_index)}</dd><dt>lag</dt><dd>${num(n.replication_lag)}</dd></dl></div>`;}).join('');
+      }catch(e){ if($('topomsg'))$('topomsg').textContent='Cannot reach server.'; }
     }
-    if (name === 'identity' && master()) refreshIdentity();
-  };
-
-  // ── Cluster topology (public) ──
-  const roleClass = r => ({leader:'leader',follower:'follower',witness:'witness',candidate:'candidate',quarantined:'quarantined'}[r] || 'follower');
-  function renderTopo(data) {
-    const view = $('view'), msg = $('msg'), meta = $('meta');
-    const nodes = (data && data.nodes) || [];
-    if (!data || data.raft_mode !== 'yrp') {
-      view.innerHTML = ''; msg.style.display = 'block'; msg.className = 'empty';
-      msg.textContent = 'This node is not running in cluster (yrp) mode.';
-      meta.textContent = 'mode: ' + ((data && data.raft_mode) || 'unknown');
-      return;
-    }
-    msg.style.display = nodes.length ? 'none' : 'block';
-    meta.textContent = `cluster ${num(data.cluster_id)} · ${nodes.length} member${nodes.length===1?'':'s'} · from node ${num(data.viewed_from)}`;
-    view.innerHTML = nodes.map(n => {
-      const role = (n.role || (n.reachable ? 'unknown' : 'unreachable')) + '';
-      const rc = roleClass(role), reach = n.reachable !== false, healthy = n.healthy === true;
-      const dot = !reach ? 'bad' : (healthy ? 'ok' : 'warn');
-      const lag = (n.replication_lag == null) ? null : Number(n.replication_lag);
-      const lagPct = lag == null ? 0 : Math.max(0, Math.min(100, 100 - Math.min(lag, 100)));
-      return `<div class="card ${rc==='leader'?'leader':''} ${reach?'':'unreachable'}">
-        <div class="top"><span class="node-id">node ${num(n.node_id)}</span>
-          <span class="badge ${rc}">${reach ? esc(role) : 'unreachable'}</span>
-          <span class="dot ${dot}"></span></div>
-        <div style="font-family:var(--mono);font-size:.72rem;color:var(--muted);word-break:break-all">${esc(n.addr||'')}${n.self?' · this node':''}</div>
-        <dl class="rows"><dt>term</dt><dd>${num(n.term)}</dd><dt>leader</dt><dd>${num(n.leader)}</dd>
-          <dt>applied</dt><dd>${num(n.last_applied_index)}</dd><dt>lag</dt><dd>${lag==null?'—':lag}</dd></dl>
-        <div class="lagbar ${lag?'lag':''}"><i style="width:${lagPct}%"></i></div></div>`;
-    }).join('');
-  }
-  async function pollTopo() {
-    try {
-      const r = await fetch('/v1/cluster/topology', { cache: 'no-store' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      renderTopo(await r.json()); $('meta').classList.remove('pulse');
-    } catch (e) {
-      $('meta').classList.add('pulse'); $('meta').textContent = 'reconnecting… (' + e.message + ')';
-      if (!$('view').children.length) { $('msg').className = 'err'; $('msg').style.display='block'; $('msg').textContent = 'Cannot reach the server.'; }
-    }
-  }
-  pollTopo(); setInterval(pollTopo, 3000);
-
-  // ── Identity (master-token gated) ──
-  const master = () => sessionStorage.getItem('ydb_master') || '';
-  window.unlock = function () {
-    const v = $('master').value.trim();
-    if (!v) return;
-    sessionStorage.setItem('ydb_master', v);
-    refreshIdentity();
-  };
-  window.lock = function () {
-    sessionStorage.removeItem('ydb_master'); $('master').value = '';
-    $('identity-body').classList.add('hidden'); $('identity-locked').classList.remove('hidden');
-    toast('Master token forgotten', 'ok');
-  };
-  async function adminFetch(path, opts) {
-    const o = opts || {};
-    o.headers = Object.assign({ 'Authorization': 'Bearer ' + master() }, o.headers || {});
-    if (o.body) o.headers['Content-Type'] = 'application/json';
-    const r = await fetch(path, o);
-    let body = {}; try { body = await r.json(); } catch (_) {}
-    if (!r.ok) throw new Error(body.message || body.error || ('HTTP ' + r.status));
-    return body;
+    poll(); topoTimer=setInterval(()=>{ if(cur==='cluster')poll(); else clearInterval(topoTimer); },3000);
   }
 
-  let dbs = [];
-  async function refreshIdentity() {
-    if (!master()) return;
-    try {
-      const snap = await adminFetch('/v1/admin/control-snapshot');
-      dbs = snap.databases || [];
-      const tokens = snap.tokens || [];
-      $('identity-locked').classList.add('hidden'); $('identity-body').classList.remove('hidden');
+  // ── Databases ──
+  async function renderDatabases(){
+    $('appview').innerHTML=`<div class="panel"><h2>Databases</h2><div id="dblist" class="empty">Loading…</div>
+      ${can('admin')?`<div class="form"><input id="dbname" placeholder="new database name"/><button class="btn" onclick="createDb()">Create</button></div>
+      <div class="note">Replicated through YRP — created on every node, survives failover.</div>`:''}</div>`;
+    try{
+      const {databases}=await api('/v1/admin/databases');
+      if(!databases.length){ $('dblist').innerHTML='<div class="empty">No databases yet.</div>'; return; }
+      $('dblist').innerHTML=`<table><thead><tr><th>Name</th><th>ID</th><th>Tokens</th><th>Created</th>${can('admin')?'<th></th>':''}</tr></thead><tbody>${
+        databases.map(d=>`<tr><td><b>${esc(d.name)}</b></td><td class="mono">${d.id}</td><td>${d.token_count}</td><td class="mono">${esc((d.created_at||'').slice(0,19))}</td>
+          ${can('admin')?`<td class="rowacts"><button class="btn ghost sm" onclick="editQuota(${d.id},'${esc(d.name)}')">Quota</button></td>`:''}</tr>`).join('')}</tbody></table>`;
+    }catch(e){ $('dblist').innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
+  }
+  window.createDb=async function(){ const name=$('dbname').value.trim(); if(!name)return;
+    try{ const r=await api('/v1/admin/databases',{method:'POST',body:JSON.stringify({name})}); toast(`Database "${name}" created (id ${r.id})`,'ok'); renderDatabases(); }catch(e){toast(e.message,'bad');} };
+  window.editQuota=async function(id,name){
+    try{ const q=await api('/v1/admin/databases/'+id+'/quota');
+      const mm=prompt(`Quota for "${name}" — max_memories`,q.max_memories); if(mm===null)return;
+      const rps=prompt('max_rps',q.max_rps); if(rps===null)return;
+      await api('/v1/admin/databases/'+id+'/quota',{method:'PUT',body:JSON.stringify({max_memories:Number(mm),max_rps:Number(rps)})});
+      toast('Quota updated','ok');
+    }catch(e){toast(e.message,'bad');}
+  };
 
-      $('db-list').innerHTML = dbs.length ? dbs.map(d =>
-        `<div class="item"><span class="grow"><b>${esc(d.name)}</b> <span class="mono">#${num(d.id)}</span></span></div>`
-      ).join('') : '<div class="note">No databases yet.</div>';
+  // ── Tokens ──
+  async function renderTokens(){
+    $('appview').innerHTML=`<div class="panel"><h2>Tokens</h2><div id="reveal"></div><div id="toklist" class="empty">Loading…</div>
+      ${can('admin')?`<div class="form"><select id="tokdb"></select><input id="toklabel" placeholder="label (optional)" style="flex:.7"/><button class="btn" onclick="mintTok()">Mint</button></div>
+      <div class="note">The plaintext token is shown once. Only its hash is stored + replicated.</div>`:''}</div>`;
+    try{
+      const [{tokens},{databases}]=await Promise.all([api('/v1/admin/tokens'),api('/v1/admin/databases')]);
+      const dbn=id=>(databases.find(d=>d.id===id)||{}).name||('#'+id);
+      $('toklist').innerHTML=tokens.length?`<table><thead><tr><th>Label</th><th>Database</th><th>Hash</th><th>Created</th>${can('admin')?'<th></th>':''}</tr></thead><tbody>${
+        tokens.map(t=>`<tr><td><b>${esc(t.label||'—')}</b></td><td>${esc(dbn(t.database_id))}</td><td class="mono">${esc(t.hash_prefix)}…</td><td class="mono">${esc((t.created_at||'').slice(0,19))}</td>
+          ${can('admin')?`<td class="rowacts"><button class="btn warn sm" onclick="rotateTok('${esc(t.hash)}')">Rotate</button><button class="btn danger sm" onclick="revokeTok('${esc(t.hash)}')">Revoke</button></td>`:''}</tr>`).join('')}</tbody></table>`
+        :'<div class="empty">No active tokens.</div>';
+      if(can('admin')) $('tokdb').innerHTML=databases.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
+    }catch(e){ $('toklist').innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
+  }
+  window.mintTok=async function(){ const database_id=Number($('tokdb').value); if(!database_id){toast('Create a database first','bad');return;}
+    const label=$('toklabel').value.trim();
+    try{ const r=await api('/v1/admin/tokens',{method:'POST',body:JSON.stringify({database_id,label})});
+      showReveal('New token — copy now, shown once',r.token); renderTokensKeepReveal(); }catch(e){toast(e.message,'bad');} };
+  function showReveal(title,val){ sessionStorage.setItem('ydb_reveal',JSON.stringify({title,val})); }
+  function renderTokensKeepReveal(){ renderTokens().then(()=>{ const r=sessionStorage.getItem('ydb_reveal'); if(r&&$('reveal')){const {title,val}=JSON.parse(r);
+    $('reveal').innerHTML=`<div class="reveal"><span><b>${esc(title)}</b><br>${esc(val)}</span><button class="btn ghost sm" onclick="copyReveal()">Copy</button></div>`; window._reveal=val; sessionStorage.removeItem('ydb_reveal'); } }); }
+  window.copyReveal=function(){ navigator.clipboard&&navigator.clipboard.writeText(window._reveal||''); toast('Copied','ok'); };
+  window.rotateTok=async function(hash){ if(!confirm('Rotate this token? The old one stops working; a new one is issued.'))return;
+    try{ const r=await api('/v1/admin/tokens/rotate',{method:'POST',body:JSON.stringify({hash})}); showReveal('Rotated token — copy now',r.token); renderTokensKeepReveal(); }
+    catch(e){toast(e.message,'bad');} };
+  window.revokeTok=async function(hash){ if(!confirm('Revoke this token cluster-wide?'))return;
+    try{ await api('/v1/admin/tokens/revoke',{method:'POST',body:JSON.stringify({hash})}); toast('Revoked','ok'); renderTokens(); }
+    catch(e){toast(e.message,'bad');} };
 
-      const dbName = id => (dbs.find(d => d.id === id) || {}).name || ('#' + id);
-      $('token-list').innerHTML = tokens.length ? tokens.map(t =>
-        `<div class="item"><span class="grow"><b>${esc(t.label || 'token')}</b>
-           <span class="mono">${esc(dbName(t.database_id))} · ${esc((t.hash||'').slice(0,12))}…</span></span>
-         <button class="btn danger" onclick="revokeToken('${esc(t.hash)}')">Revoke</button></div>`
-      ).join('') : '<div class="note">No active tokens.</div>';
+  // ── Users (owner) ──
+  async function renderUsers(){
+    if(!can('owner')){ $('appview').innerHTML='<div class="empty">Owner role required.</div>'; return; }
+    $('appview').innerHTML=`<div class="panel"><h2>Admin users</h2><div id="userlist" class="empty">Loading…</div>
+      <div class="form"><input id="uname" placeholder="username"/><input id="upass" type="password" placeholder="password (≥8)"/>
+      <select id="urole"><option value="readonly">readonly</option><option value="admin">admin</option><option value="owner">owner</option></select>
+      <button class="btn" onclick="createUser()">Create</button></div>
+      <div class="note">Passwords are argon2id-hashed; only the hash replicates. The last owner cannot be disabled or demoted.</div></div>`;
+    try{
+      const {users}=await api('/v1/admin/users');
+      $('userlist').innerHTML=`<table><thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${
+        users.map(u=>`<tr><td><b>${esc(u.username)}</b></td>
+          <td><select onchange="setRole('${esc(u.username)}',this.value)" ${u.disabled?'disabled':''}>
+            ${['readonly','admin','owner'].map(r=>`<option value="${r}" ${u.role===r?'selected':''}>${r}</option>`).join('')}</select></td>
+          <td>${u.disabled?'<span class="badge quarantined">disabled</span>':'<span class="badge follower">active</span>'}</td>
+          <td class="mono">${esc((u.created_at||'').slice(0,19))}</td>
+          <td class="rowacts"><button class="btn ghost sm" onclick="resetPass('${esc(u.username)}')">Reset pw</button>
+          ${u.disabled?'':`<button class="btn danger sm" onclick="disableUser('${esc(u.username)}')">Disable</button>`}</td></tr>`).join('')}</tbody></table>`;
+    }catch(e){ $('userlist').innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
+  }
+  window.createUser=async function(){ const username=$('uname').value.trim(),password=$('upass').value,role=$('urole').value;
+    if(!username||password.length<8){toast('username + password ≥8 chars','bad');return;}
+    try{ await api('/v1/admin/users',{method:'POST',body:JSON.stringify({username,password,role})}); toast(`User "${username}" created`,'ok'); renderUsers(); }catch(e){toast(e.message,'bad');} };
+  window.setRole=async function(u,role){ try{ const r=await api('/v1/admin/users/'+encodeURIComponent(u)+'/role',{method:'POST',body:JSON.stringify({role})});
+    if(r.role!==role) toast('Refused (owner-floor): role unchanged','bad'); else toast(`${u} → ${role}`,'ok'); renderUsers(); }catch(e){toast(e.message,'bad');renderUsers();} };
+  window.resetPass=async function(u){ const p=prompt(`New password for ${u} (≥8 chars)`); if(!p)return; if(p.length<8){toast('≥8 chars','bad');return;}
+    try{ await api('/v1/admin/users/'+encodeURIComponent(u)+'/password',{method:'POST',body:JSON.stringify({password:p})}); toast('Password rotated — the user’s sessions are now invalid','ok'); }catch(e){toast(e.message,'bad');} };
+  window.disableUser=async function(u){ if(!confirm(`Disable ${u}? Their sessions die immediately.`))return;
+    try{ const r=await api('/v1/admin/users/'+encodeURIComponent(u)+'/disable',{method:'POST',body:JSON.stringify({})});
+      if(!r.disabled) toast('Refused (owner-floor): cannot disable the last owner','bad'); else toast(`${u} disabled`,'ok'); renderUsers(); }catch(e){toast(e.message,'bad');} };
 
-      $('tok-db').innerHTML = dbs.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
-    } catch (e) {
-      $('identity-locked').classList.remove('hidden'); $('identity-body').classList.add('hidden');
-      $('identity-locked').textContent = 'Could not load control plane: ' + e.message;
-      toast(e.message, 'bad');
-    }
+  // ── Audit ──
+  async function renderAudit(){
+    $('appview').innerHTML=`<div class="panel"><h2>Audit trail <span class="note" style="text-transform:none">(replicated across all nodes · quorum-durable)</span></h2><div id="auditlist" class="empty">Loading…</div></div>`;
+    try{
+      const {audit}=await api('/v1/admin/audit?limit=200');
+      $('auditlist').innerHTML=audit.length?`<table><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>#</th></tr></thead><tbody>${
+        audit.map(a=>`<tr><td class="mono">${esc((a.at||'').slice(0,19))}</td><td><b>${esc(a.actor)}</b></td><td>${esc(a.action)}</td><td>${esc(a.target)}</td><td class="mono">${a.yrp_index}</td></tr>`).join('')}</tbody></table>`
+        :'<div class="empty">No audit entries yet.</div>';
+    }catch(e){ $('auditlist').innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
   }
 
-  window.createDb = async function () {
-    const name = $('db-name').value.trim();
-    if (!name) return;
-    try {
-      const r = await adminFetch('/v1/admin/databases', { method: 'POST', body: JSON.stringify({ name }) });
-      $('db-name').value = '';
-      toast(`Database "${name}" created (id ${r.id})`, 'ok');
-      refreshIdentity();
-    } catch (e) { toast(e.message, 'bad'); }
-  };
-
-  window.mintToken = async function () {
-    const database_id = Number($('tok-db').value);
-    if (!database_id) { toast('Create a database first', 'bad'); return; }
-    const label = $('tok-label').value.trim();
-    try {
-      const r = await adminFetch('/v1/admin/tokens', { method: 'POST', body: JSON.stringify({ database_id, label }) });
-      $('tok-label').value = '';
-      $('token-reveal').innerHTML = `<div class="reveal"><b>New token — copy it now, it is shown once</b>${esc(r.token)}</div>`;
-      toast('Token minted', 'ok');
-      refreshIdentity();
-    } catch (e) { toast(e.message, 'bad'); }
-  };
-
-  window.revokeToken = async function (hash) {
-    if (!confirm('Revoke this token? It stops working cluster-wide.')) return;
-    try {
-      await adminFetch('/v1/admin/tokens/revoke', { method: 'POST', body: JSON.stringify({ hash }) });
-      toast('Token revoked', 'ok');
-      refreshIdentity();
-    } catch (e) { toast(e.message, 'bad'); }
-  };
-
-  // Restore identity view if a token is already in this tab's session.
-  if (master()) $('master').value = '';
+  // boot if we already have a session
+  if(tok()) boot(); else $('loginview').classList.remove('hidden');
 })();
 </script>
 </body>

@@ -17,29 +17,17 @@ name = "yantrikdb"
 path = "src/main.rs"
 
 [dependencies]
-# Engine v0.9.4 — latest tagged release. Pinned by tag (not branch=main) for a
-# reproducible, released dependency; main is 37 commits into the untagged v0.10
-# work (single-origin provenance gate + schema v37) which we adopt once core
-# tags v0.10.0 and we validate its REST-contract changes (correct→200, reembed
-# deferral→409). The v0.9.1→v0.9.4 line over our previous v0.9.0 pin adds:
-# v0.9.1 set_embedder_named worker-pool fix; v0.9.2 NaN-safe recall; v0.9.3
-# contract gate + isolation repair + 7.4x distance path; v0.9.4 cold-tier
-# recall decompression fix. v0.9.0 base still provides the session-lifecycle
-# surface (session_digest, draft_memories_from_summary) wired in v0.8.25 and
-# the autonomous maintenance cycle (run_maintenance_cycle) driven from the host:
-#   - run_maintenance_cycle(&MaintenanceCycleConfig) -> MaintenanceCycleReport:
-#     the unified "sleep cycle" — think (consolidation + conflict scan +
-#     trigger expiry) → entity backfill → auto-relate → conflict burn-down →
-#     trigger prune → importance recalibration → (opt-in) split/repair. The
-#     engine deliberately owns NO timer thread ("a storage engine scheduling
-#     itself is the wrong boundary"); the host drives cadence. RFC 027 / #55.
-#   - last_maintenance_cycle() -> Option<String>: persisted JSON of the last
-#     cycle for the status endpoint + boot digest.
-#   - session_digest(&SessionDigestConfig) -> SessionDigest, chain_head(ns):
-#     wired by v0.8.25 (RFC 023 / #56).
-# Carries forward the v0.7.18 compactor + v0.7.19 orphan-rollback reliability
-# arc that every deployment since v0.8.18 depends on.
-yantrikdb = { version = "0.10.0", git = "https://github.com/yantrikos/yantrikdb.git", tag = "v0.10.0" }
+# Engine v0.10.1 — latest tagged release. Pinned by tag for a reproducible,
+# released dependency. v0.10.1 is the materializer idle-scan fix (#114): a
+# missing `idx_oplog_pending` on fresh installs made the drain poll scan the
+# whole oplog every tick, burning up to ~34% of a 32-core box while idle;
+# fixed by declaring the partial index in SCHEMA_SQL. Schema 37→38, ADDITIVE
+# (version stamping is forward-only; no server API/contract change, and the
+# server asserts no exact schema version). v0.10.0 carried the single-origin
+# provenance gate + schema v37 (correct→200, reembed-deferral→409). The engine
+# owns no timer thread — the host drives run_maintenance_cycle() cadence
+# (RFC 027 / #55); session_digest + chain_head wired in v0.8.25 (RFC 023 / #56).
+yantrikdb = { version = "0.10.1", git = "https://github.com/yantrikos/yantrikdb.git", tag = "v0.10.1" }
 yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime

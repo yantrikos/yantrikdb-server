@@ -2618,6 +2618,20 @@ fn control_propose_err(e: crate::yrp::runtime::YrpProposeError) -> AppError {
     }
 }
 
+/// Map a replicated control-write failure (RFC 029) to an HTTP response:
+/// duplicate → 409, redirect/timeout → via [`control_propose_err`],
+/// divergence/internal → 500 (fail closed — never report success for a
+/// write that did not take effect).
+fn control_write_err(e: crate::yrp::runtime::ControlWriteError) -> AppError {
+    use crate::yrp::runtime::ControlWriteError as E;
+    match e {
+        E::AlreadyExists => app_error(StatusCode::CONFLICT, "database name already exists"),
+        E::Propose(p) => control_propose_err(p),
+        E::Diverged(m) => app_error(StatusCode::INTERNAL_SERVER_ERROR, m),
+        E::Internal(m) => app_error(StatusCode::INTERNAL_SERVER_ERROR, m),
+    }
+}
+
 /// POST /v1/admin/databases — create a database as a replicated control op
 /// (RFC 029). Body: `{"name": "...", "path"?: "...", "config"?: {...}}`.
 /// Master-token gated. Returns `{"id", "name", "replicated"}`. In yrp mode
@@ -2649,7 +2663,7 @@ async fn admin_create_database(
         let id = yrp
             .create_database_replicated(&name, &path, &config, created_at)
             .await
-            .map_err(control_propose_err)?;
+            .map_err(control_write_err)?;
         Ok(Json(json!({ "id": id, "name": name, "replicated": true })))
     } else {
         let id = tokio::task::spawn_blocking({
@@ -2694,6 +2708,24 @@ async fn admin_create_token(
             "provide 'database_id' or 'database'",
         ));
     };
+    // Validate the target database EXISTS before proposing (review F3): a
+    // CreateToken for a nonexistent db FK-fails at apply, and apply errors
+    // fail-stop the worker on EVERY node — one bad id would wedge the whole
+    // cluster. Reject here instead.
+    let db_present = tokio::task::spawn_blocking({
+        let control = state.control.clone();
+        move || control.lock().get_database_by_id(db_id)
+    })
+    .await
+    .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .is_some();
+    if !db_present {
+        return Err(app_error(
+            StatusCode::NOT_FOUND,
+            format!("database_id {db_id} does not exist"),
+        ));
+    }
     let label = body
         .get("label")
         .and_then(|v| v.as_str())
@@ -2704,15 +2736,9 @@ async fn admin_create_token(
     let hash = crate::auth::hash_token(&raw);
 
     if let Some(yrp) = &state.yrp {
-        let op = crate::yrp::control_op::ControlOp::CreateToken {
-            db_id,
-            token_hash: hash,
-            label,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        };
-        yrp.propose_control(&op)
+        yrp.create_token_replicated(db_id, hash, label, chrono::Utc::now().to_rfc3339())
             .await
-            .map_err(control_propose_err)?;
+            .map_err(control_write_err)?;
         Ok(Json(
             json!({ "token": raw, "database_id": db_id, "replicated": true }),
         ))
@@ -2753,13 +2779,9 @@ async fn admin_revoke_token(
     };
 
     if let Some(yrp) = &state.yrp {
-        let op = crate::yrp::control_op::ControlOp::RevokeToken {
-            token_hash: hash,
-            revoked_at: chrono::Utc::now().to_rfc3339(),
-        };
-        yrp.propose_control(&op)
+        yrp.revoke_token_replicated(hash, chrono::Utc::now().to_rfc3339())
             .await
-            .map_err(control_propose_err)?;
+            .map_err(control_write_err)?;
         Ok(Json(json!({ "revoked": true, "replicated": true })))
     } else {
         let revoked = tokio::task::spawn_blocking({

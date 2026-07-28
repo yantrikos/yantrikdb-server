@@ -88,6 +88,24 @@ pub enum YrpProposeError {
     Unavailable(String),
 }
 
+/// Failures of a replicated control-plane write (RFC 029), richer than a
+/// bare propose error so the HTTP layer can distinguish a duplicate (409)
+/// from a redirect (503) from a genuine divergence (500).
+#[derive(Debug)]
+pub enum ControlWriteError {
+    /// The database name already exists — a create is a 409, not a phantom
+    /// success (review F2).
+    AlreadyExists,
+    /// The op committed but the expected row is absent after apply — a
+    /// claim-key collision or divergence (review F2 failover / F5). Fail
+    /// closed: never report success for a write that did not take effect.
+    Diverged(String),
+    /// A local error (e.g. control.db unreadable) before/after propose.
+    Internal(String),
+    /// Underlying propose failure (NotLeader redirect / Timeout / etc.).
+    Propose(YrpProposeError),
+}
+
 /// What the HTTP layer holds for a YRP node.
 pub struct YrpHandle {
     pub node_id: NodeId,
@@ -353,25 +371,34 @@ impl YrpHandle {
         Ok(index)
     }
 
-    /// Create a database as a replicated control op (RFC 029). Allocates a
-    /// leader-assigned id under a serializing lock — held across the propose
-    /// and apply so a concurrent create sees this one's row and picks the
-    /// next id — then returns the id once every node will apply the same one.
-    /// Errors map like [`propose_control`]: a follower answers `NotLeader`
-    /// with the leader's address for redirect.
+    /// Create a database as a replicated control op (RFC 029). The
+    /// serializing lock is held across name-check → allocate → propose →
+    /// apply, so a concurrent create both (a) sees this one's row and picks
+    /// the next id, and (b) sees an existing name and 409s rather than
+    /// silently no-op'ing on the id-PK `INSERT OR IGNORE`. The returned id
+    /// is READ BACK from `control.db` after apply, so it is always the id a
+    /// caller can actually use — never the pre-allocated guess (review F2).
     pub async fn create_database_replicated(
         &self,
         name: &str,
         path: &str,
         config: &str,
         created_at: String,
-    ) -> Result<i64, YrpProposeError> {
+    ) -> Result<i64, ControlWriteError> {
         let _guard = self.control_propose_lock.lock().await;
-        let db_id = self
-            .control
-            .lock()
-            .next_database_id()
-            .map_err(|e| YrpProposeError::Unavailable(format!("allocate db id: {e}")))?;
+        // Name-existence + id allocation under the guard, so a concurrent
+        // create can neither duplicate the name nor race the id.
+        let db_id = {
+            let db = self.control.lock();
+            if db
+                .database_exists(name)
+                .map_err(|e| ControlWriteError::Internal(format!("name check: {e}")))?
+            {
+                return Err(ControlWriteError::AlreadyExists);
+            }
+            db.next_database_id()
+                .map_err(|e| ControlWriteError::Internal(format!("allocate db id: {e}")))?
+        };
         let op = super::control_op::ControlOp::CreateDatabase {
             db_id,
             name: name.to_string(),
@@ -379,8 +406,88 @@ impl YrpHandle {
             config: config.to_string(),
             created_at,
         };
-        self.propose_control(&op).await?;
-        Ok(db_id)
+        self.propose_control(&op)
+            .await
+            .map_err(ControlWriteError::Propose)?;
+        // Verify-after-apply: the row must exist with our name. Return its
+        // actual id (the truth), and fail closed if it is missing (a claim
+        // collision that deduped our op away — review F2/F5).
+        match self
+            .control
+            .lock()
+            .get_database(name)
+            .map_err(|e| ControlWriteError::Internal(format!("read-back: {e}")))?
+        {
+            Some(rec) => Ok(rec.id),
+            None => Err(ControlWriteError::Diverged(format!(
+                "CreateDatabase({name}) committed but no row after apply"
+            ))),
+        }
+    }
+
+    /// Mint a token as a replicated control op (RFC 029), verifying after
+    /// apply that the hash actually resolves to `db_id` — fail closed on a
+    /// claim-key collision that would otherwise report a token that
+    /// authenticates nowhere (review F5). The caller must have already
+    /// verified `db_id` exists (else apply FK-fails and fail-stops the
+    /// node — review F3).
+    pub async fn create_token_replicated(
+        &self,
+        db_id: i64,
+        token_hash: String,
+        label: String,
+        created_at: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::CreateToken {
+            db_id,
+            token_hash: token_hash.clone(),
+            label,
+            created_at,
+        };
+        self.propose_control(&op)
+            .await
+            .map_err(ControlWriteError::Propose)?;
+        let resolved = self
+            .control
+            .lock()
+            .validate_token(&token_hash)
+            .map_err(|e| ControlWriteError::Internal(format!("verify token: {e}")))?;
+        if resolved == Some(db_id) {
+            Ok(())
+        } else {
+            Err(ControlWriteError::Diverged(
+                "CreateToken committed but token does not resolve after apply".into(),
+            ))
+        }
+    }
+
+    /// Revoke a token as a replicated control op (RFC 029), verifying after
+    /// apply that the token no longer resolves — fail closed if it still
+    /// authenticates (a collision that deduped the revoke away — review F5).
+    pub async fn revoke_token_replicated(
+        &self,
+        token_hash: String,
+        revoked_at: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::RevokeToken {
+            token_hash: token_hash.clone(),
+            revoked_at,
+        };
+        self.propose_control(&op)
+            .await
+            .map_err(ControlWriteError::Propose)?;
+        let resolved = self
+            .control
+            .lock()
+            .validate_token(&token_hash)
+            .map_err(|e| ControlWriteError::Internal(format!("verify revoke: {e}")))?;
+        if resolved.is_none() {
+            Ok(())
+        } else {
+            Err(ControlWriteError::Diverged(
+                "RevokeToken committed but token still resolves after apply".into(),
+            ))
+        }
     }
 
     /// Wait for the durable-apply marker to cover `index`, then read its
@@ -434,6 +541,19 @@ pub fn spawn(
             "[yrp] log compaction ENABLED: beyond-GC stragglers rejoin without \
              engine backfill for the compacted range until Phase C \
              (engine-checkpoint transfer). Not recommended in production."
+        );
+        // RFC 029: control ops (tokens/databases) write no outcome row and
+        // are not yet carried in the snapshot, so a compacted range that
+        // contains a control op cannot be backfilled — a rejoining/new node
+        // would be stuck engine-incomplete and could miss a token revoke.
+        // Control-plane replication is only correctness-safe with compaction
+        // DISABLED until the snapshot carries control state (RFC 029 inc 2).
+        tracing::error!(
+            compact_after = cfg.compact_after_entries,
+            "[yrp] compaction + RFC 029 control-plane replication is NOT safe: \
+             control ops in a compacted range are lost to rejoiners. Set \
+             compact_after_entries = 0 until RFC 029 increment 2 (control \
+             state in the snapshot) ships."
         );
     }
 

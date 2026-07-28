@@ -337,6 +337,50 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
     .await;
     assert_eq!(st, reqwest::StatusCode::OK, "admin revoke");
     poll_follower_token(None).await;
+
+    // Hardening (review F2): a duplicate database name is a 409, not a
+    // phantom-id success.
+    let (st, _) = post_json(
+        &leader.base,
+        SECRET,
+        "/v1/admin/databases",
+        &json!({ "name": "rfc029db" }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::CONFLICT,
+        "duplicate db name must 409, not return a phantom id"
+    );
+
+    // Hardening (review F3): a token mint against a nonexistent database_id
+    // is rejected at the handler — it must NEVER reach apply (an FK failure
+    // there would fail-stop the apply worker on every node).
+    let (st, _) = post_json(
+        &leader.base,
+        SECRET,
+        "/v1/admin/tokens",
+        &json!({ "database_id": 999_999 }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::NOT_FOUND,
+        "token mint for a bogus db id must be refused, not wedge the cluster"
+    );
+    // Prove the cluster is still healthy after the rejected bad-id mint —
+    // apply did not fail-stop; a normal write still replicates.
+    let body_after = json!({
+        "text": "post-hardening write still replicates",
+        "embedding": emb2,
+        "idempotency_key": "yrp-e2e-key-after",
+    });
+    let (st, resp) = post_json(&leader.base, &leader.token, "/v1/remember", &body_after).await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::OK,
+        "cluster must still accept writes after a rejected bad mint: {resp}"
+    );
 }
 
 async fn spawn_node_on(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node {

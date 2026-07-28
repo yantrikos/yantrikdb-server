@@ -5,6 +5,49 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-07-28
+
+**Enterprise control plane + admin studio.** Headline: the control plane
+(auth tokens + databases) now **replicates through YRP consensus** and
+**survives failover** — closing the #1 enterprise-grade blocker (a token
+minted on the leader no longer vanishes on followers or a new leader).
+
+### Added — RFC 029 control-plane replication (#77, #79)
+- `Payload::Control` log-entry variant + `ControlOp` grammar
+  (`CreateDatabase` / `CreateToken` / `RevokeToken`) applied to `control.db`
+  on every node by a `ControlApplySink`, sharing the data plane's apply
+  marker. Leader-assigned ids + timestamps; idempotent `INSERT OR IGNORE`
+  apply; **only the SHA-256 token hash is replicated, never plaintext**.
+- Master-token-gated admin endpoints: `POST /v1/admin/databases`,
+  `/v1/admin/tokens` (plaintext shown once), `/v1/admin/tokens/revoke`.
+  Followers redirect control writes to the leader; `create_*_replicated`
+  verify-after-apply and fail closed on divergence.
+- **Control-freshness auth gate (inc2-A):** a quarantined or backfilling
+  node refuses to authenticate data-plane tokens (503, fail closed) — it
+  may not yet have applied a committed revoke (RFC 029 Invariant 1). No
+  consensus round-trip on the hot auth path; operator master token exempt.
+- Pre-merge adversarial security review; five edge-of-log defects fixed
+  (incl. an unvalidated `database_id` that could have fail-stopped the whole
+  cluster). See RFC 029 for the increment-2 boundary (compaction stays off;
+  upgrade all nodes before minting the first control op).
+
+### Added — admin studio (#76, #78)
+- Self-contained operator console served from the binary at **`/admin`**
+  (inline assets, theme-aware, air-gap-friendly): a **Cluster** tab with
+  live topology via `GET /v1/cluster/topology` (fan-out to peers'
+  `/v1/health`), and an **Identity** tab (master-token gated) to provision
+  databases and mint/revoke tokens over the replicated control plane.
+
+### Changed — engine pin v0.10.0 → v0.10.1 (#75)
+- Materializer idle-scan fix (#114): a missing `idx_oplog_pending` made the
+  drain poll scan the whole oplog every tick (~34% CPU while idle). Schema
+  37→38, additive; no server API/contract change.
+
+### Note
+Supersedes the v0.11.x / v0.12.x YRP line (native replication became the
+only path; openraft removed). This is the first release where cluster
+identity/authorization survives failover.
+
 ## [0.10.1] — 2026-07-18
 
 **`idempotency_key` on `/v1/remember` + `/v1/remember/batch`** (issue #58, converged with yantrikdb-mcp + yantrikdb-hermes-plugin). Keyed writes commit claim + row in one engine transaction (v0.10 T07 — the RFC 028 §7 origin-ingress-and-commit-coupled contract). Same key + same payload → 200 with the original rid, zero writes; same key + divergent payload → 200 `{stored:false, idempotency_conflict:true, rid}`; invalid key → 400. Batch: per-item keys + batch-level `{key}:{index}` derivation (the shipped mcp/hermes convention), all-or-nothing on conflict. `/v1/health` advertises `capabilities: ["idempotency_key"]` for feature-probing. Cluster mode refuses keyed writes with 501 until YRP Phase B couples claims into the replicated log (agreement #6 — never silently drop a dedup guarantee). Additive only — unkeyed callers unchanged.

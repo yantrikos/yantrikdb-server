@@ -339,6 +339,14 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
     assert_eq!(st, reqwest::StatusCode::OK, "admin revoke");
     poll_follower_token(None).await;
 
+    // RFC 029 inc2: the control-freshness gate must NOT fire on a healthy,
+    // caught-up follower — auth stays available (fail-closed only when the
+    // node is quarantined or backfilling).
+    assert!(
+        crate::server::control_auth_stale(&follower.state).is_none(),
+        "healthy follower must be auth-eligible (freshness gate false-positive)"
+    );
+
     // Hardening (review F2): a duplicate database name is a 409, not a
     // phantom-id success.
     let (st, _) = post_json(

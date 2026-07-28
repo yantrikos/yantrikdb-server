@@ -57,6 +57,17 @@ pub async fn require_authenticated_principal(
             )
         })?;
 
+    // RFC 029 inc2: a node that has not caught up on the replicated control
+    // log must not authenticate — it may not yet have applied a committed
+    // token revoke (Invariant 1, fail closed).
+    if let Some(reason) = crate::server::control_auth_stale(&state) {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ApiErrorCode::ClusterUnavailable,
+            format!("control plane not ready for auth: {reason}"),
+        ));
+    }
+
     let outcome = state
         .auth_provider
         .authenticate(&token)

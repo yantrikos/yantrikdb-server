@@ -301,7 +301,7 @@
 
   // ── Audit ──
   async function renderAudit(){
-    $('appview').innerHTML=`<div class="panel"><h2>Audit trail <span class="note" style="text-transform:none">(replicated · tamper-evident)</span></h2><div id="auditlist" class="empty">Loading…</div></div>`;
+    $('appview').innerHTML=`<div class="panel"><h2>Audit trail <span class="note" style="text-transform:none">(replicated across all nodes · quorum-durable)</span></h2><div id="auditlist" class="empty">Loading…</div></div>`;
     try{
       const {audit}=await api('/v1/admin/audit?limit=200');
       $('auditlist').innerHTML=audit.length?`<table><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>#</th></tr></thead><tbody>${

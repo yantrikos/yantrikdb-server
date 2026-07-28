@@ -191,13 +191,20 @@ impl ControlOp {
 pub struct ControlEnvelope {
     #[serde(default)]
     pub actor: String,
+    /// Leader-stamped RFC-3339 timestamp (F3) so the replicated audit row is
+    /// byte-identical on every node. Empty for legacy bare-op entries.
+    #[serde(default)]
+    pub at: String,
     pub op: ControlOp,
 }
 
 impl ControlEnvelope {
+    /// Build an envelope, stamping `at` with the leader's clock once (the
+    /// caller is the request-terminating/proposing node).
     pub fn new(actor: impl Into<String>, op: ControlOp) -> Self {
         Self {
             actor: actor.into(),
+            at: chrono_now_rfc3339(),
             op,
         }
     }
@@ -214,6 +221,7 @@ impl ControlEnvelope {
             Ok(env) => Ok(env),
             Err(_) => ControlOp::decode(bytes).map(|op| ControlEnvelope {
                 actor: String::new(),
+                at: String::new(),
                 op,
             }),
         }
@@ -242,10 +250,17 @@ impl ControlApplySink {
     /// op. Idempotent overall (safe to replay).
     pub fn apply(&self, index: u64, env: &ControlEnvelope) -> Result<(), String> {
         let db = self.control.lock();
-        // M1: durable, deterministic audit — same row on every node.
+        // M1: durable, deterministic audit — same row on every node. The
+        // timestamp is leader-stamped in the envelope (F3) so the row is
+        // byte-identical across nodes; legacy entries (no `at`) fall back to
+        // apply-time, which is acceptable since they carry no actor anyway.
         if !env.actor.is_empty() {
             let (action, target) = env.op.audit_action();
-            let at = chrono_now_rfc3339();
+            let at = if env.at.is_empty() {
+                chrono_now_rfc3339()
+            } else {
+                env.at.clone()
+            };
             db.apply_audit(index, &env.actor, action, &target, &at)
                 .map_err(|e| format!("control audit write at {index}: {e}"))?;
         }
@@ -287,21 +302,21 @@ impl ControlApplySink {
                 .map(|_| ())
                 .map_err(|e| format!("control apply CreateUser({username}): {e}")),
             ControlOp::SetUserRole { username, role } => db
-                .apply_set_user_role(username, role)
+                .apply_set_user_role(index, username, role)
                 .map(|_| ())
                 .map_err(|e| format!("control apply SetUserRole({username}): {e}")),
             ControlOp::SetUserPassword {
                 username,
                 password_hash,
             } => db
-                .apply_set_user_password(username, password_hash)
+                .apply_set_user_password(index, username, password_hash)
                 .map(|_| ())
                 .map_err(|e| format!("control apply SetUserPassword({username}): {e}")),
             ControlOp::DisableUser {
                 username,
                 disabled_at,
             } => db
-                .apply_disable_user(username, disabled_at)
+                .apply_disable_user(index, username, disabled_at)
                 .map(|_| ())
                 .map_err(|e| format!("control apply DisableUser({username}): {e}")),
             ControlOp::SetAdminSessionKey { kid, value } => db

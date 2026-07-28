@@ -412,7 +412,19 @@ impl ControlDb {
     /// no-op on every node — never leave the cluster with zero owners. Because
     /// the check + update run under one lock at a fixed log position, two
     /// concurrent demotions proposed on different nodes cannot race to zero.
-    pub fn apply_set_user_role(&self, username: &str, role: &str) -> anyhow::Result<bool> {
+    /// `version` is the YRP log index at which this change applies. We SET
+    /// `token_version = version` (not `+1`) so the bump is **crash-replay
+    /// idempotent and identical on every node** (review F2): the apply and
+    /// the durable marker are separate DB commits, so an index can re-apply
+    /// after a crash — an unconditional increment would diverge, breaking the
+    /// H1 revocation the value underpins. The index is monotonic, so this is
+    /// still strictly-increasing per change.
+    pub fn apply_set_user_role(
+        &self,
+        version: u64,
+        username: &str,
+        role: &str,
+    ) -> anyhow::Result<bool> {
         if role != "owner" {
             let is_last_owner: bool = self.conn.query_row(
                 "SELECT EXISTS(
@@ -428,28 +440,41 @@ impl ControlDb {
                 return Ok(false);
             }
         }
+        // `role <> ?2` makes a same-role write a true no-op (review F5): it
+        // neither changes the row nor invalidates the user's live sessions.
         let changed = self.conn.execute(
-            "UPDATE admin_users SET role = ?2, token_version = token_version + 1
-             WHERE username = ?1",
-            params![username, role],
+            "UPDATE admin_users SET role = ?2, token_version = ?3
+             WHERE username = ?1 AND role <> ?2",
+            params![username, role, version as i64],
         )?;
         Ok(changed > 0)
     }
 
-    /// Apply a password rotation (argon2id hash), bumping `token_version`.
-    pub fn apply_set_user_password(&self, username: &str, hash: &str) -> anyhow::Result<bool> {
+    /// Apply a password rotation (argon2id hash). `version` = the log index
+    /// (idempotent, see [`apply_set_user_role`]).
+    pub fn apply_set_user_password(
+        &self,
+        version: u64,
+        username: &str,
+        hash: &str,
+    ) -> anyhow::Result<bool> {
         let changed = self.conn.execute(
-            "UPDATE admin_users SET password_hash = ?2, token_version = token_version + 1
+            "UPDATE admin_users SET password_hash = ?2, token_version = ?3
              WHERE username = ?1",
-            params![username, hash],
+            params![username, hash, version as i64],
         )?;
         Ok(changed > 0)
     }
 
-    /// Apply a soft-disable, bumping `token_version` so live sessions die.
-    /// Owner-floor (H2) at apply time: refuses to disable the last enabled
-    /// owner (deterministic no-op on every node).
-    pub fn apply_disable_user(&self, username: &str, disabled_at: &str) -> anyhow::Result<bool> {
+    /// Apply a soft-disable, setting `token_version` to the log index so live
+    /// sessions die. Owner-floor (H2) at apply time: refuses to disable the
+    /// last enabled owner (deterministic no-op on every node).
+    pub fn apply_disable_user(
+        &self,
+        version: u64,
+        username: &str,
+        disabled_at: &str,
+    ) -> anyhow::Result<bool> {
         let is_last_owner: bool = self.conn.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM admin_users
@@ -464,9 +489,9 @@ impl ControlDb {
             return Ok(false);
         }
         let changed = self.conn.execute(
-            "UPDATE admin_users SET disabled_at = ?2, token_version = token_version + 1
+            "UPDATE admin_users SET disabled_at = ?2, token_version = ?3
              WHERE username = ?1 AND disabled_at IS NULL",
-            params![username, disabled_at],
+            params![username, disabled_at, version as i64],
         )?;
         Ok(changed > 0)
     }

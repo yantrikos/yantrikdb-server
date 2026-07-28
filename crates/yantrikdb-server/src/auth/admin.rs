@@ -176,11 +176,17 @@ pub fn verify_password(password: &str, phc: &str) -> bool {
 
 /// A fixed decoy hash for unknown-user logins (M4 anti-enumeration): verify
 /// against it so an unknown username costs the same argon2 time as a known
-/// one and reveals nothing. Generated once per process (value irrelevant).
+/// one and reveals nothing. Computed once per process via the SAME argon2
+/// path as real hashes, so it is guaranteed to be a canonical PHC string
+/// that `verify_password` will actually run argon2 against (a hand-written
+/// constant risks non-canonical base64 that `PasswordHash::new` rejects,
+/// short-circuiting before argon2 runs and re-opening the timing oracle).
 pub fn decoy_hash() -> &'static str {
-    // A precomputed argon2id hash of a random string. Constant across the
-    // process; only the *timing* matters, never a match.
-    "$argon2id$v=19$m=19456,t=2,p=1$Y2xhdWRlZGVjb3lzYWx0$V7m1oq9pO7m3n5r8t0uWx2z4A6C8E0G2I4K6M8O0Q2S"
+    static DECOY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DECOY.get_or_init(|| {
+        hash_password("decoy-not-a-real-account-timing-equalizer")
+            .expect("argon2 default params always hash")
+    })
 }
 
 #[cfg(test)]
@@ -195,6 +201,17 @@ mod tests {
         assert_eq!(Role::parse("owner"), Some(Role::Owner));
         assert_eq!(Role::parse("root"), None); // unknown → fail closed
         assert_eq!(Role::parse(""), None);
+    }
+
+    #[test]
+    fn decoy_hash_is_valid_argon2() {
+        // Regression for the M4 timing-oracle bug: the decoy MUST parse as a
+        // canonical PHC so verify_password actually runs argon2 on it (equal
+        // cost to a real user), not short-circuit to false.
+        use argon2::password_hash::PasswordHash;
+        assert!(PasswordHash::new(decoy_hash()).is_ok());
+        // And a login attempt against it costs argon2 time and never matches.
+        assert!(!verify_password("anything", decoy_hash()));
     }
 
     #[test]

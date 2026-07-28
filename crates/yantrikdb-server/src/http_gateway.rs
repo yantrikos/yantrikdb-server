@@ -2614,6 +2614,16 @@ use crate::auth::admin::{AdminActor, Role};
 const SESSION_TTL_SECS: i64 = 3600;
 const SESSION_SKEW_SECS: i64 = 60;
 
+/// Monotonic-ish version for single-node (non-yrp) admin mutations, where
+/// there is no YRP log index. Epoch millis — strictly increasing in practice
+/// and never compared across nodes (single-node has no replication).
+fn admin_local_version() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2785,6 +2795,15 @@ async fn admin_login(State(state): State<Arc<AppState>>, Json(body): Json<Value>
         return Err(app_error(
             StatusCode::BAD_REQUEST,
             "username and password required",
+        ));
+    }
+    // L3/F4: don't mint a session from a node that hasn't caught up on the
+    // control log — it may read a stale admin_users (e.g. a since-disabled
+    // account). Fail closed, consistent with require_role.
+    if let Some(reason) = crate::server::control_auth_stale(&state) {
+        return Err(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("control plane not ready for login: {reason}"),
         ));
     }
     // M4: cap concurrent argon2 verifications process-wide.
@@ -3198,7 +3217,7 @@ async fn admin_set_user_role(
         state
             .control
             .lock()
-            .apply_set_user_role(&username, role)
+            .apply_set_user_role(admin_local_version(), &username, role)
             .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     // Report the EFFECTIVE role (owner-floor may have refused a demotion).
@@ -3234,7 +3253,7 @@ async fn admin_set_user_password(
         state
             .control
             .lock()
-            .apply_set_user_password(&username, &hash)
+            .apply_set_user_password(admin_local_version(), &username, &hash)
             .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     Ok(Json(json!({ "username": username, "rotated": true })))
@@ -3256,7 +3275,7 @@ async fn admin_disable_user(
         state
             .control
             .lock()
-            .apply_disable_user(&username, &now)
+            .apply_disable_user(admin_local_version(), &username, &now)
             .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     // owner-floor may refuse — report effective state.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>YantrikDB Studio — Cluster</title>
+<title>YantrikDB Studio</title>
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --ink: #1a1d21; --muted: #6b7280;
@@ -23,11 +23,16 @@
     background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased;
   }
   header {
-    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
-    padding: 1.1rem 1.5rem; border-bottom: 1px solid var(--line); background: var(--panel);
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); background: var(--panel);
   }
   header h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
-  header .sub { color: var(--muted); font-size: .82rem; }
+  nav { display: flex; gap: .3rem; }
+  nav button {
+    font: inherit; font-size: .82rem; border: 0; background: transparent; color: var(--muted);
+    padding: .35rem .75rem; border-radius: 8px; cursor: pointer;
+  }
+  nav button.active { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 600; }
   header .meta { margin-left: auto; font-family: var(--mono); font-size: .78rem; color: var(--muted); }
   .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; }
@@ -59,78 +64,247 @@
   footer { color: var(--muted); font-size: .74rem; text-align: center; padding: 1.5rem; }
   .pulse { animation: p 1.2s ease-in-out infinite; }
   @keyframes p { 50% { opacity: .4; } }
+  .hidden { display: none !important; }
+  /* Identity panel */
+  .authbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1.25rem;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: .8rem 1rem; }
+  .authbar label { font-size: .8rem; color: var(--muted); }
+  input, select {
+    font: inherit; font-size: .85rem; padding: .4rem .6rem; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-width: 0;
+  }
+  input:focus, select:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 0; }
+  button.btn {
+    font: inherit; font-size: .82rem; font-weight: 600; border: 0; cursor: pointer;
+    background: var(--accent); color: #fff; padding: .42rem .9rem; border-radius: 8px;
+  }
+  button.btn.ghost { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--ink); }
+  button.btn.danger { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); padding: .25rem .6rem; font-size: .74rem; }
+  button.btn:disabled { opacity: .5; cursor: not-allowed; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; }
+  .panel h2 { font-size: .82rem; margin: 0 0 .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .list { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .9rem; }
+  .item { display: flex; align-items: center; gap: .6rem; font-size: .82rem; padding: .45rem .6rem;
+    border: 1px solid var(--line); border-radius: 8px; }
+  .item .mono { font-family: var(--mono); font-size: .75rem; color: var(--muted); word-break: break-all; }
+  .item .grow { flex: 1; min-width: 0; }
+  .form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .form input, .form select { flex: 1; }
+  .note { font-size: .74rem; color: var(--muted); margin-top: .5rem; }
+  .toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .6rem 1rem;
+    font-size: .82rem; box-shadow: 0 6px 24px rgba(0,0,0,.18); max-width: 90vw; }
+  .toast.bad { border-color: var(--bad); color: var(--bad); }
+  .toast.ok { border-color: var(--ok); }
+  .reveal { font-family: var(--mono); font-size: .8rem; background: color-mix(in srgb, var(--ok) 12%, transparent);
+    border: 1px solid var(--ok); border-radius: 8px; padding: .6rem .7rem; margin-bottom: .9rem; word-break: break-all; }
+  .reveal b { display:block; font-family: system-ui; font-size:.72rem; color: var(--muted); margin-bottom:.25rem; text-transform: uppercase; letter-spacing:.04em;}
 </style>
 </head>
 <body>
 <header>
   <h1>YantrikDB <span style="color:var(--accent)">Studio</span></h1>
-  <span class="sub">cluster console</span>
+  <nav>
+    <button id="tab-cluster" class="active" onclick="showTab('cluster')">Cluster</button>
+    <button id="tab-identity" onclick="showTab('identity')">Identity</button>
+  </nav>
   <span class="meta" id="meta">connecting…</span>
 </header>
-<div class="wrap">
+
+<!-- CLUSTER -->
+<div class="wrap" id="pane-cluster">
   <div id="view" class="grid"></div>
   <div id="msg" class="empty">Loading cluster topology…</div>
 </div>
-<footer>Read-only cluster view · polls <code>/v1/cluster/topology</code> every 3s · identity &amp; config management coming with control-plane replication (RFC 029)</footer>
+
+<!-- IDENTITY -->
+<div class="wrap hidden" id="pane-identity">
+  <div class="authbar">
+    <label for="master">Master token</label>
+    <input id="master" type="password" placeholder="cluster secret" style="flex:1" />
+    <button class="btn" onclick="unlock()">Unlock</button>
+    <button class="btn ghost" onclick="lock()">Forget</button>
+    <span class="note" style="margin:0">Held only in this browser tab. Use over TLS.</span>
+  </div>
+  <div id="identity-locked" class="empty">Enter the cluster master token to manage databases &amp; tokens.</div>
+  <div id="identity-body" class="cols hidden">
+    <div class="panel">
+      <h2>Databases</h2>
+      <div class="list" id="db-list"></div>
+      <div class="form">
+        <input id="db-name" placeholder="new database name" />
+        <button class="btn" onclick="createDb()">Create</button>
+      </div>
+      <div class="note">Replicated through YRP — created on every node, survives failover.</div>
+    </div>
+    <div class="panel">
+      <h2>Tokens</h2>
+      <div id="token-reveal"></div>
+      <div class="list" id="token-list"></div>
+      <div class="form">
+        <select id="tok-db"></select>
+        <input id="tok-label" placeholder="label (optional)" style="flex:.7" />
+        <button class="btn" onclick="mintToken()">Mint</button>
+      </div>
+      <div class="note">The plaintext token is shown once. Only its hash is stored + replicated.</div>
+    </div>
+  </div>
+</div>
+
+<footer>Cluster view polls <code>/v1/cluster/topology</code> · Identity uses the replicated control plane (RFC 029)</footer>
+<div id="toast" class="toast hidden"></div>
+
 <script>
 (function () {
-  const view = document.getElementById('view');
-  const msg = document.getElementById('msg');
-  const meta = document.getElementById('meta');
-  const roleClass = r => ({leader:'leader',follower:'follower',witness:'witness',candidate:'candidate',quarantined:'quarantined'}[r] || 'follower');
+  const $ = id => document.getElementById(id);
   const num = v => (v === null || v === undefined) ? '—' : v;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-  function render(data) {
+  // ── Toast ──
+  let toastT;
+  function toast(msg, kind) {
+    const t = $('toast'); t.textContent = msg; t.className = 'toast ' + (kind || '');
+    clearTimeout(toastT); toastT = setTimeout(() => t.classList.add('hidden'), 4000);
+  }
+
+  // ── Tabs ──
+  window.showTab = function (name) {
+    for (const t of ['cluster', 'identity']) {
+      $('pane-' + t).classList.toggle('hidden', t !== name);
+      $('tab-' + t).classList.toggle('active', t === name);
+    }
+    if (name === 'identity' && master()) refreshIdentity();
+  };
+
+  // ── Cluster topology (public) ──
+  const roleClass = r => ({leader:'leader',follower:'follower',witness:'witness',candidate:'candidate',quarantined:'quarantined'}[r] || 'follower');
+  function renderTopo(data) {
+    const view = $('view'), msg = $('msg'), meta = $('meta');
     const nodes = (data && data.nodes) || [];
     if (!data || data.raft_mode !== 'yrp') {
-      view.innerHTML = ''; msg.style.display = 'block';
-      msg.className = 'empty';
-      msg.textContent = 'This node is not running in cluster (yrp) mode — nothing to show.';
+      view.innerHTML = ''; msg.style.display = 'block'; msg.className = 'empty';
+      msg.textContent = 'This node is not running in cluster (yrp) mode.';
       meta.textContent = 'mode: ' + ((data && data.raft_mode) || 'unknown');
       return;
     }
     msg.style.display = nodes.length ? 'none' : 'block';
-    meta.textContent = `cluster ${num(data.cluster_id)} · ${nodes.length} member${nodes.length===1?'':'s'} · viewed from node ${num(data.viewed_from)}`;
+    meta.textContent = `cluster ${num(data.cluster_id)} · ${nodes.length} member${nodes.length===1?'':'s'} · from node ${num(data.viewed_from)}`;
     view.innerHTML = nodes.map(n => {
       const role = (n.role || (n.reachable ? 'unknown' : 'unreachable')) + '';
-      const rc = roleClass(role);
-      const reach = n.reachable !== false;
-      const healthy = n.healthy === true;
+      const rc = roleClass(role), reach = n.reachable !== false, healthy = n.healthy === true;
       const dot = !reach ? 'bad' : (healthy ? 'ok' : 'warn');
       const lag = (n.replication_lag == null) ? null : Number(n.replication_lag);
       const lagPct = lag == null ? 0 : Math.max(0, Math.min(100, 100 - Math.min(lag, 100)));
       return `<div class="card ${rc==='leader'?'leader':''} ${reach?'':'unreachable'}">
-        <div class="top">
-          <span class="node-id">node ${num(n.node_id)}</span>
-          <span class="badge ${rc}">${reach ? role : 'unreachable'}</span>
-          <span class="dot ${dot}" title="${reach ? (healthy?'healthy':'unhealthy') : 'unreachable'}"></span>
-        </div>
-        <div style="font-family:var(--mono);font-size:.72rem;color:var(--muted);word-break:break-all">${n.addr||''}${n.self?' · this node':''}</div>
-        <dl class="rows">
-          <dt>term</dt><dd>${num(n.term)}</dd>
-          <dt>leader</dt><dd>${num(n.leader)}</dd>
-          <dt>applied</dt><dd>${num(n.last_applied_index)}</dd>
-          <dt>lag</dt><dd>${lag==null?'—':lag}</dd>
-        </dl>
-        <div class="lagbar ${lag?'lag':''}"><i style="width:${lagPct}%"></i></div>
-      </div>`;
+        <div class="top"><span class="node-id">node ${num(n.node_id)}</span>
+          <span class="badge ${rc}">${reach ? esc(role) : 'unreachable'}</span>
+          <span class="dot ${dot}"></span></div>
+        <div style="font-family:var(--mono);font-size:.72rem;color:var(--muted);word-break:break-all">${esc(n.addr||'')}${n.self?' · this node':''}</div>
+        <dl class="rows"><dt>term</dt><dd>${num(n.term)}</dd><dt>leader</dt><dd>${num(n.leader)}</dd>
+          <dt>applied</dt><dd>${num(n.last_applied_index)}</dd><dt>lag</dt><dd>${lag==null?'—':lag}</dd></dl>
+        <div class="lagbar ${lag?'lag':''}"><i style="width:${lagPct}%"></i></div></div>`;
     }).join('');
   }
-
-  async function poll() {
+  async function pollTopo() {
     try {
       const r = await fetch('/v1/cluster/topology', { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      render(await r.json());
-      meta.classList.remove('pulse');
+      renderTopo(await r.json()); $('meta').classList.remove('pulse');
     } catch (e) {
-      meta.classList.add('pulse');
-      meta.textContent = 'reconnecting… (' + e.message + ')';
-      if (!view.children.length) { msg.className = 'err'; msg.style.display='block'; msg.textContent = 'Cannot reach the server.'; }
+      $('meta').classList.add('pulse'); $('meta').textContent = 'reconnecting… (' + e.message + ')';
+      if (!$('view').children.length) { $('msg').className = 'err'; $('msg').style.display='block'; $('msg').textContent = 'Cannot reach the server.'; }
     }
   }
-  poll();
-  setInterval(poll, 3000);
+  pollTopo(); setInterval(pollTopo, 3000);
+
+  // ── Identity (master-token gated) ──
+  const master = () => sessionStorage.getItem('ydb_master') || '';
+  window.unlock = function () {
+    const v = $('master').value.trim();
+    if (!v) return;
+    sessionStorage.setItem('ydb_master', v);
+    refreshIdentity();
+  };
+  window.lock = function () {
+    sessionStorage.removeItem('ydb_master'); $('master').value = '';
+    $('identity-body').classList.add('hidden'); $('identity-locked').classList.remove('hidden');
+    toast('Master token forgotten', 'ok');
+  };
+  async function adminFetch(path, opts) {
+    const o = opts || {};
+    o.headers = Object.assign({ 'Authorization': 'Bearer ' + master() }, o.headers || {});
+    if (o.body) o.headers['Content-Type'] = 'application/json';
+    const r = await fetch(path, o);
+    let body = {}; try { body = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error(body.message || body.error || ('HTTP ' + r.status));
+    return body;
+  }
+
+  let dbs = [];
+  async function refreshIdentity() {
+    if (!master()) return;
+    try {
+      const snap = await adminFetch('/v1/admin/control-snapshot');
+      dbs = snap.databases || [];
+      const tokens = snap.tokens || [];
+      $('identity-locked').classList.add('hidden'); $('identity-body').classList.remove('hidden');
+
+      $('db-list').innerHTML = dbs.length ? dbs.map(d =>
+        `<div class="item"><span class="grow"><b>${esc(d.name)}</b> <span class="mono">#${num(d.id)}</span></span></div>`
+      ).join('') : '<div class="note">No databases yet.</div>';
+
+      const dbName = id => (dbs.find(d => d.id === id) || {}).name || ('#' + id);
+      $('token-list').innerHTML = tokens.length ? tokens.map(t =>
+        `<div class="item"><span class="grow"><b>${esc(t.label || 'token')}</b>
+           <span class="mono">${esc(dbName(t.database_id))} · ${esc((t.hash||'').slice(0,12))}…</span></span>
+         <button class="btn danger" onclick="revokeToken('${esc(t.hash)}')">Revoke</button></div>`
+      ).join('') : '<div class="note">No active tokens.</div>';
+
+      $('tok-db').innerHTML = dbs.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
+    } catch (e) {
+      $('identity-locked').classList.remove('hidden'); $('identity-body').classList.add('hidden');
+      $('identity-locked').textContent = 'Could not load control plane: ' + e.message;
+      toast(e.message, 'bad');
+    }
+  }
+
+  window.createDb = async function () {
+    const name = $('db-name').value.trim();
+    if (!name) return;
+    try {
+      const r = await adminFetch('/v1/admin/databases', { method: 'POST', body: JSON.stringify({ name }) });
+      $('db-name').value = '';
+      toast(`Database "${name}" created (id ${r.id})`, 'ok');
+      refreshIdentity();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+
+  window.mintToken = async function () {
+    const database_id = Number($('tok-db').value);
+    if (!database_id) { toast('Create a database first', 'bad'); return; }
+    const label = $('tok-label').value.trim();
+    try {
+      const r = await adminFetch('/v1/admin/tokens', { method: 'POST', body: JSON.stringify({ database_id, label }) });
+      $('tok-label').value = '';
+      $('token-reveal').innerHTML = `<div class="reveal"><b>New token — copy it now, it is shown once</b>${esc(r.token)}</div>`;
+      toast('Token minted', 'ok');
+      refreshIdentity();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+
+  window.revokeToken = async function (hash) {
+    if (!confirm('Revoke this token? It stops working cluster-wide.')) return;
+    try {
+      await adminFetch('/v1/admin/tokens/revoke', { method: 'POST', body: JSON.stringify({ hash }) });
+      toast('Token revoked', 'ok');
+      refreshIdentity();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+
+  // Restore identity view if a token is already in this tab's session.
+  if (master()) $('master').value = '';
 })();
 </script>
 </body>

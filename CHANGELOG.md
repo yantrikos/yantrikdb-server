@@ -5,6 +5,43 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] — 2026-07-28
+
+**Multi-user admin RBAC + enterprise studio (RFC 030).** Replaces the single
+shared master-token admin gate with named admin accounts, roles, session
+login, and a full management console — all replicated through the control
+plane, so operator identity survives failover.
+
+### Added — RFC 030 (#81)
+- **Replicated admin users** with roles (`owner` > `admin` > `readonly`).
+  Passwords are **argon2id** (only the hash replicates, never plaintext);
+  new control ops (CreateUser/SetUserRole/SetUserPassword/DisableUser) ride a
+  `ControlEnvelope {actor, op}` that also back-compat-decodes legacy entries.
+- **Session login** — `POST /v1/admin/session` issues a stateless
+  HMAC-SHA256 token (verify-before-parse, constant-time). A per-user
+  `token_version` (set to the log index) means disabling/demoting/rotating a
+  user **kills their live sessions immediately, cluster-wide**. The signing
+  key is decoupled from `cluster_secret` and rotatable (`kid`).
+- **RBAC guard** on every admin route; the cluster master token remains a
+  break-glass owner. The last enabled owner cannot be disabled or demoted
+  (enforced deterministically at apply). A catching-up node refuses admin
+  auth (fail closed).
+- **Replicated, quorum-durable audit** — every admin mutation is recorded
+  with its actor, byte-identical on every node, viewable at `GET
+  /v1/admin/audit`.
+- Management endpoints: users CRUD, clean database/token/user lists
+  (password hashes redacted), **token rotation**, per-database quotas.
+- Login hardening: argon2 behind a concurrency cap, constant-time decoy
+  verify for unknown users (anti-enumeration).
+- **Studio v2** at `/admin`: login + first-time owner bootstrap, role-aware
+  navigation, live cluster topology, database/token/user tables with
+  create/mint/rotate/revoke/quota, and the audit trail. One self-contained
+  page.
+
+Two adversarial reviews (design + code) preceded merge; findings folded in.
+New control-op shapes → all nodes must run 0.13.1 before the first admin
+user is created (the RFC 029 upgrade-order rule).
+
 ## [0.13.0] — 2026-07-28
 
 **Enterprise control plane + admin studio.** Headline: the control plane

@@ -331,6 +331,7 @@ impl YrpHandle {
     /// and resolves to the original entry's index.
     pub async fn propose_control(
         &self,
+        actor: &str,
         op: &super::control_op::ControlOp,
     ) -> Result<u64, YrpProposeError> {
         if let Some(reasons) = self.quarantine_reasons() {
@@ -338,11 +339,12 @@ impl YrpHandle {
                 "node quarantined: {reasons:?}"
             )));
         }
-        let bytes = op.encode().map_err(YrpProposeError::Unavailable)?;
+        let env = super::control_op::ControlEnvelope::new(actor, op.clone());
+        let bytes = env.encode().map_err(YrpProposeError::Unavailable)?;
         let (tx, rx) = oneshot::channel();
         self.owner_tx
             .send(DriverEvent::Propose {
-                key: op.claim_key(),
+                key: env.claim_key(),
                 payload: Payload::Control(bytes),
                 reply: tx,
             })
@@ -380,6 +382,7 @@ impl YrpHandle {
     /// caller can actually use — never the pre-allocated guess (review F2).
     pub async fn create_database_replicated(
         &self,
+        actor: &str,
         name: &str,
         path: &str,
         config: &str,
@@ -406,7 +409,7 @@ impl YrpHandle {
             config: config.to_string(),
             created_at,
         };
-        self.propose_control(&op)
+        self.propose_control(actor, &op)
             .await
             .map_err(ControlWriteError::Propose)?;
         // Verify-after-apply: the row must exist with our name. Return its
@@ -433,6 +436,7 @@ impl YrpHandle {
     /// node — review F3).
     pub async fn create_token_replicated(
         &self,
+        actor: &str,
         db_id: i64,
         token_hash: String,
         label: String,
@@ -444,7 +448,7 @@ impl YrpHandle {
             label,
             created_at,
         };
-        self.propose_control(&op)
+        self.propose_control(actor, &op)
             .await
             .map_err(ControlWriteError::Propose)?;
         let resolved = self
@@ -466,6 +470,7 @@ impl YrpHandle {
     /// authenticates (a collision that deduped the revoke away — review F5).
     pub async fn revoke_token_replicated(
         &self,
+        actor: &str,
         token_hash: String,
         revoked_at: String,
     ) -> Result<(), ControlWriteError> {
@@ -473,7 +478,7 @@ impl YrpHandle {
             token_hash: token_hash.clone(),
             revoked_at,
         };
-        self.propose_control(&op)
+        self.propose_control(actor, &op)
             .await
             .map_err(ControlWriteError::Propose)?;
         let resolved = self
@@ -488,6 +493,114 @@ impl YrpHandle {
                 "RevokeToken committed but token still resolves after apply".into(),
             ))
         }
+    }
+
+    // ── RFC 030: replicated admin-user + session-key ops ────────────
+
+    /// Create an admin account (RFC 030). `password_hash` is argon2id,
+    /// computed by the caller (the request-terminating node) — plaintext
+    /// never reaches here (M3). Existence-checked under the lock so a
+    /// duplicate username is a 409, not a silent no-op (M2).
+    pub async fn create_user_replicated(
+        &self,
+        actor: &str,
+        username: &str,
+        password_hash: String,
+        role: String,
+        created_at: String,
+    ) -> Result<(), ControlWriteError> {
+        let _guard = self.control_propose_lock.lock().await;
+        if self
+            .control
+            .lock()
+            .get_admin_user(username)
+            .map_err(|e| ControlWriteError::Internal(format!("user check: {e}")))?
+            .is_some()
+        {
+            return Err(ControlWriteError::AlreadyExists);
+        }
+        let op = super::control_op::ControlOp::CreateUser {
+            username: username.to_string(),
+            password_hash,
+            role,
+            created_at,
+        };
+        self.propose_control(actor, &op)
+            .await
+            .map_err(ControlWriteError::Propose)?;
+        match self.control.lock().get_admin_user(username) {
+            Ok(Some(_)) => Ok(()),
+            _ => Err(ControlWriteError::Diverged(
+                "CreateUser committed but user absent after apply".into(),
+            )),
+        }
+    }
+
+    /// Change a user's role (RFC 030). Owner-floor is enforced at APPLY
+    /// (H2); this returns Ok once applied — the caller re-reads to confirm
+    /// the effective role (a refused last-owner demotion leaves it unchanged).
+    pub async fn set_user_role_replicated(
+        &self,
+        actor: &str,
+        username: &str,
+        role: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::SetUserRole {
+            username: username.to_string(),
+            role,
+        };
+        self.propose_control(actor, &op)
+            .await
+            .map_err(ControlWriteError::Propose)
+            .map(|_| ())
+    }
+
+    /// Rotate a user's password (argon2id hash computed by the caller).
+    pub async fn set_user_password_replicated(
+        &self,
+        actor: &str,
+        username: &str,
+        password_hash: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::SetUserPassword {
+            username: username.to_string(),
+            password_hash,
+        };
+        self.propose_control(actor, &op)
+            .await
+            .map_err(ControlWriteError::Propose)
+            .map(|_| ())
+    }
+
+    /// Disable (revoke) an admin account. Owner-floor enforced at apply (H2).
+    pub async fn disable_user_replicated(
+        &self,
+        actor: &str,
+        username: &str,
+        disabled_at: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::DisableUser {
+            username: username.to_string(),
+            disabled_at,
+        };
+        self.propose_control(actor, &op)
+            .await
+            .map_err(ControlWriteError::Propose)
+            .map(|_| ())
+    }
+
+    /// Set/rotate the replicated admin session-signing key (H3).
+    pub async fn set_admin_session_key_replicated(
+        &self,
+        actor: &str,
+        kid: String,
+        value: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::SetAdminSessionKey { kid, value };
+        self.propose_control(actor, &op)
+            .await
+            .map_err(ControlWriteError::Propose)
+            .map(|_| ())
     }
 
     /// Wait for the durable-apply marker to cover `index`, then read its

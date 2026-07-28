@@ -63,6 +63,19 @@ async fn post_json(
     (status, val)
 }
 
+async fn get_json(base: &str, token: &str, path: &str) -> (reqwest::StatusCode, Value) {
+    let client = reqwest::Client::new();
+    let mut req = client.get(format!("{base}{path}"));
+    if !token.is_empty() {
+        req = req.bearer_auth(token);
+    }
+    let resp = req.send().await.expect("request");
+    let status = resp.status();
+    let text = resp.text().await.expect("body");
+    let val: Value = serde_json::from_str(&text).unwrap_or(json!({ "raw": text }));
+    (status, val)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
     let _serial = crate::yrp::testkit::serial_guard().await;
@@ -257,8 +270,8 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
     assert!(admin.status().is_success());
     let admin_html = admin.text().await.unwrap();
     assert!(
-        admin_html.contains("YantrikDB") && admin_html.contains("Identity"),
-        "/admin must serve the studio page with the identity panel"
+        admin_html.contains("YantrikDB") && admin_html.contains("control console"),
+        "/admin must serve the studio v2 console"
     );
 
     // ── RFC 029: control-plane replication ──────────────────────────
@@ -389,6 +402,157 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
         st,
         reqwest::StatusCode::OK,
         "cluster must still accept writes after a rejected bad mint: {resp}"
+    );
+
+    // ── RFC 030: multi-user admin accounts + RBAC ───────────────────
+    // Bootstrap: create the first owner with the break-glass master token.
+    let (st, _) = post_json(
+        &leader.base,
+        SECRET,
+        "/v1/admin/users",
+        &json!({ "username": "boss", "password": "supersecret", "role": "owner" }),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK, "create first owner");
+
+    // The user record replicates to the follower's control.db.
+    {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if follower
+                .state
+                .control
+                .lock()
+                .get_admin_user("boss")
+                .unwrap()
+                .is_some()
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "owner never replicated to follower"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    // Login on the LEADER (seeds the replicated session key) → session token.
+    let (st, resp) = post_json(
+        &leader.base,
+        "",
+        "/v1/admin/session",
+        &json!({ "username": "boss", "password": "supersecret" }),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK, "owner login: {resp}");
+    let boss_sess = resp["token"].as_str().expect("session token").to_string();
+    assert_eq!(resp["role"], json!("owner"));
+
+    // Wrong password is 401.
+    let (st, _) = post_json(
+        &leader.base,
+        "",
+        "/v1/admin/session",
+        &json!({ "username": "boss", "password": "WRONG" }),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::UNAUTHORIZED, "bad password → 401");
+
+    // The session authenticates on the FOLLOWER (session key + user both
+    // replicated) — /v1/admin/me returns the owner role.
+    let (st, resp) = get_json(&follower.base, &boss_sess, "/v1/admin/me").await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::OK,
+        "session valid on follower: {resp}"
+    );
+    assert_eq!(resp["role"], json!("owner"));
+
+    // Owner creates a readonly user (via the session, not the master token).
+    let (st, _) = post_json(
+        &leader.base,
+        &boss_sess,
+        "/v1/admin/users",
+        &json!({ "username": "viewer", "password": "viewerpass", "role": "readonly" }),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK, "owner creates readonly user");
+    let (_, resp) = post_json(
+        &leader.base,
+        "",
+        "/v1/admin/session",
+        &json!({ "username": "viewer", "password": "viewerpass" }),
+    )
+    .await;
+    let viewer_sess = resp["token"].as_str().expect("viewer session").to_string();
+
+    // RBAC: readonly cannot create a database (needs admin) → 403.
+    let (st, _) = post_json(
+        &leader.base,
+        &viewer_sess,
+        "/v1/admin/databases",
+        &json!({ "name": "viewer-cannot" }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::FORBIDDEN,
+        "readonly cannot create db"
+    );
+    // …but can list (readonly+).
+    let (st, _) = get_json(&leader.base, &viewer_sess, "/v1/admin/databases").await;
+    assert_eq!(st, reqwest::StatusCode::OK, "readonly can list dbs");
+
+    // H1 revocation: disable viewer → their live session dies (401), and the
+    // revocation propagates so it dies on the FOLLOWER too.
+    let (st, _) = post_json(
+        &leader.base,
+        &boss_sess,
+        "/v1/admin/users/viewer/disable",
+        &json!({}),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK, "disable viewer");
+    {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let (st, _) = get_json(&follower.base, &viewer_sess, "/v1/admin/me").await;
+            if st == reqwest::StatusCode::UNAUTHORIZED {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "disabled user's session never died on follower"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    // H2 owner-floor: disabling the only owner is refused (stays enabled).
+    let (st, resp) = post_json(
+        &leader.base,
+        &boss_sess,
+        "/v1/admin/users/boss/disable",
+        &json!({}),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK);
+    assert_eq!(
+        resp["disabled"],
+        json!(false),
+        "owner-floor must refuse disabling the last owner: {resp}"
+    );
+
+    // The replicated audit trail recorded the admin mutations, attributed.
+    let (st, resp) = get_json(&leader.base, &boss_sess, "/v1/admin/audit?limit=50").await;
+    assert_eq!(st, reqwest::StatusCode::OK);
+    let audit = resp["audit"].as_array().expect("audit array");
+    assert!(
+        audit
+            .iter()
+            .any(|e| e["action"] == json!("create_user") && e["actor"] == json!("master-token")),
+        "audit must attribute the bootstrap create_user to master-token: {resp}"
     );
 }
 

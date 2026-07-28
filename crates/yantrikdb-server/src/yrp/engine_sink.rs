@@ -314,13 +314,13 @@ impl ApplySink for EngineApplySink {
             // the shared marker. Idempotent apply; an Err fail-stops the
             // whole worker (Invariant 2: never serve stale authorization).
             Payload::Control(b) => {
-                let op = super::control_op::ControlOp::decode(b)?;
+                let env = super::control_op::ControlEnvelope::decode(b)?;
                 self.control
                     .as_ref()
                     .ok_or_else(|| {
                         format!("Payload::Control at {index} but no control sink wired")
                     })?
-                    .apply(&op)?;
+                    .apply(index, &env)?;
                 return self.outcomes.advance(index);
             }
             Payload::Op(b) => b,

@@ -61,6 +61,12 @@ bincode = "1"
 sha2 = "0.10"
 hex = "0.4"
 rand = { version = "0.8", features = ["small_rng"] }
+# RFC 030 admin RBAC: argon2id for admin-account password hashing (low-entropy
+# human input needs a slow salted KDF — distinct from the SHA-256 used for
+# high-entropy random tokens); HMAC-SHA256 for stateless signed session tokens.
+argon2 = "0.5"
+hmac = "0.12"
+base64 = "0.22"
 
 # Time formatting (Unix epoch ↔ ISO 8601 for HTTP responses). Issue
 # #39 read endpoints emit RFC-3339 timestamps alongside the existing

@@ -2608,6 +2608,241 @@ async fn list_databases(
 /// follower answers 503 with the leader's address so the caller (studio or
 /// operator CLI) redirects the admin write to the leader — the same posture
 /// as a data-plane write against a follower.
+// ── RFC 030: admin RBAC guard + stateless session auth ──────────────
+use crate::auth::admin::{AdminActor, Role};
+
+const SESSION_TTL_SECS: i64 = 3600;
+const SESSION_SKEW_SECS: i64 = 60;
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn is_master_token(state: &AppState, token: &str) -> bool {
+    let ct_eq = |secret: Option<&String>| {
+        secret
+            .map(|s| {
+                // constant-time compare (M5 / earlier nit)
+                let a = s.as_bytes();
+                let b = token.as_bytes();
+                let mut diff = a.len() ^ b.len();
+                for i in 0..a.len().max(b.len()) {
+                    diff |= (*a.get(i).unwrap_or(&0) ^ *b.get(i).unwrap_or(&0)) as usize;
+                }
+                diff == 0
+            })
+            .unwrap_or(false)
+    };
+    ct_eq(
+        state
+            .cluster
+            .as_ref()
+            .and_then(|c| c.config.cluster_secret.as_ref()),
+    ) || ct_eq(state.yrp.as_ref().and_then(|y| y.cluster_secret.as_ref()))
+}
+
+/// The raw admin session-signing key `(kid, bytes)` (H3). Ensures the
+/// replicated key exists, seeding it once (leader-proposed in yrp mode) if
+/// absent. Independent of `cluster_secret`.
+async fn admin_session_key(state: &AppState) -> Result<(String, Vec<u8>), AppError> {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine as _;
+    if let Some((kid, val)) = state
+        .control
+        .lock()
+        .get_admin_session_key()
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let bytes = B64
+            .decode(val)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        return Ok((kid, bytes));
+    }
+    // Seed a fresh 32-byte key + short kid.
+    let mut raw = [0u8; 32];
+    let mut kidb = [0u8; 6];
+    {
+        use rand::RngCore;
+        rand::rngs::OsRng.fill_bytes(&mut raw);
+        rand::rngs::OsRng.fill_bytes(&mut kidb);
+    }
+    let kid = hex::encode(kidb);
+    let val_b64 = B64.encode(raw);
+    match &state.yrp {
+        Some(yrp) => {
+            yrp.set_admin_session_key_replicated("system", kid.clone(), val_b64)
+                .await
+                .map_err(control_write_err)?;
+        }
+        None => {
+            state
+                .control
+                .lock()
+                .apply_set_admin_session_key(&kid, &val_b64)
+                .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+    }
+    // Read back the effective key (a concurrent seeder may have won).
+    let (kid, val) = state
+        .control
+        .lock()
+        .get_admin_session_key()
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| app_error(StatusCode::INTERNAL_SERVER_ERROR, "session key seed failed"))?;
+    let bytes = B64
+        .decode(val)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok((kid, bytes))
+}
+
+/// The RBAC guard. Resolves the request's admin actor and enforces `min`.
+/// Accepts (1) a valid session token (verify HMAC+exp, check `ver`/disabled
+/// against control.db, parse role), or (2) the master token (→ owner,
+/// break-glass, loud log — L6). Fails closed. Also refuses on a
+/// control-stale node (L3) so no decision rides stale RBAC state.
+async fn require_role(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    min: Role,
+) -> Result<AdminActor, AppError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "missing Bearer token"))?;
+
+    // L3: never authorize admin actions on a node behind the control log.
+    if let Some(reason) = crate::server::control_auth_stale(state) {
+        return Err(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("control plane not ready for admin: {reason}"),
+        ));
+    }
+
+    // Break-glass master token → owner.
+    if is_master_token(state, token) {
+        tracing::warn!("admin: break-glass master-token access (actor=master-token)");
+        if !Role::Owner.satisfies(min) {
+            return Err(app_error(StatusCode::FORBIDDEN, "insufficient role"));
+        }
+        return Ok(AdminActor {
+            name: "master-token".into(),
+            role: Role::Owner,
+        });
+    }
+
+    // Session token.
+    let (kid, key) = admin_session_key(state).await?;
+    let claims = crate::auth::admin::verify_session(&key, token, unix_now(), SESSION_SKEW_SECS)
+        .map_err(|_| app_error(StatusCode::UNAUTHORIZED, "invalid or expired session"))?;
+    if claims.kid != kid {
+        return Err(app_error(
+            StatusCode::UNAUTHORIZED,
+            "session signed by a rotated key; re-login",
+        ));
+    }
+    // H1: the user's current token_version must match; and not disabled.
+    let user = state
+        .control
+        .lock()
+        .get_admin_user(&claims.sub)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "unknown account"))?;
+    if user.disabled_at.is_some() || user.token_version != claims.ver {
+        return Err(app_error(
+            StatusCode::UNAUTHORIZED,
+            "session revoked; re-login",
+        ));
+    }
+    let role =
+        Role::parse(&user.role).ok_or_else(|| app_error(StatusCode::FORBIDDEN, "unknown role"))?;
+    if !role.satisfies(min) {
+        return Err(app_error(StatusCode::FORBIDDEN, "insufficient role"));
+    }
+    Ok(AdminActor {
+        name: claims.sub,
+        role,
+    })
+}
+
+/// POST /v1/admin/session — login → signed session token. Rate-limited
+/// before argon2 (M4), decoy-verify for unknown users (anti-enumeration).
+async fn admin_login(State(state): State<Arc<AppState>>, Json(body): Json<Value>) -> AppResult {
+    let username = body
+        .get("username")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let password = body
+        .get("password")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if username.is_empty() || password.is_empty() {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "username and password required",
+        ));
+    }
+    // M4: cap concurrent argon2 verifications process-wide.
+    let _permit = admin_login_gate().acquire().await;
+
+    let user = state
+        .control
+        .lock()
+        .get_admin_user(&username)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Constant-cost path for unknown/disabled users (M4 anti-enumeration).
+    let (ok, role, ver) = match &user {
+        Some(u) if u.disabled_at.is_none() => (
+            crate::auth::admin::verify_password(&password, &u.password_hash),
+            u.role.clone(),
+            u.token_version,
+        ),
+        _ => {
+            let _ =
+                crate::auth::admin::verify_password(&password, crate::auth::admin::decoy_hash());
+            (false, String::new(), 0)
+        }
+    };
+    if !ok {
+        return Err(app_error(StatusCode::UNAUTHORIZED, "invalid credentials"));
+    }
+    let (kid, key) = admin_session_key(&state).await?;
+    let now = unix_now();
+    let claims = crate::auth::admin::SessionClaims {
+        sub: username,
+        role,
+        ver,
+        kid,
+        iat: now,
+        exp: now + SESSION_TTL_SECS,
+    };
+    let token = crate::auth::admin::sign_session(&key, &claims)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(
+        json!({ "token": token, "role": claims.role, "expires_at": claims.exp, "username": claims.sub }),
+    ))
+}
+
+/// Process-wide semaphore capping concurrent argon2 verifications (M4).
+fn admin_login_gate() -> &'static tokio::sync::Semaphore {
+    static GATE: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| tokio::sync::Semaphore::new(4))
+}
+
+/// GET /v1/admin/me — the current actor + role (drives the role-aware UI).
+async fn admin_me(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> AppResult {
+    let actor = require_role(&state, &headers, Role::Readonly).await?;
+    Ok(Json(
+        json!({ "username": actor.name, "role": actor.role.as_str() }),
+    ))
+}
+
 fn control_propose_err(e: crate::yrp::runtime::YrpProposeError) -> AppError {
     use crate::yrp::runtime::YrpProposeError as E;
     match e {
@@ -2653,7 +2888,7 @@ async fn admin_create_database(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
-    require_master_token(&state, &headers)?;
+    let actor = require_role(&state, &headers, Role::Admin).await?;
     let name = body
         .get("name")
         .and_then(|v| v.as_str())
@@ -2672,7 +2907,7 @@ async fn admin_create_database(
     if let Some(yrp) = &state.yrp {
         let created_at = chrono::Utc::now().to_rfc3339();
         let id = yrp
-            .create_database_replicated(&name, &path, &config, created_at)
+            .create_database_replicated(&actor.name, &name, &path, &config, created_at)
             .await
             .map_err(control_write_err)?;
         Ok(Json(json!({ "id": id, "name": name, "replicated": true })))
@@ -2699,7 +2934,7 @@ async fn admin_create_token(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
-    require_master_token(&state, &headers)?;
+    let actor = require_role(&state, &headers, Role::Admin).await?;
     let db_id = if let Some(id) = body.get("database_id").and_then(|v| v.as_i64()) {
         id
     } else if let Some(dbname) = body.get("database").and_then(|v| v.as_str()) {
@@ -2747,9 +2982,15 @@ async fn admin_create_token(
     let hash = crate::auth::hash_token(&raw);
 
     if let Some(yrp) = &state.yrp {
-        yrp.create_token_replicated(db_id, hash, label, chrono::Utc::now().to_rfc3339())
-            .await
-            .map_err(control_write_err)?;
+        yrp.create_token_replicated(
+            &actor.name,
+            db_id,
+            hash,
+            label,
+            chrono::Utc::now().to_rfc3339(),
+        )
+        .await
+        .map_err(control_write_err)?;
         Ok(Json(
             json!({ "token": raw, "database_id": db_id, "replicated": true }),
         ))
@@ -2777,7 +3018,7 @@ async fn admin_revoke_token(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult {
-    require_master_token(&state, &headers)?;
+    let actor = require_role(&state, &headers, Role::Admin).await?;
     let hash = if let Some(t) = body.get("token").and_then(|v| v.as_str()) {
         crate::auth::hash_token(t)
     } else if let Some(h) = body.get("hash").and_then(|v| v.as_str()) {
@@ -2790,7 +3031,7 @@ async fn admin_revoke_token(
     };
 
     if let Some(yrp) = &state.yrp {
-        yrp.revoke_token_replicated(hash, chrono::Utc::now().to_rfc3339())
+        yrp.revoke_token_replicated(&actor.name, hash, chrono::Utc::now().to_rfc3339())
             .await
             .map_err(control_write_err)?;
         Ok(Json(json!({ "revoked": true, "replicated": true })))
@@ -2804,6 +3045,348 @@ async fn admin_revoke_token(
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         Ok(Json(json!({ "revoked": revoked, "replicated": false })))
     }
+}
+
+// ── RFC 030: management endpoints (RBAC-gated, redacted) ────────────
+
+/// GET /v1/admin/databases — list databases with token counts. readonly+.
+async fn admin_list_databases(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    require_role(&state, &headers, Role::Readonly).await?;
+    let (dbs, toks) = {
+        let c = state.control.lock();
+        (
+            c.list_databases()
+                .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            c.list_active_tokens()
+                .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        )
+    };
+    let list: Vec<Value> = dbs
+        .iter()
+        .map(|d| {
+            let n = toks.iter().filter(|t| t.database_id == d.id).count();
+            json!({ "id": d.id, "name": d.name, "created_at": d.created_at, "token_count": n })
+        })
+        .collect();
+    Ok(Json(json!({ "databases": list })))
+}
+
+/// GET /v1/admin/tokens — list active tokens (hash REDACTED to a prefix). readonly+.
+async fn admin_list_tokens(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    require_role(&state, &headers, Role::Readonly).await?;
+    let toks = state
+        .control
+        .lock()
+        .list_active_tokens()
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // The token HASH (SHA-256 of a 256-bit random token) is an identifier,
+    // not a crackable credential — safe to show an authenticated admin so
+    // rotate/revoke can target it. (Password hashes, which ARE crackable,
+    // are never exposed — see the users endpoint. L4.)
+    let list: Vec<Value> = toks
+        .iter()
+        .map(|t| {
+            json!({
+                "hash": t.hash,
+                "hash_prefix": t.hash.chars().take(12).collect::<String>(),
+                "database_id": t.database_id, "label": t.label, "created_at": t.created_at,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "tokens": list })))
+}
+
+/// GET /v1/admin/users — list admin accounts (NO password hashes). readonly+.
+async fn admin_list_users(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    require_role(&state, &headers, Role::Readonly).await?;
+    let users = state
+        .control
+        .lock()
+        .list_admin_users()
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let list: Vec<Value> = users
+        .iter()
+        .map(|u| {
+            json!({
+                "username": u.username, "role": u.role,
+                "disabled": u.disabled_at.is_some(), "created_at": u.created_at,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "users": list })))
+}
+
+/// POST /v1/admin/users — create an admin account. owner only.
+async fn admin_create_user(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let actor = require_role(&state, &headers, Role::Owner).await?;
+    let username = body
+        .get("username")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let password = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
+    let role = body
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("readonly");
+    if username.is_empty() || password.len() < 8 {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "username required; password >= 8 chars",
+        ));
+    }
+    if Role::parse(role).is_none() {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "role must be owner|admin|readonly",
+        ));
+    }
+    let hash = crate::auth::admin::hash_password(password)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(yrp) = &state.yrp {
+        yrp.create_user_replicated(&actor.name, &username, hash, role.to_string(), now)
+            .await
+            .map_err(control_write_err)?;
+    } else {
+        let c = state.control.lock();
+        if c.get_admin_user(&username)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_some()
+        {
+            return Err(app_error(StatusCode::CONFLICT, "username already exists"));
+        }
+        c.apply_create_user(&username, &hash, role, &now)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    Ok(Json(json!({ "username": username, "role": role })))
+}
+
+/// POST /v1/admin/users/{username}/role — change role. owner only.
+async fn admin_set_user_role(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(username): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let actor = require_role(&state, &headers, Role::Owner).await?;
+    let role = body.get("role").and_then(|v| v.as_str()).unwrap_or("");
+    if Role::parse(role).is_none() {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "role must be owner|admin|readonly",
+        ));
+    }
+    if let Some(yrp) = &state.yrp {
+        yrp.set_user_role_replicated(&actor.name, &username, role.to_string())
+            .await
+            .map_err(control_write_err)?;
+    } else {
+        state
+            .control
+            .lock()
+            .apply_set_user_role(&username, role)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    // Report the EFFECTIVE role (owner-floor may have refused a demotion).
+    let eff = state
+        .control
+        .lock()
+        .get_admin_user(&username)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(|u| u.role)
+        .unwrap_or_default();
+    Ok(Json(json!({ "username": username, "role": eff })))
+}
+
+/// POST /v1/admin/users/{username}/password — rotate password. owner only.
+async fn admin_set_user_password(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(username): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let actor = require_role(&state, &headers, Role::Owner).await?;
+    let password = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
+    if password.len() < 8 {
+        return Err(app_error(StatusCode::BAD_REQUEST, "password >= 8 chars"));
+    }
+    let hash = crate::auth::admin::hash_password(password)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if let Some(yrp) = &state.yrp {
+        yrp.set_user_password_replicated(&actor.name, &username, hash)
+            .await
+            .map_err(control_write_err)?;
+    } else {
+        state
+            .control
+            .lock()
+            .apply_set_user_password(&username, &hash)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    Ok(Json(json!({ "username": username, "rotated": true })))
+}
+
+/// POST /v1/admin/users/{username}/disable — disable an account. owner only.
+async fn admin_disable_user(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(username): AxumPath<String>,
+) -> AppResult {
+    let actor = require_role(&state, &headers, Role::Owner).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(yrp) = &state.yrp {
+        yrp.disable_user_replicated(&actor.name, &username, now)
+            .await
+            .map_err(control_write_err)?;
+    } else {
+        state
+            .control
+            .lock()
+            .apply_disable_user(&username, &now)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    // owner-floor may refuse — report effective state.
+    let disabled = state
+        .control
+        .lock()
+        .get_admin_user(&username)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(|u| u.disabled_at.is_some())
+        .unwrap_or(false);
+    Ok(Json(json!({ "username": username, "disabled": disabled })))
+}
+
+/// POST /v1/admin/tokens/rotate — mint a replacement for the same db+label,
+/// revoke the old. admin+. Returns the new plaintext once.
+async fn admin_rotate_token(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let actor = require_role(&state, &headers, Role::Admin).await?;
+    let old_hash = if let Some(t) = body.get("token").and_then(|v| v.as_str()) {
+        crate::auth::hash_token(t)
+    } else if let Some(h) = body.get("hash").and_then(|v| v.as_str()) {
+        h.to_string()
+    } else {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "provide 'token' or 'hash'",
+        ));
+    };
+    let (db_id, label) = state
+        .control
+        .lock()
+        .get_token_meta(&old_hash)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| app_error(StatusCode::NOT_FOUND, "no such active token"))?;
+    let raw = crate::auth::generate_token();
+    let new_hash = crate::auth::hash_token(&raw);
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(yrp) = &state.yrp {
+        yrp.create_token_replicated(&actor.name, db_id, new_hash, label.clone(), now.clone())
+            .await
+            .map_err(control_write_err)?;
+        yrp.revoke_token_replicated(&actor.name, old_hash, now)
+            .await
+            .map_err(control_write_err)?;
+    } else {
+        let c = state.control.lock();
+        c.create_token(&new_hash, db_id, &label)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        c.revoke_token(&old_hash)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    Ok(Json(
+        json!({ "token": raw, "database_id": db_id, "label": label, "rotated": true }),
+    ))
+}
+
+/// GET /v1/admin/databases/{id}/quota — readonly+. PUT — admin+.
+async fn admin_get_quota(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(id): AxumPath<i64>,
+) -> AppResult {
+    require_role(&state, &headers, Role::Readonly).await?;
+    let q = state
+        .control
+        .lock()
+        .get_quota(id)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({
+        "database_id": id, "max_memories": q.max_memories,
+        "max_batch_size": q.max_batch_size, "max_rps": q.max_rps,
+    })))
+}
+
+async fn admin_set_quota(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(id): AxumPath<i64>,
+    Json(body): Json<Value>,
+) -> AppResult {
+    require_role(&state, &headers, Role::Admin).await?;
+    let cur = state
+        .control
+        .lock()
+        .get_quota(id)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let q = crate::control::TenantQuota {
+        max_memories: body
+            .get("max_memories")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(cur.max_memories),
+        max_batch_size: body
+            .get("max_batch_size")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(cur.max_batch_size),
+        max_rps: body
+            .get("max_rps")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(cur.max_rps),
+        max_oplog_entries: cur.max_oplog_entries,
+    };
+    state
+        .control
+        .lock()
+        .set_quota(id, &q)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({ "database_id": id, "updated": true })))
+}
+
+/// GET /v1/admin/audit?limit= — the replicated audit trail. admin+.
+async fn admin_audit(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    require_role(&state, &headers, Role::Admin).await?;
+    let limit = q
+        .get("limit")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(100)
+        .clamp(1, 1000);
+    let rows = state
+        .control
+        .lock()
+        .list_audit(limit)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({ "audit": rows })))
 }
 
 /// GET /v1/admin/control-snapshot — returns a full snapshot of the control
@@ -5261,12 +5844,38 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster/topology", get(yrp_topology))
         .route("/admin", get(admin_studio))
         .route("/v1/admin/control-snapshot", get(control_snapshot))
-        // RFC 029: replicated control-plane admin (master-token gated).
-        // Databases + tokens minted here commit through YRP and apply on
-        // every node, so identity survives failover.
-        .route("/v1/admin/databases", post(admin_create_database))
-        .route("/v1/admin/tokens", post(admin_create_token))
+        // RFC 029/030: replicated control-plane admin (RBAC-gated).
+        // Databases + tokens + users committed here replicate through YRP.
+        .route("/v1/admin/session", post(admin_login))
+        .route("/v1/admin/me", get(admin_me))
+        .route(
+            "/v1/admin/databases",
+            get(admin_list_databases).post(admin_create_database),
+        )
+        .route(
+            "/v1/admin/tokens",
+            get(admin_list_tokens).post(admin_create_token),
+        )
         .route("/v1/admin/tokens/revoke", post(admin_revoke_token))
+        .route("/v1/admin/tokens/rotate", post(admin_rotate_token))
+        .route(
+            "/v1/admin/users",
+            get(admin_list_users).post(admin_create_user),
+        )
+        .route("/v1/admin/users/{username}/role", post(admin_set_user_role))
+        .route(
+            "/v1/admin/users/{username}/password",
+            post(admin_set_user_password),
+        )
+        .route(
+            "/v1/admin/users/{username}/disable",
+            post(admin_disable_user),
+        )
+        .route(
+            "/v1/admin/databases/{id}/quota",
+            get(admin_get_quota).put(admin_set_quota),
+        )
+        .route("/v1/admin/audit", get(admin_audit))
         .route("/v1/admin/snapshot", post(admin_snapshot))
         // RFC 027 / v0.8.24 — autonomous-maintenance operator surface.
         .route("/v1/admin/maintenance/run", post(admin_maintenance_run))

@@ -95,6 +95,42 @@ impl ControlDb {
                 max_rps         INTEGER NOT NULL DEFAULT 1000,
                 updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            -- RFC 030: replicated admin accounts. password_hash is argon2id
+            -- (never plaintext); role is 'owner'|'admin'|'readonly'.
+            -- token_version bumps on password/role/disable change so live
+            -- stateless sessions minted before the change fail verification.
+            CREATE TABLE IF NOT EXISTS admin_users (
+                username      TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                role          TEXT NOT NULL,
+                token_version INTEGER NOT NULL DEFAULT 1,
+                disabled_at   TEXT,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            -- RFC 030 (H3): replicated server secrets, decoupled from
+            -- cluster_secret. Holds the admin session-signing key (id
+            -- 'admin_session_key') as a kid + base64 value so sessions verify
+            -- on every node and the key can rotate independently of peer auth.
+            CREATE TABLE IF NOT EXISTS server_secrets (
+                id      TEXT PRIMARY KEY,
+                kid     TEXT NOT NULL,
+                value   TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            -- RFC 030 (M1): replicated, tamper-evident admin audit. Written
+            -- deterministically by ControlApplySink as each mutating control
+            -- op applies, so the trail is quorum-durable + byte-identical on
+            -- every node and survives failover/node loss.
+            CREATE TABLE IF NOT EXISTS audit_log (
+                yrp_index  INTEGER PRIMARY KEY,
+                actor      TEXT NOT NULL,
+                action     TEXT NOT NULL,
+                target     TEXT NOT NULL,
+                at         TEXT NOT NULL
+            );
             ",
         )?;
         Ok(())
@@ -173,6 +209,35 @@ impl ControlDb {
             .prepare("SELECT database_id FROM tokens WHERE hash = ?1 AND revoked_at IS NULL")?;
         let mut rows = stmt.query_map(params![hash], |row| row.get::<_, i64>(0))?;
         Ok(rows.next().transpose()?)
+    }
+
+    /// Look up a token's `(database_id, label)` by hash (active tokens only)
+    /// — used by rotation to mint a replacement for the same db + label.
+    pub fn get_token_meta(&self, hash: &str) -> anyhow::Result<Option<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT database_id, label FROM tokens WHERE hash = ?1 AND revoked_at IS NULL",
+        )?;
+        let mut rows = stmt.query_map(params![hash], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// List active tokens (hash included; the HTTP layer redacts to a prefix).
+    pub fn list_active_tokens(&self) -> anyhow::Result<Vec<TokenSnapshot>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT hash, database_id, label, created_at FROM tokens WHERE revoked_at IS NULL
+             ORDER BY database_id, created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TokenSnapshot {
+                hash: row.get(0)?,
+                database_id: row.get(1)?,
+                label: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     /// Revoke a token.
@@ -319,6 +384,195 @@ impl ControlDb {
         Ok(changed > 0)
     }
 
+    // ── RFC 030: replicated admin accounts (control-op apply + reads) ──
+
+    /// Apply a replicated user create. Idempotent on the username PK.
+    /// `password_hash` is argon2id, computed by the leader before proposing
+    /// so every node stores the identical hash (never re-hashed per node).
+    pub fn apply_create_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+        created_at: &str,
+    ) -> anyhow::Result<bool> {
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO admin_users (username, password_hash, role, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![username, password_hash, role, created_at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Apply a role change, bumping `token_version` so the user's live
+    /// stateless sessions (minted at the old version) stop verifying.
+    ///
+    /// **Owner-floor (H2), enforced HERE at apply time in log order:** if this
+    /// change would demote the last enabled `owner`, it is a deterministic
+    /// no-op on every node — never leave the cluster with zero owners. Because
+    /// the check + update run under one lock at a fixed log position, two
+    /// concurrent demotions proposed on different nodes cannot race to zero.
+    pub fn apply_set_user_role(&self, username: &str, role: &str) -> anyhow::Result<bool> {
+        if role != "owner" {
+            let is_last_owner: bool = self.conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM admin_users
+                    WHERE username = ?1 AND role = 'owner' AND disabled_at IS NULL
+                 ) AND (SELECT COUNT(*) FROM admin_users
+                        WHERE role = 'owner' AND disabled_at IS NULL) <= 1",
+                params![username],
+                |r| r.get(0),
+            )?;
+            if is_last_owner {
+                tracing::warn!(username, "owner-floor: refusing to demote the last owner");
+                return Ok(false);
+            }
+        }
+        let changed = self.conn.execute(
+            "UPDATE admin_users SET role = ?2, token_version = token_version + 1
+             WHERE username = ?1",
+            params![username, role],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Apply a password rotation (argon2id hash), bumping `token_version`.
+    pub fn apply_set_user_password(&self, username: &str, hash: &str) -> anyhow::Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE admin_users SET password_hash = ?2, token_version = token_version + 1
+             WHERE username = ?1",
+            params![username, hash],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Apply a soft-disable, bumping `token_version` so live sessions die.
+    /// Owner-floor (H2) at apply time: refuses to disable the last enabled
+    /// owner (deterministic no-op on every node).
+    pub fn apply_disable_user(&self, username: &str, disabled_at: &str) -> anyhow::Result<bool> {
+        let is_last_owner: bool = self.conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM admin_users
+                WHERE username = ?1 AND role = 'owner' AND disabled_at IS NULL
+             ) AND (SELECT COUNT(*) FROM admin_users
+                    WHERE role = 'owner' AND disabled_at IS NULL) <= 1",
+            params![username],
+            |r| r.get(0),
+        )?;
+        if is_last_owner {
+            tracing::warn!(username, "owner-floor: refusing to disable the last owner");
+            return Ok(false);
+        }
+        let changed = self.conn.execute(
+            "UPDATE admin_users SET disabled_at = ?2, token_version = token_version + 1
+             WHERE username = ?1 AND disabled_at IS NULL",
+            params![username, disabled_at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Look up an admin account (for login + session verification). Returns
+    /// `None` for unknown users; the caller checks `disabled_at`.
+    pub fn get_admin_user(&self, username: &str) -> anyhow::Result<Option<AdminUserRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT username, password_hash, role, token_version, disabled_at, created_at
+             FROM admin_users WHERE username = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![username], Self::map_admin_user)?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// List admin accounts (password hashes included for internal callers;
+    /// the HTTP layer strips them). Ordered by username.
+    pub fn list_admin_users(&self) -> anyhow::Result<Vec<AdminUserRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT username, password_hash, role, token_version, disabled_at, created_at
+             FROM admin_users ORDER BY username",
+        )?;
+        let rows = stmt.query_map([], Self::map_admin_user)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Count enabled `owner` accounts — enforces the owner-floor invariant
+    /// (never disable/demote the last owner and lock everyone out).
+    pub fn count_enabled_owners(&self) -> anyhow::Result<i64> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM admin_users WHERE role = 'owner' AND disabled_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
+    /// The admin session-signing key `(kid, base64_value)` if seeded (H3).
+    pub fn get_admin_session_key(&self) -> anyhow::Result<Option<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kid, value FROM server_secrets WHERE id = 'admin_session_key'")?;
+        let mut rows =
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Apply a replicated session-key set/rotate (H3). Last-writer-by-kid.
+    pub fn apply_set_admin_session_key(&self, kid: &str, value: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO server_secrets (id, kid, value) VALUES ('admin_session_key', ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET kid = excluded.kid, value = excluded.value,
+                created_at = datetime('now')",
+            params![kid, value],
+        )?;
+        Ok(())
+    }
+
+    /// Write a replicated audit row keyed on the YRP log index (M1),
+    /// idempotent on replay. Called by `ControlApplySink` as it applies a
+    /// mutating control op.
+    pub fn apply_audit(
+        &self,
+        yrp_index: u64,
+        actor: &str,
+        action: &str,
+        target: &str,
+        at: &str,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO audit_log (yrp_index, actor, action, target, at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![yrp_index as i64, actor, action, target, at],
+        )?;
+        Ok(())
+    }
+
+    /// Most-recent audit rows (M1), newest first, for the audit view.
+    pub fn list_audit(&self, limit: i64) -> anyhow::Result<Vec<AuditRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT yrp_index, actor, action, target, at FROM audit_log
+             ORDER BY yrp_index DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(AuditRow {
+                yrp_index: row.get::<_, i64>(0)? as u64,
+                actor: row.get(1)?,
+                action: row.get(2)?,
+                target: row.get(3)?,
+                at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn map_admin_user(row: &rusqlite::Row) -> rusqlite::Result<AdminUserRecord> {
+        Ok(AdminUserRecord {
+            username: row.get(0)?,
+            password_hash: row.get(1)?,
+            role: row.get(2)?,
+            token_version: row.get(3)?,
+            disabled_at: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    }
+
     // ── Control Plane Replication ──────────────────────────────────
 
     /// Export a full snapshot of databases + active tokens for replication.
@@ -383,6 +637,28 @@ impl ControlDb {
 pub struct ControlSnapshot {
     pub databases: Vec<DatabaseRecord>,
     pub tokens: Vec<TokenSnapshot>,
+}
+
+/// RFC 030 (M1) — a replicated audit row (newest-first in the audit view).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AuditRow {
+    pub yrp_index: u64,
+    pub actor: String,
+    pub action: String,
+    pub target: String,
+    pub at: String,
+}
+
+/// RFC 030 — a replicated admin account row. `password_hash` (argon2id) is
+/// never exposed by the HTTP layer.
+#[derive(Debug, Clone)]
+pub struct AdminUserRecord {
+    pub username: String,
+    pub password_hash: String,
+    pub role: String,
+    pub token_version: i64,
+    pub disabled_at: Option<String>,
+    pub created_at: String,
 }
 
 /// Token record as serialized for replication (no revoked tokens).

@@ -250,6 +250,75 @@ impl ControlDb {
         Ok(count as usize)
     }
 
+    // ── RFC 029: control-op apply (replicated control plane) ───────
+    //
+    // These are the deterministic apply primitives the YRP `ControlApplySink`
+    // calls when a `Payload::Control` entry commits. Ids and timestamps are
+    // **leader-assigned** and carried in the op, so every node writes the
+    // identical row; apply is **idempotent on the natural key** so replaying
+    // an already-durable index is a no-op.
+
+    /// The next database id the leader will assign (`MAX(id)+1`). RFC 029:
+    /// the leader allocates ids under a serializing lock so every node
+    /// inserts the same one (local AUTOINCREMENT would diverge across nodes).
+    pub fn next_database_id(&self) -> anyhow::Result<i64> {
+        let n: i64 =
+            self.conn
+                .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM databases", [], |r| {
+                    r.get(0)
+                })?;
+        Ok(n)
+    }
+
+    /// Apply a replicated database create: explicit leader-assigned id,
+    /// idempotent on both the id PK and the name UNIQUE index. Returns
+    /// `true` if a row was inserted, `false` if it already existed
+    /// (crash-replay). A `false` is NOT an error — the natural key already
+    /// holds the leader's value.
+    pub fn apply_create_database(
+        &self,
+        id: i64,
+        name: &str,
+        path: &str,
+        config: &str,
+        created_at: &str,
+    ) -> anyhow::Result<bool> {
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO databases (id, name, path, config, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, name, path, config, created_at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Apply a replicated token create: register a token hash idempotently
+    /// (the `hash` PK dedupes crash-replay). Verifier material only — the
+    /// plaintext token never reaches this layer (RFC 029 Invariant 3).
+    pub fn apply_create_token(
+        &self,
+        hash: &str,
+        database_id: i64,
+        label: &str,
+        created_at: &str,
+    ) -> anyhow::Result<bool> {
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO tokens (hash, database_id, label, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![hash, database_id, label, created_at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Apply a replicated token revoke at a leader-supplied timestamp.
+    /// Idempotent: only the first revoke sets `revoked_at`.
+    pub fn apply_revoke_token(&self, hash: &str, revoked_at: &str) -> anyhow::Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE tokens SET revoked_at = ?2 WHERE hash = ?1 AND revoked_at IS NULL",
+            params![hash, revoked_at],
+        )?;
+        Ok(changed > 0)
+    }
+
     // ── Control Plane Replication ──────────────────────────────────
 
     /// Export a full snapshot of databases + active tokens for replication.

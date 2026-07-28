@@ -217,6 +217,7 @@ pub async fn spawn_node(
         },
         local.clone(),
         applier,
+        control.clone(),
     )
     .expect("yrp spawn");
     let commit_log: Arc<dyn crate::commit::MutationCommitter> =

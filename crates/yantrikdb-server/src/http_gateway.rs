@@ -470,6 +470,12 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
             payload["yrp_backfill_target"] = json!(s.backfill_target);
         }
     }
+    // RFC 031: pack reconcile rollup (per-db detail is on the admin endpoint).
+    // A best-effort liveness state — it does NOT flip status to unhealthy
+    // (review L3), just surfaces that some database has packs still settling.
+    if state.pack_status.any_incomplete() {
+        payload["packs_incomplete"] = json!(true);
+    }
     Json(payload)
 }
 
@@ -3408,6 +3414,186 @@ async fn admin_audit(
     Ok(Json(json!({ "audit": rows })))
 }
 
+// ── RFC 031: pack management (RBAC-gated) ───────────────────────────
+
+/// Max pack upload/transfer size (bounds disk + the engine's HNSW build).
+const PACK_MAX_UPLOAD_BYTES: usize = 64 * 1024 * 1024;
+
+/// GET /v1/packs/{digest} — peer transfer. Cluster-secret only (internal):
+/// a follower fetches a missing pack file from the leader. Digest-addressed.
+async fn pack_transfer(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(digest): AxumPath<String>,
+) -> Result<axum::response::Response, AppError> {
+    require_master_token(&state, &headers)?;
+    let bytes = state
+        .pack_store
+        .load(&digest) // validates digest + re-verifies content
+        .map_err(|_| app_error(StatusCode::NOT_FOUND, "pack not found"))?;
+    use axum::response::IntoResponse;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        bytes,
+    )
+        .into_response())
+}
+
+/// POST /v1/admin/packs — upload a `.ydbpack` (octet-stream). Stored by its
+/// content digest; validated + mounted later by the reconciler. **admin**.
+async fn admin_pack_upload(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> AppResult {
+    require_role(&state, &headers, Role::Admin).await?;
+    if body.is_empty() {
+        return Err(app_error(StatusCode::BAD_REQUEST, "empty pack"));
+    }
+    if body.len() > PACK_MAX_UPLOAD_BYTES {
+        return Err(app_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("pack exceeds {PACK_MAX_UPLOAD_BYTES} bytes"),
+        ));
+    }
+    let digest = state
+        .pack_store
+        .store(&body)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({ "digest": digest, "size": body.len() })))
+}
+
+/// GET /v1/admin/packs — list stored pack files. **readonly**.
+async fn admin_pack_list(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    require_role(&state, &headers, Role::Readonly).await?;
+    Ok(Json(json!({ "packs": state.pack_store.list() })))
+}
+
+/// POST /v1/admin/databases/{id}/packs `{digest, name?}` — mount a stored pack
+/// into a database (replicated intent; the reconciler does the physical mount).
+/// Returns **202 accepted, reconciling** — NOT "mounted" (review H1). **admin**.
+async fn admin_pack_mount(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(db_id): AxumPath<i64>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), AppError> {
+    let actor = require_role(&state, &headers, Role::Admin).await?;
+    let digest = body
+        .get("digest")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'digest'"))?
+        .to_string();
+    if !crate::pack_store::PackStore::is_valid_digest(&digest) {
+        return Err(app_error(StatusCode::BAD_REQUEST, "malformed digest"));
+    }
+    // Validate at PROPOSE time (H3): db exists + pack file is present here.
+    if state
+        .control
+        .lock()
+        .get_database_by_id(db_id)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_none()
+    {
+        return Err(app_error(StatusCode::NOT_FOUND, "database not found"));
+    }
+    if !state.pack_store.has(&digest) {
+        return Err(app_error(
+            StatusCode::NOT_FOUND,
+            "pack not uploaded — POST /v1/admin/packs first",
+        ));
+    }
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&digest[..12])
+        .to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(yrp) = &state.yrp {
+        yrp.mount_pack_replicated(&actor.name, db_id, digest.clone(), name, now)
+            .await
+            .map_err(control_write_err)?;
+    } else {
+        state
+            .control
+            .lock()
+            .apply_mount_pack(db_id, &digest, &name, &now)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "database_id": db_id, "digest": digest, "status": "reconciling" })),
+    ))
+}
+
+/// DELETE /v1/admin/databases/{id}/packs/{digest} — unmount. **admin**.
+async fn admin_pack_unmount(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath((db_id, digest)): AxumPath<(i64, String)>,
+) -> Result<(StatusCode, Json<Value>), AppError> {
+    let actor = require_role(&state, &headers, Role::Admin).await?;
+    if !crate::pack_store::PackStore::is_valid_digest(&digest) {
+        return Err(app_error(StatusCode::BAD_REQUEST, "malformed digest"));
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(yrp) = &state.yrp {
+        yrp.unmount_pack_replicated(&actor.name, db_id, digest.clone(), now)
+            .await
+            .map_err(control_write_err)?;
+    } else {
+        state
+            .control
+            .lock()
+            .apply_unmount_pack(db_id, &digest, &now)
+            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "database_id": db_id, "digest": digest, "status": "unmounting" })),
+    ))
+}
+
+/// GET /v1/admin/databases/{id}/packs — manifest + physical status. **readonly**.
+async fn admin_pack_mounted(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumPath(db_id): AxumPath<i64>,
+) -> AppResult {
+    require_role(&state, &headers, Role::Readonly).await?;
+    let manifest = state
+        .control
+        .lock()
+        .active_pack_mounts_for(db_id)
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let status = state.pack_status.get(db_id);
+    Ok(Json(json!({ "manifest": manifest, "status": status })))
+}
+
+/// GET /v1/pack-context — the mounted packs' constitution+coverage block for
+/// the caller's tenant, plus any packs still pending on this node (H1: the
+/// agent is told when knowledge it mounted isn't yet locally available).
+/// Token-authed (a normal tenant token).
+async fn pack_context(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    let (db_id, engine) = resolve_engine(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    let context = engine.pack_context();
+    let status = state.pack_status.get(db_id);
+    Ok(Json(json!({
+        "pack_context": context,
+        "packs_pending": status.pending,
+        "packs_poisoned": status.poisoned,
+    })))
+}
+
 /// GET /v1/admin/control-snapshot — returns a full snapshot of the control
 /// plane (databases + active tokens) for replication to followers.
 ///
@@ -5895,6 +6081,18 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(admin_get_quota).put(admin_set_quota),
         )
         .route("/v1/admin/audit", get(admin_audit))
+        // RFC 031: pack management (small bodies / GET — upload is separate).
+        .route("/v1/packs/{digest}", get(pack_transfer))
+        .route("/v1/admin/packs", get(admin_pack_list))
+        .route(
+            "/v1/admin/databases/{id}/packs",
+            get(admin_pack_mounted).post(admin_pack_mount),
+        )
+        .route(
+            "/v1/admin/databases/{id}/packs/{digest}",
+            delete(admin_pack_unmount),
+        )
+        .route("/v1/pack-context", get(pack_context))
         .route("/v1/admin/snapshot", post(admin_snapshot))
         // RFC 027 / v0.8.24 — autonomous-maintenance operator surface.
         .route("/v1/admin/maintenance/run", post(admin_maintenance_run))
@@ -5929,8 +6127,26 @@ pub fn router(state: Arc<AppState>) -> Router {
         // before any handler runs. Defends against memory-blow attacks
         // and misconfigured clients.
         .layer(tower_http::limit::RequestBodyLimitLayer::new(body_limit))
-        .with_state(state)
-        .merge(principal_auth_router);
+        .with_state(state.clone())
+        .merge(principal_auth_router)
+        // RFC 031: pack UPLOAD needs a large body (packs are MB-scale), so it
+        // rides its own router with a high limit, merged AFTER the 64KB layer
+        // above so that cap does not apply to it. Every other route keeps the
+        // small cap.
+        .merge(
+            Router::new()
+                .route("/v1/admin/packs", post(admin_pack_upload))
+                // BOTH limits must be raised: tower-http's RequestBodyLimitLayer
+                // AND axum's own DefaultBodyLimit (default 2 MB), which governs
+                // the `Bytes` extractor independently (review H-2).
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(
+                    PACK_MAX_UPLOAD_BYTES + 1024,
+                ))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    PACK_MAX_UPLOAD_BYTES + 1024,
+                ))
+                .with_state(state),
+        );
     app
 }
 
@@ -6582,6 +6798,8 @@ pub(crate) mod e2e_test_support {
             jobs,
             data_dir,
             auth_provider,
+            pack_store: crate::pack_store::PackStore::open(tmp.path()).unwrap(),
+            pack_status: std::sync::Arc::new(crate::pack_reconciler::PackStatus::default()),
         });
 
         E2eFixture {

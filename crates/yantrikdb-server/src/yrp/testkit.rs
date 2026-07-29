@@ -237,6 +237,8 @@ pub async fn spawn_node(
         jobs,
         data_dir: data_dir.clone(),
         auth_provider,
+        pack_store: crate::pack_store::PackStore::open(&data_dir).unwrap(),
+        pack_status: std::sync::Arc::new(crate::pack_reconciler::PackStatus::default()),
     });
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))

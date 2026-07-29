@@ -19,6 +19,8 @@ mod jobs;
 mod key_provider;
 pub(crate) mod metrics;
 mod migrations;
+mod pack_reconciler;
+mod pack_store;
 mod restore;
 mod retrieval;
 mod runtime;
@@ -1888,6 +1890,11 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
         let workers =
             background::WorkerRegistry::new(&cfg.background, &cfg.maintenance, write_gate);
 
+        // RFC 031: content-addressed pack store + shared reconcile status.
+        let pack_store =
+            crate::pack_store::PackStore::open(&cfg.server.data_dir).expect("open pack store");
+        let pack_status = std::sync::Arc::new(crate::pack_reconciler::PackStatus::default());
+
         let state = Arc::new(AppState {
             control,
             pool,
@@ -1902,7 +1909,28 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
             jobs,
             data_dir: cfg.server.data_dir.clone(),
             auth_provider,
+            pack_store: pack_store.clone(),
+            pack_status: pack_status.clone(),
         });
+
+        // RFC 031: the pack reconciler — makes this node's physical mounts
+        // match the replicated db_packs manifest (fetch missing files from the
+        // leader, mount under catch_unwind + poison-quarantine).
+        {
+            let fetcher: Option<std::sync::Arc<dyn crate::pack_reconciler::PackFetcher>> = state
+                .yrp
+                .clone()
+                .map(|h| h as std::sync::Arc<dyn crate::pack_reconciler::PackFetcher>);
+            crate::pack_reconciler::PackReconciler::new(
+                state.control.clone(),
+                pack_store,
+                state.pool.clone(),
+                pack_status,
+                fetcher,
+                &cfg.server.data_dir,
+            )
+            .spawn();
+        }
 
         // Built-in watchdog — periodically probes the engine lock and fires a
         // metric if acquisition takes too long. Complement to the external bash

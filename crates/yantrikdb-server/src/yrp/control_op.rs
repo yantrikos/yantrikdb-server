@@ -88,6 +88,20 @@ pub enum ControlOp {
     /// RFC 030 (H3): seed/rotate the replicated admin session-signing key.
     /// `value` is base64 of 32 random bytes; `kid` identifies it in tokens.
     SetAdminSessionKey { kid: String, value: String },
+    /// RFC 031: mount a pack (by content digest) into a database — the
+    /// replicated *intent*; the per-node reconciler fetches the file + mounts.
+    MountPack {
+        database_id: i64,
+        pack_digest: String,
+        pack_name: String,
+        mounted_at: String,
+    },
+    /// RFC 031: unmount a pack from a database.
+    UnmountPack {
+        database_id: i64,
+        pack_digest: String,
+        unmounted_at: String,
+    },
 }
 
 impl ControlOp {
@@ -152,6 +166,36 @@ impl ControlOp {
                 buf.extend_from_slice(b"ctl:sesskey:");
                 buf.extend_from_slice(kid.as_bytes());
             }
+            // Fold the timestamp into the claim (review H-1): the claim
+            // ledger is a permanent key→index map, so a mount/unmount cycle
+            // on the SAME (db, digest) must produce DISTINCT claims — else a
+            // remount-after-unmount dedupes against the original mount's
+            // committed index, never re-appends, and the UPSERT that clears
+            // `unmounted_at` never runs. mount/unmount apply is idempotent, so
+            // per-op-unique claims are harmless.
+            ControlOp::MountPack {
+                database_id,
+                pack_digest,
+                mounted_at,
+                ..
+            } => {
+                buf.extend_from_slice(b"ctl:mountpack:");
+                buf.extend_from_slice(&database_id.to_le_bytes());
+                buf.extend_from_slice(pack_digest.as_bytes());
+                buf.push(b':');
+                buf.extend_from_slice(mounted_at.as_bytes());
+            }
+            ControlOp::UnmountPack {
+                database_id,
+                pack_digest,
+                unmounted_at,
+            } => {
+                buf.extend_from_slice(b"ctl:unmountpack:");
+                buf.extend_from_slice(&database_id.to_le_bytes());
+                buf.extend_from_slice(pack_digest.as_bytes());
+                buf.push(b':');
+                buf.extend_from_slice(unmounted_at.as_bytes());
+            }
         }
         super::op::fnv1a64(&buf)
     }
@@ -176,6 +220,29 @@ impl ControlOp {
             ControlOp::SetUserPassword { username, .. } => ("set_user_password", username.clone()),
             ControlOp::DisableUser { username, .. } => ("disable_user", username.clone()),
             ControlOp::SetAdminSessionKey { kid, .. } => ("rotate_session_key", kid.clone()),
+            ControlOp::MountPack {
+                database_id,
+                pack_name,
+                pack_digest,
+                ..
+            } => (
+                "mount_pack",
+                format!(
+                    "db #{database_id} {pack_name} [{}]",
+                    &pack_digest[..pack_digest.len().min(12)]
+                ),
+            ),
+            ControlOp::UnmountPack {
+                database_id,
+                pack_digest,
+                ..
+            } => (
+                "unmount_pack",
+                format!(
+                    "db #{database_id} [{}]",
+                    &pack_digest[..pack_digest.len().min(12)]
+                ),
+            ),
         }
     }
 }
@@ -322,6 +389,24 @@ impl ControlApplySink {
             ControlOp::SetAdminSessionKey { kid, value } => db
                 .apply_set_admin_session_key(kid, value)
                 .map_err(|e| format!("control apply SetAdminSessionKey({kid}): {e}")),
+            // RFC 031: manifest-only apply (unconditional UPSERT — H3). The
+            // physical mount is the reconciler's job, decoupled from this
+            // fail-stop-safe consensus write.
+            ControlOp::MountPack {
+                database_id,
+                pack_digest,
+                pack_name,
+                mounted_at,
+            } => db
+                .apply_mount_pack(*database_id, pack_digest, pack_name, mounted_at)
+                .map_err(|e| format!("control apply MountPack(db={database_id}): {e}")),
+            ControlOp::UnmountPack {
+                database_id,
+                pack_digest,
+                unmounted_at,
+            } => db
+                .apply_unmount_pack(*database_id, pack_digest, unmounted_at)
+                .map_err(|e| format!("control apply UnmountPack(db={database_id}): {e}")),
         }
     }
 }
@@ -346,6 +431,36 @@ mod tests {
         };
         let bytes = op.encode().unwrap();
         assert_eq!(ControlOp::decode(&bytes).unwrap(), op);
+    }
+
+    #[test]
+    fn mount_remount_claim_keys_differ() {
+        // Review H-1: a remount of the SAME (db, digest) after an unmount must
+        // produce a DISTINCT claim (via mounted_at) so it re-appends and the
+        // clear-unmounted_at UPSERT runs — else remount silently no-ops.
+        let m1 = ControlOp::MountPack {
+            database_id: 1,
+            pack_digest: "d".repeat(64),
+            pack_name: "p".into(),
+            mounted_at: "2026-07-29T00:00:00Z".into(),
+        };
+        let m2 = ControlOp::MountPack {
+            database_id: 1,
+            pack_digest: "d".repeat(64),
+            pack_name: "p".into(),
+            mounted_at: "2026-07-29T00:05:00Z".into(), // later remount
+        };
+        let u = ControlOp::UnmountPack {
+            database_id: 1,
+            pack_digest: "d".repeat(64),
+            unmounted_at: "2026-07-29T00:02:00Z".into(),
+        };
+        assert_ne!(
+            m1.claim_key(),
+            m2.claim_key(),
+            "remount must be a new claim"
+        );
+        assert_ne!(m1.claim_key(), u.claim_key(), "mount vs unmount distinct");
     }
 
     #[test]

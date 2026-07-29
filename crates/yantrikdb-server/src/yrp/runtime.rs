@@ -603,6 +603,49 @@ impl YrpHandle {
             .map(|_| ())
     }
 
+    /// RFC 031: replicate a pack MOUNT intent into the manifest. The per-node
+    /// reconciler does the physical fetch+mount; this only commits the intent
+    /// (fail-stop-safe). The caller has already stored the file + validated
+    /// the target db at propose time.
+    pub async fn mount_pack_replicated(
+        &self,
+        actor: &str,
+        database_id: i64,
+        pack_digest: String,
+        pack_name: String,
+        mounted_at: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::MountPack {
+            database_id,
+            pack_digest,
+            pack_name,
+            mounted_at,
+        };
+        self.propose_control(actor, &op)
+            .await
+            .map_err(ControlWriteError::Propose)
+            .map(|_| ())
+    }
+
+    /// RFC 031: replicate a pack UNMOUNT intent.
+    pub async fn unmount_pack_replicated(
+        &self,
+        actor: &str,
+        database_id: i64,
+        pack_digest: String,
+        unmounted_at: String,
+    ) -> Result<(), ControlWriteError> {
+        let op = super::control_op::ControlOp::UnmountPack {
+            database_id,
+            pack_digest,
+            unmounted_at,
+        };
+        self.propose_control(actor, &op)
+            .await
+            .map_err(ControlWriteError::Propose)
+            .map(|_| ())
+    }
+
     /// Wait for the durable-apply marker to cover `index`, then read its
     /// outcome. (An `Applied` reply already implies coverage; `Duplicate`
     /// may race a lagging apply worker — poll briefly.)

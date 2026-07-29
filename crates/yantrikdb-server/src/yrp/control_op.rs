@@ -166,23 +166,35 @@ impl ControlOp {
                 buf.extend_from_slice(b"ctl:sesskey:");
                 buf.extend_from_slice(kid.as_bytes());
             }
+            // Fold the timestamp into the claim (review H-1): the claim
+            // ledger is a permanent key→index map, so a mount/unmount cycle
+            // on the SAME (db, digest) must produce DISTINCT claims — else a
+            // remount-after-unmount dedupes against the original mount's
+            // committed index, never re-appends, and the UPSERT that clears
+            // `unmounted_at` never runs. mount/unmount apply is idempotent, so
+            // per-op-unique claims are harmless.
             ControlOp::MountPack {
                 database_id,
                 pack_digest,
+                mounted_at,
                 ..
             } => {
                 buf.extend_from_slice(b"ctl:mountpack:");
                 buf.extend_from_slice(&database_id.to_le_bytes());
                 buf.extend_from_slice(pack_digest.as_bytes());
+                buf.push(b':');
+                buf.extend_from_slice(mounted_at.as_bytes());
             }
             ControlOp::UnmountPack {
                 database_id,
                 pack_digest,
-                ..
+                unmounted_at,
             } => {
                 buf.extend_from_slice(b"ctl:unmountpack:");
                 buf.extend_from_slice(&database_id.to_le_bytes());
                 buf.extend_from_slice(pack_digest.as_bytes());
+                buf.push(b':');
+                buf.extend_from_slice(unmounted_at.as_bytes());
             }
         }
         super::op::fnv1a64(&buf)
@@ -419,6 +431,36 @@ mod tests {
         };
         let bytes = op.encode().unwrap();
         assert_eq!(ControlOp::decode(&bytes).unwrap(), op);
+    }
+
+    #[test]
+    fn mount_remount_claim_keys_differ() {
+        // Review H-1: a remount of the SAME (db, digest) after an unmount must
+        // produce a DISTINCT claim (via mounted_at) so it re-appends and the
+        // clear-unmounted_at UPSERT runs — else remount silently no-ops.
+        let m1 = ControlOp::MountPack {
+            database_id: 1,
+            pack_digest: "d".repeat(64),
+            pack_name: "p".into(),
+            mounted_at: "2026-07-29T00:00:00Z".into(),
+        };
+        let m2 = ControlOp::MountPack {
+            database_id: 1,
+            pack_digest: "d".repeat(64),
+            pack_name: "p".into(),
+            mounted_at: "2026-07-29T00:05:00Z".into(), // later remount
+        };
+        let u = ControlOp::UnmountPack {
+            database_id: 1,
+            pack_digest: "d".repeat(64),
+            unmounted_at: "2026-07-29T00:02:00Z".into(),
+        };
+        assert_ne!(
+            m1.claim_key(),
+            m2.claim_key(),
+            "remount must be a new claim"
+        );
+        assert_ne!(m1.claim_key(), u.claim_key(), "mount vs unmount distinct");
     }
 
     #[test]

@@ -155,10 +155,14 @@ impl PackReconciler {
             Some(r) => r,
             None => return Ok(()), // orphan manifest row (db gone) — ignore
         };
-        let engine = match self.pool.get_engine(&db_record) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(db_id, error = %e, "engine load failed; packs pending");
+        // Lazy engine load can open SQLite / build an index — keep it off the
+        // async runtime (review M-1).
+        let pool = self.pool.clone();
+        let rec = db_record.clone();
+        let engine = match tokio::task::spawn_blocking(move || pool.get_engine(&rec)).await {
+            Ok(Ok(e)) => e,
+            _ => {
+                tracing::warn!(db_id, "engine load failed; packs pending");
                 let mut st = DbPackStatus::default();
                 st.pending = wanted.iter().map(|(d, _)| d.clone()).collect();
                 self.status.set(db_id, st);
@@ -167,6 +171,26 @@ impl PackReconciler {
         };
 
         let wanted_digests: BTreeSet<&str> = wanted.iter().map(|(d, _)| d.as_str()).collect();
+        // L-3: a pack no longer in this db's manifest is recoverable — clear any
+        // quarantine/attempt state so an operator can fix + re-upload + remount.
+        {
+            let stale: Vec<(i64, String)> = self
+                .quarantine
+                .read()
+                .iter()
+                .filter(|(d, dg)| *d == db_id && !wanted_digests.contains(dg.as_str()))
+                .cloned()
+                .collect();
+            if !stale.is_empty() {
+                let mut q = self.quarantine.write();
+                for k in &stale {
+                    q.remove(k);
+                    self.attempts.lock().remove(k);
+                }
+                drop(q);
+                self.persist_quarantine();
+            }
+        }
         // Current physical mounts (digest recovered from the file path).
         let mounted = engine.mounted_packs();
         let mut mounted_by_digest: BTreeMap<String, String> = BTreeMap::new(); // digest -> pack_id
@@ -176,10 +200,13 @@ impl PackReconciler {
             }
         }
 
-        // 1. Unmount anything mounted that the manifest no longer wants.
+        // 1. Unmount anything mounted that the manifest no longer wants
+        //    (unmount frees the HNSW — keep it off the async runtime, M-1).
         for (digest, pack_id) in &mounted_by_digest {
             if !wanted_digests.contains(digest.as_str()) {
-                let _ = engine.unmount_pack(pack_id);
+                let engine_u = engine.clone();
+                let pid = pack_id.clone();
+                let _ = tokio::task::spawn_blocking(move || engine_u.unmount_pack(&pid)).await;
             }
         }
 
@@ -201,8 +228,26 @@ impl PackReconciler {
                     continue;
                 }
             }
+            // M-2: re-check the manifest immediately before mounting — an
+            // UnmountPack may have committed since the tick's snapshot, and we
+            // must not mount (then serve) a pack the cluster just unmounted.
+            let still_wanted = self
+                .control
+                .lock()
+                .active_pack_mounts_for(db_id)
+                .map(|rows| rows.iter().any(|r| &r.pack_digest == digest))
+                .unwrap_or(false);
+            if !still_wanted {
+                continue;
+            }
             // Physical mount under catch_unwind — a pack that panics the engine
-            // must not take down the process (C1).
+            // must not take down the PROCESS (C1). Known limitation (review
+            // M-3): catch_unwind + quarantine protect the cluster from
+            // crash-looping, but a panic partway through mount_pack could leave
+            // THIS tenant's shared engine with a poisoned lock / half-built
+            // index for the process lifetime; true isolation is an engine-side
+            // concern (mount in a child process / arena). The upload size cap +
+            // the engine's own structural vetting make this unlikely in practice.
             let path = match self.store.path(digest) {
                 Some(p) => p.to_string_lossy().to_string(),
                 None => continue,

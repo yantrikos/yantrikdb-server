@@ -3536,6 +3536,9 @@ async fn admin_pack_unmount(
     AxumPath((db_id, digest)): AxumPath<(i64, String)>,
 ) -> Result<(StatusCode, Json<Value>), AppError> {
     let actor = require_role(&state, &headers, Role::Admin).await?;
+    if !crate::pack_store::PackStore::is_valid_digest(&digest) {
+        return Err(app_error(StatusCode::BAD_REQUEST, "malformed digest"));
+    }
     let now = chrono::Utc::now().to_rfc3339();
     if let Some(yrp) = &state.yrp {
         yrp.unmount_pack_replicated(&actor.name, db_id, digest.clone(), now)
@@ -6133,7 +6136,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(
             Router::new()
                 .route("/v1/admin/packs", post(admin_pack_upload))
+                // BOTH limits must be raised: tower-http's RequestBodyLimitLayer
+                // AND axum's own DefaultBodyLimit (default 2 MB), which governs
+                // the `Bytes` extractor independently (review H-2).
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(
+                    PACK_MAX_UPLOAD_BYTES + 1024,
+                ))
+                .layer(axum::extract::DefaultBodyLimit::max(
                     PACK_MAX_UPLOAD_BYTES + 1024,
                 ))
                 .with_state(state),

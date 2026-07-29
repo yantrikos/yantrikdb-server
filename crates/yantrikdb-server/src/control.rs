@@ -131,6 +131,21 @@ impl ControlDb {
                 target     TEXT NOT NULL,
                 at         TEXT NOT NULL
             );
+
+            -- RFC 031: replicated pack MOUNT MANIFEST — the cluster's intent
+            -- of which pack (by content digest) is mounted into which database.
+            -- Deliberately NO foreign key / no validation (review H3): manifest
+            -- apply must be an unconditional idempotent UPSERT that can never
+            -- fail on committed input and fence the cluster. The large pack
+            -- FILES ride out-of-band (content-addressed store), never the log.
+            CREATE TABLE IF NOT EXISTS db_packs (
+                database_id  INTEGER NOT NULL,
+                pack_digest  TEXT NOT NULL,
+                pack_name    TEXT NOT NULL,
+                mounted_at   TEXT NOT NULL,
+                unmounted_at TEXT,
+                PRIMARY KEY (database_id, pack_digest)
+            );
             ",
         )?;
         Ok(())
@@ -587,6 +602,79 @@ impl ControlDb {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    // ── RFC 031: pack mount manifest (unconditional, fail-stop-safe) ──
+
+    /// Apply a replicated `MountPack`: UPSERT the manifest row and CLEAR
+    /// `unmounted_at` (so a remount-after-unmount takes — L1). Unconditional:
+    /// no FK, no db-existence check, nothing that can fail on committed input
+    /// (H3). An orphaned row (db since gone) is harmless — the reconciler
+    /// no-ops it.
+    pub fn apply_mount_pack(
+        &self,
+        database_id: i64,
+        pack_digest: &str,
+        pack_name: &str,
+        mounted_at: &str,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO db_packs (database_id, pack_digest, pack_name, mounted_at, unmounted_at)
+             VALUES (?1, ?2, ?3, ?4, NULL)
+             ON CONFLICT(database_id, pack_digest) DO UPDATE SET
+                pack_name = excluded.pack_name, mounted_at = excluded.mounted_at,
+                unmounted_at = NULL",
+            params![database_id, pack_digest, pack_name, mounted_at],
+        )?;
+        Ok(())
+    }
+
+    /// Apply a replicated `UnmountPack`: soft-unmount (idempotent).
+    pub fn apply_unmount_pack(
+        &self,
+        database_id: i64,
+        pack_digest: &str,
+        unmounted_at: &str,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE db_packs SET unmounted_at = ?3
+             WHERE database_id = ?1 AND pack_digest = ?2 AND unmounted_at IS NULL",
+            params![database_id, pack_digest, unmounted_at],
+        )?;
+        Ok(())
+    }
+
+    /// Every ACTIVE (not-unmounted) mount in the manifest — the reconciler's
+    /// desired state across all databases.
+    pub fn active_pack_mounts(&self) -> anyhow::Result<Vec<PackMountRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT database_id, pack_digest, pack_name FROM db_packs
+             WHERE unmounted_at IS NULL ORDER BY database_id, pack_digest",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(PackMountRow {
+                database_id: r.get(0)?,
+                pack_digest: r.get(1)?,
+                pack_name: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Active mounts for one database (pack-context / recall pending signal).
+    pub fn active_pack_mounts_for(&self, database_id: i64) -> anyhow::Result<Vec<PackMountRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT database_id, pack_digest, pack_name FROM db_packs
+             WHERE database_id = ?1 AND unmounted_at IS NULL ORDER BY pack_digest",
+        )?;
+        let rows = stmt.query_map(params![database_id], |r| {
+            Ok(PackMountRow {
+                database_id: r.get(0)?,
+                pack_digest: r.get(1)?,
+                pack_name: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     fn map_admin_user(row: &rusqlite::Row) -> rusqlite::Result<AdminUserRecord> {
         Ok(AdminUserRecord {
             username: row.get(0)?,
@@ -662,6 +750,14 @@ impl ControlDb {
 pub struct ControlSnapshot {
     pub databases: Vec<DatabaseRecord>,
     pub tokens: Vec<TokenSnapshot>,
+}
+
+/// RFC 031 — an active pack mount from the replicated manifest.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PackMountRow {
+    pub database_id: i64,
+    pub pack_digest: String,
+    pub pack_name: String,
 }
 
 /// RFC 030 (M1) — a replicated audit row (newest-first in the audit view).

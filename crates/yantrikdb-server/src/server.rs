@@ -72,6 +72,11 @@ pub struct AppState {
     /// still authenticate inline via `control.tokens` (same data, no
     /// `Principal`).
     pub auth_provider: Arc<dyn auth::AuthProvider>,
+    /// RFC 031: content-addressed pack file store (`data_dir/packs/`).
+    pub pack_store: crate::pack_store::PackStore,
+    /// RFC 031: per-node physical pack-mount status (mounted/pending/poisoned),
+    /// shared with the reconciler; read on health / recall / admin paths.
+    pub pack_status: Arc<crate::pack_reconciler::PackStatus>,
 }
 
 /// Maximum concurrent blocking operations before shedding load.

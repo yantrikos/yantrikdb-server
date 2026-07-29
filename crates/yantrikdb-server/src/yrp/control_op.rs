@@ -88,6 +88,20 @@ pub enum ControlOp {
     /// RFC 030 (H3): seed/rotate the replicated admin session-signing key.
     /// `value` is base64 of 32 random bytes; `kid` identifies it in tokens.
     SetAdminSessionKey { kid: String, value: String },
+    /// RFC 031: mount a pack (by content digest) into a database — the
+    /// replicated *intent*; the per-node reconciler fetches the file + mounts.
+    MountPack {
+        database_id: i64,
+        pack_digest: String,
+        pack_name: String,
+        mounted_at: String,
+    },
+    /// RFC 031: unmount a pack from a database.
+    UnmountPack {
+        database_id: i64,
+        pack_digest: String,
+        unmounted_at: String,
+    },
 }
 
 impl ControlOp {
@@ -152,6 +166,24 @@ impl ControlOp {
                 buf.extend_from_slice(b"ctl:sesskey:");
                 buf.extend_from_slice(kid.as_bytes());
             }
+            ControlOp::MountPack {
+                database_id,
+                pack_digest,
+                ..
+            } => {
+                buf.extend_from_slice(b"ctl:mountpack:");
+                buf.extend_from_slice(&database_id.to_le_bytes());
+                buf.extend_from_slice(pack_digest.as_bytes());
+            }
+            ControlOp::UnmountPack {
+                database_id,
+                pack_digest,
+                ..
+            } => {
+                buf.extend_from_slice(b"ctl:unmountpack:");
+                buf.extend_from_slice(&database_id.to_le_bytes());
+                buf.extend_from_slice(pack_digest.as_bytes());
+            }
         }
         super::op::fnv1a64(&buf)
     }
@@ -176,6 +208,29 @@ impl ControlOp {
             ControlOp::SetUserPassword { username, .. } => ("set_user_password", username.clone()),
             ControlOp::DisableUser { username, .. } => ("disable_user", username.clone()),
             ControlOp::SetAdminSessionKey { kid, .. } => ("rotate_session_key", kid.clone()),
+            ControlOp::MountPack {
+                database_id,
+                pack_name,
+                pack_digest,
+                ..
+            } => (
+                "mount_pack",
+                format!(
+                    "db #{database_id} {pack_name} [{}]",
+                    &pack_digest[..pack_digest.len().min(12)]
+                ),
+            ),
+            ControlOp::UnmountPack {
+                database_id,
+                pack_digest,
+                ..
+            } => (
+                "unmount_pack",
+                format!(
+                    "db #{database_id} [{}]",
+                    &pack_digest[..pack_digest.len().min(12)]
+                ),
+            ),
         }
     }
 }
@@ -322,6 +377,24 @@ impl ControlApplySink {
             ControlOp::SetAdminSessionKey { kid, value } => db
                 .apply_set_admin_session_key(kid, value)
                 .map_err(|e| format!("control apply SetAdminSessionKey({kid}): {e}")),
+            // RFC 031: manifest-only apply (unconditional UPSERT — H3). The
+            // physical mount is the reconciler's job, decoupled from this
+            // fail-stop-safe consensus write.
+            ControlOp::MountPack {
+                database_id,
+                pack_digest,
+                pack_name,
+                mounted_at,
+            } => db
+                .apply_mount_pack(*database_id, pack_digest, pack_name, mounted_at)
+                .map_err(|e| format!("control apply MountPack(db={database_id}): {e}")),
+            ControlOp::UnmountPack {
+                database_id,
+                pack_digest,
+                unmounted_at,
+            } => db
+                .apply_unmount_pack(*database_id, pack_digest, unmounted_at)
+                .map_err(|e| format!("control apply UnmountPack(db={database_id}): {e}")),
         }
     }
 }

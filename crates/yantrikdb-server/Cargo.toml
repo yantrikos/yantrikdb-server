@@ -27,7 +27,7 @@ path = "src/main.rs"
 # provenance gate + schema v37 (correct→200, reembed-deferral→409). The engine
 # owns no timer thread — the host drives run_maintenance_cycle() cadence
 # (RFC 027 / #55); session_digest + chain_head wired in v0.8.25 (RFC 023 / #56).
-yantrikdb = { version = "0.10.1", git = "https://github.com/yantrikos/yantrikdb.git", tag = "v0.10.1" }
+yantrikdb = { version = "0.11.2", git = "https://github.com/yantrikos/yantrikdb.git", tag = "v0.11.2" }
 yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime

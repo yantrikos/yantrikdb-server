@@ -554,6 +554,134 @@ async fn two_node_cluster_over_http_replicates_keyed_and_unkeyed_writes() {
             .any(|e| e["action"] == json!("create_user") && e["actor"] == json!("master-token")),
         "audit must attribute the bootstrap create_user to master-token: {resp}"
     );
+
+    // ── RFC 031: clustered packs — manifest replication + peer file-transfer
+    //    + reconciler poison-quarantine, all in one flow. (A real sealed pack
+    //    mounting + recall is covered by the engine's own pack tests; here we
+    //    prove the SERVER's novel surface with a deliberately-invalid pack so
+    //    the poison-quarantine path — the review's CRITICAL C1 — is exercised.)
+    let tenant_db_id = leader
+        .state
+        .control
+        .lock()
+        .get_database(TENANT)
+        .unwrap()
+        .unwrap()
+        .id;
+
+    // Upload arbitrary bytes as a "pack" to the leader (upload stores by
+    // digest; validity is judged at mount).
+    let client = reqwest::Client::new();
+    let junk = b"not actually a sealed sqlite pack \x00\x01\x02".to_vec();
+    let up = client
+        .post(format!("{}/v1/admin/packs", leader.base))
+        .bearer_auth(SECRET)
+        .header("content-type", "application/octet-stream")
+        .body(junk.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(up.status(), reqwest::StatusCode::OK, "pack upload");
+    let pack_digest = up.json::<Value>().await.unwrap()["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Peer-transfer: the leader serves the file to a cluster_secret holder,
+    // and refuses without it.
+    let noauth = client
+        .get(format!("{}/v1/packs/{}", leader.base, pack_digest))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(noauth.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Mount into the tenant db via the leader → 202 accepted (reconciling).
+    let (st, _) = post_json(
+        &leader.base,
+        SECRET,
+        &format!("/v1/admin/databases/{tenant_db_id}/packs"),
+        &json!({ "digest": pack_digest, "name": "junk-pack" }),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::ACCEPTED, "mount → 202");
+
+    // The MANIFEST replicates to the follower (the consensus half).
+    {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let rows = follower
+                .state
+                .control
+                .lock()
+                .active_pack_mounts_for(tenant_db_id)
+                .unwrap();
+            if rows.iter().any(|r| r.pack_digest == pack_digest) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "pack mount manifest never replicated to follower"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    // Drive the FOLLOWER's reconciler: it fetches the file from the leader
+    // (peer-transfer), tries to mount the invalid pack, and after MAX_ATTEMPTS
+    // terminally quarantines it — WITHOUT crashing the process (C1).
+    struct LeaderFetcher(String);
+    impl crate::pack_reconciler::PackFetcher for LeaderFetcher {
+        fn leader_base_and_secret(&self) -> Option<(String, String)> {
+            Some((self.0.clone(), SECRET.to_string()))
+        }
+    }
+    let follower_dir = follower.state.data_dir.clone();
+    let reconciler = crate::pack_reconciler::PackReconciler::new(
+        follower.state.control.clone(),
+        follower.state.pack_store.clone(),
+        follower.state.pool.clone(),
+        follower.state.pack_status.clone(),
+        Some(Arc::new(LeaderFetcher(leader.base.clone()))),
+        &follower_dir,
+    );
+    for _ in 0..4 {
+        reconciler.reconcile_once().await.unwrap();
+    }
+
+    // Peer-transfer worked: the follower now holds the file.
+    assert!(
+        follower.state.pack_store.has(&pack_digest),
+        "follower must have fetched the pack file from the leader"
+    );
+    // Poison-quarantine worked: the invalid pack is terminally poisoned on the
+    // follower, and the cluster is still up (we're still running).
+    let status = follower.state.pack_status.get(tenant_db_id);
+    assert!(
+        status.poisoned.contains(&pack_digest),
+        "invalid pack must be quarantined (poisoned), got {status:?}"
+    );
+
+    // Unmount replicates too: the manifest row clears on the follower.
+    let (st, _) = post_json(
+        &follower.base,
+        SECRET,
+        &format!("/v1/admin/databases/{tenant_db_id}/packs"),
+        &json!({ "digest": pack_digest }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        "pack mount on a follower must redirect to the leader"
+    );
+    let (st, _) = get_json(
+        &leader.base,
+        SECRET,
+        &format!("/v1/admin/databases/{tenant_db_id}/packs"),
+    )
+    .await;
+    assert_eq!(st, reqwest::StatusCode::OK, "list mounted packs");
 }
 
 async fn spawn_node_on(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node {
@@ -653,6 +781,8 @@ async fn spawn_node_inner(node_id: u64, peers: Vec<YrpPeer>, port: u16) -> Node 
         jobs,
         data_dir,
         auth_provider,
+        pack_store: crate::pack_store::PackStore::open(tmp.path()).unwrap(),
+        pack_status: std::sync::Arc::new(crate::pack_reconciler::PackStatus::default()),
     });
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))

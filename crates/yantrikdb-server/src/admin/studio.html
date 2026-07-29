@@ -170,6 +170,7 @@
     {id:'cluster',label:'Cluster',min:null},
     {id:'databases',label:'Databases',min:'readonly'},
     {id:'tokens',label:'Tokens',min:'readonly'},
+    {id:'packs',label:'Packs',min:'readonly'},
     {id:'users',label:'Users',min:'owner'},
     {id:'audit',label:'Audit',min:'admin'},
   ];
@@ -190,7 +191,7 @@
   }
 
   // ── render dispatch ──
-  function render(){ ({cluster:renderCluster,databases:renderDatabases,tokens:renderTokens,users:renderUsers,audit:renderAudit}[cur]||renderCluster)(); }
+  function render(){ ({cluster:renderCluster,databases:renderDatabases,tokens:renderTokens,packs:renderPacks,users:renderUsers,audit:renderAudit}[cur]||renderCluster)(); }
 
   // ── Cluster (topology, public) ──
   let topoTimer=null;
@@ -298,6 +299,55 @@
   window.disableUser=async function(u){ if(!confirm(`Disable ${u}? Their sessions die immediately.`))return;
     try{ const r=await api('/v1/admin/users/'+encodeURIComponent(u)+'/disable',{method:'POST',body:JSON.stringify({})});
       if(!r.disabled) toast('Refused (owner-floor): cannot disable the last owner','bad'); else toast(`${u} disabled`,'ok'); renderUsers(); }catch(e){toast(e.message,'bad');} };
+
+  // ── Packs ──
+  async function renderPacks(){
+    $('appview').innerHTML=`<div class="panel"><h2>Uploaded packs</h2><div id="packlist" class="empty">Loading…</div>
+      ${can('admin')?`<div class="form"><input type="file" id="packfile" accept=".ydbpack"/><button class="btn" onclick="uploadPack()">Upload</button></div>
+      <div class="note">A pack is a sealed .ydbpack a database mounts to gain knowledge. Files replicate to every node; mounts survive failover.</div>`:''}</div>
+      <div class="panel"><h2>Mount into a database</h2>
+        <div class="form"><select id="pack-db" onchange="loadDbPacks()"></select></div>
+        <div id="dbpacks" class="empty" style="margin-top:.8rem">Select a database.</div>
+      </div>`;
+    try{
+      const [{packs},{databases}]=await Promise.all([api('/v1/admin/packs'),api('/v1/admin/databases')]);
+      window._packs=packs; window._dbs=databases;
+      $('packlist').innerHTML=packs.length?`<table><thead><tr><th>Digest</th><th>Size</th></tr></thead><tbody>${
+        packs.map(p=>`<tr><td class="mono">${esc(p.digest.slice(0,16))}…</td><td class="mono">${(p.size/1024|0)} KB</td></tr>`).join('')}</tbody></table>`
+        :'<div class="empty">No packs uploaded yet.</div>';
+      $('pack-db').innerHTML=`<option value="">— choose database —</option>`+databases.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
+    }catch(e){ $('packlist').innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
+  }
+  window.uploadPack=async function(){
+    const f=$('packfile').files[0]; if(!f){toast('Choose a .ydbpack file','bad');return;}
+    try{
+      const buf=await f.arrayBuffer();
+      const r=await fetch('/v1/admin/packs',{method:'POST',headers:{'Authorization':'Bearer '+tok(),'Content-Type':'application/octet-stream'},body:buf});
+      const b=await r.json().catch(()=>({})); if(!r.ok) throw new Error(b.message||b.error||('HTTP '+r.status));
+      toast(`Uploaded (${b.digest.slice(0,12)}…)`,'ok'); renderPacks();
+    }catch(e){toast(e.message,'bad');}
+  };
+  window.loadDbPacks=async function(){
+    const id=Number($('pack-db').value); if(!id){$('dbpacks').innerHTML='<div class="empty">Select a database.</div>';return;}
+    try{
+      const {manifest,status}=await api('/v1/admin/databases/'+id+'/packs');
+      const state=d=>status.mounted.includes(d)?'<span class="badge follower">mounted</span>'
+        :status.poisoned.includes(d)?'<span class="badge quarantined">poisoned</span>':'<span class="badge witness">pending</span>';
+      const mountedDigests=new Set(manifest.map(m=>m.pack_digest));
+      const avail=(window._packs||[]).filter(p=>!mountedDigests.has(p.digest));
+      $('dbpacks').innerHTML=`${manifest.length?`<table><thead><tr><th>Pack</th><th>Digest</th><th>State</th>${can('admin')?'<th></th>':''}</tr></thead><tbody>${
+        manifest.map(m=>`<tr><td><b>${esc(m.pack_name)}</b></td><td class="mono">${esc(m.pack_digest.slice(0,12))}…</td><td>${state(m.pack_digest)}</td>
+          ${can('admin')?`<td class="rowacts"><button class="btn danger sm" onclick="unmountPack(${id},'${esc(m.pack_digest)}')">Unmount</button></td>`:''}</tr>`).join('')}</tbody></table>`
+        :'<div class="empty">No packs mounted in this database.</div>'}
+        ${can('admin')&&avail.length?`<div class="form" style="margin-top:.8rem"><select id="mount-pick">${avail.map(p=>`<option value="${p.digest}">${esc(p.digest.slice(0,16))}…</option>`).join('')}</select>
+          <input id="mount-name" placeholder="label (optional)" style="flex:.7"/><button class="btn" onclick="mountPack(${id})">Mount</button></div>`:''}`;
+    }catch(e){ $('dbpacks').innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
+  };
+  window.mountPack=async function(id){ const digest=$('mount-pick').value; const name=$('mount-name').value.trim();
+    try{ await api('/v1/admin/databases/'+id+'/packs',{method:'POST',body:JSON.stringify(name?{digest,name}:{digest})});
+      toast('Mount accepted — reconciling across the cluster','ok'); loadDbPacks(); }catch(e){toast(e.message,'bad');} };
+  window.unmountPack=async function(id,digest){ if(!confirm('Unmount this pack?'))return;
+    try{ await api('/v1/admin/databases/'+id+'/packs/'+digest,{method:'DELETE'}); toast('Unmount accepted','ok'); loadDbPacks(); }catch(e){toast(e.message,'bad');} };
 
   // ── Audit ──
   async function renderAudit(){

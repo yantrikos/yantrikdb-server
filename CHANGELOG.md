@@ -5,6 +5,40 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-07-29
+
+**Clustered packs (RFC 031).** Exposes the engine's pack feature — sealed,
+mountable/detachable `.ydbpack` knowledge — through the server, correctly
+across a cluster: mount once and it is consistent on every node and survives
+failover, the same guarantee tokens/databases got in RFC 029.
+
+### Added — RFC 031 (#84)
+- **Replicated mount manifest** — the small "which pack is mounted into which
+  database" intent replicates through YRP consensus (`db_packs` table +
+  `MountPack`/`UnmountPack` control ops, fail-stop-safe unconditional UPSERT).
+- **Content-addressed pack file store** (`data_dir/packs/<blake3>.ydbpack`,
+  path-traversal-safe) with **out-of-band peer transfer** — large pack files
+  never ride the consensus log; a node fetches a missing file from the leader,
+  digest-verified.
+- **Best-effort reconciler** with **terminal poison-quarantine**: a mount runs
+  under `catch_unwind` and, on panic or repeated failure, is quarantined
+  (persisted, survives restart) so one bad pack can never crash-loop the
+  cluster. Per-database `mounted`/`pending`/`poisoned` status; mount returns
+  **202 reconciling** (never a silent "mounted").
+- **Endpoints** (RBAC per RFC 030): `POST/GET /v1/admin/packs` (upload / list),
+  `GET/POST/DELETE /v1/admin/databases/{id}/packs` (status / mount / unmount),
+  `GET /v1/packs/{digest}` (peer transfer), `GET /v1/pack-context`.
+- **Studio Packs tab** — upload, mount/unmount per database, live status.
+- `recall` is unchanged: the engine auto-includes mounted-pack candidates.
+
+### Changed — engine v0.11.2
+- Embedded engine bumped v0.10.1 → **v0.11.2** (packs + Windows-wheel and
+  embedder-fingerprint fixes). Verified: server suite green before/after.
+
+Two adversarial reviews (design + code) preceded merge; findings folded in.
+Upgrade-order: all nodes on 0.14.0 before the first pack is mounted (new
+`MountPack` control ops); compaction stays disabled (RFC 029 F1).
+
 ## [0.13.1] — 2026-07-28
 
 **Multi-user admin RBAC + enterprise studio (RFC 030).** Replaces the single

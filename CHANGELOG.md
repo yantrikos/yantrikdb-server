@@ -5,6 +5,30 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] — 2026-07-30
+
+**Engine bump 0.11.2 → 0.12.0.** Additive from the server's contract POV — the
+server builds clean and the full suite is green against 0.12.0; no server API
+or behavior changes.
+
+### Changed
+- **Engine `yantrikdb` 0.11.2 → 0.12.0** (via 0.11.3). What the server gains:
+  - **Packs now retrieve with their author-measured settings.** 0.11.3 lets a
+    pack carry the `top_k` / retrieval config its author tuned and measured;
+    mounted packs inherit it automatically at mount — **no server change**, so
+    every clustered pack (RFC 031) now recalls with its tuned settings for free.
+  - **New engine capabilities available but not yet surfaced:** `recall_as_of`
+    (bitemporal — "what did this database believe at time *t*?") and a lean
+    recall projection. These are candidates for a future server endpoint
+    (RFC-first); this release only bumps the engine, it does not expose them.
+
+### Notes
+- The real-process YRP `chaos_test::torn_state_boots_quarantined_then_rejoins_via_grant`
+  is timing-flaky on some hosts and unrelated to this bump (it fails identically
+  on 0.11.2). The **property it checks — a torn `yrp.state` quarantines on
+  boot — is proven by the deterministic sim** (`ct141_torn_node_quarantines…`)
+  and the bootstrap unit test (`torn_hard_state_quarantines`), both green.
+
 ## [0.14.0] — 2026-07-29
 
 **Clustered packs (RFC 031).** Exposes the engine's pack feature — sealed,

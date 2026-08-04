@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-server"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2021"
 description = "YantrikDB database server — multi-tenant cognitive memory with wire protocol, HTTP gateway, replication, auto-failover, and at-rest encryption"
 license = "AGPL-3.0-only"
@@ -17,17 +17,17 @@ name = "yantrikdb"
 path = "src/main.rs"
 
 [dependencies]
-# Engine v0.10.1 — latest tagged release. Pinned by tag for a reproducible,
-# released dependency. v0.10.1 is the materializer idle-scan fix (#114): a
-# missing `idx_oplog_pending` on fresh installs made the drain poll scan the
-# whole oplog every tick, burning up to ~34% of a 32-core box while idle;
-# fixed by declaring the partial index in SCHEMA_SQL. Schema 37→38, ADDITIVE
-# (version stamping is forward-only; no server API/contract change, and the
-# server asserts no exact schema version). v0.10.0 carried the single-origin
-# provenance gate + schema v37 (correct→200, reembed-deferral→409). The engine
-# owns no timer thread — the host drives run_maintenance_cycle() cadence
-# (RFC 027 / #55); session_digest + chain_head wired in v0.8.25 (RFC 023 / #56).
-yantrikdb = { version = "0.11.2", git = "https://github.com/yantrikos/yantrikdb.git", tag = "v0.11.2" }
+# Engine v0.12.0 — latest tagged release. Pinned by tag for a reproducible,
+# released dependency. The 0.11.2→0.12.0 bump is ADDITIVE from the server's
+# contract POV (verified: server builds clean, full suite green): 0.12.0 adds
+# `recall_as_of` (bitemporal "what did this DB believe at time t?") and a lean
+# recall projection, neither of which the server calls yet — candidates for a
+# future server endpoint (RFC-first). 0.11.3 taught a pack to CARRY the
+# retrieval settings its author measured; the server inherits that for free at
+# mount (mounted packs now retrieve with their author-tuned settings, no server
+# change). The engine owns no timer thread — the host drives
+# run_maintenance_cycle() cadence (RFC 027 / #55).
+yantrikdb = { version = "0.12.0", git = "https://github.com/yantrikos/yantrikdb.git", tag = "v0.12.0" }
 yantrikdb-protocol = { version = "0.1.0", path = "../yantrikdb-protocol" }
 
 # Async runtime

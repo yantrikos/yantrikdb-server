@@ -5,6 +5,31 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] — 2026-07-30
+
+**Engine bump 0.12.0 → 0.12.1.** A patch bump, additive from the server's
+contract POV — server builds clean, full suite green; no server API/behavior
+change. All the gains are retrieval-**quality** work the server inherits for
+free at recall time:
+
+### Changed
+- **Engine `yantrikdb` 0.12.0 → 0.12.1** — better recall for every tenant, no
+  server code touched:
+  - **Chunked embeddings** — a record longer than the embedder's input window
+    is now findable from *any* part of its text. Previously such records were
+    silently truncated at embed time → silent retrieval loss.
+  - **The recency wall came down** — freshness now **multiplies** relevance
+    instead of adding to it, so an old-but-relevant memory is no longer buried
+    under newer noise ("relevance outranks the calendar").
+  - Graph expansion off by default + MMR diversity softened (recall tuning).
+
+### Notes
+- Same pre-existing Windows-only flake as 0.14.1 in the real-process YRP
+  `chaos_test::torn_state_boots_quarantined_then_rejoins_via_grant` (unrelated
+  to this bump; the property is proven by the deterministic sim
+  `ct141_torn_node_quarantines_…` + the dedicated `chaos-gate` CI job, both
+  green). 918/918 other tests pass.
+
 ## [0.14.1] — 2026-07-30
 
 **Engine bump 0.11.2 → 0.12.0.** Additive from the server's contract POV — the

@@ -5,6 +5,37 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] — 2026-07-30
+
+**Engine bump 0.12.1 → 0.13.1.** A minor bump (0.13.0 + 0.13.1) but verified
+additive from the server's contract POV — server builds clean, full suite green;
+no server API/behavior change. Retrieval-quality + retrieval-explainability work
+the server inherits for free at recall time:
+
+### Changed
+- **Engine `yantrikdb` 0.12.1 → 0.13.1** — better recall for every tenant, no
+  server code touched:
+  - **BM25 lexical fusion + matched-window spans** (0.13.0) — hybrid
+    lexical+vector retrieval, so an **exact phrase now surfaces** even when the
+    vector similarity alone wouldn't rank it; recall no longer misses
+    literal-string queries.
+  - **Token diet** (0.13.0) — recall stops shipping payload by the kilobyte
+    (leaner responses) + reranked recall.
+  - **Determinism fixes** (0.13.1) — a batch of cross-open determinism fixes in
+    the vector/retrieval lane (total order on claim anchors, deterministic
+    reserve band, level RNG no longer drawing entropy per open), so recall is
+    reproducible across process restarts.
+  - `tokenize()` change (apostrophe exemption removed) — can shift recall
+    ordering; verified no server recall-ordering tests regressed.
+  - A new engine **explain surface** (0.13.1) makes retrieval admission
+    inspectable without a debug build — not yet surfaced by the server; a
+    candidate for a future `/explain` endpoint (RFC-first).
+
+### Notes
+- Same pre-existing Windows-only flake in the real-process YRP `chaos_test`
+  (unrelated to this bump; property proven by the deterministic sim + the
+  `chaos-gate` CI job, both green).
+
 ## [0.14.2] — 2026-07-30
 
 **Engine bump 0.12.0 → 0.12.1.** A patch bump, additive from the server's

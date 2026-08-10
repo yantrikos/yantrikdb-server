@@ -5989,6 +5989,527 @@ async fn memory_get(
     Ok(Json(row))
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Issue #83 / RFC 032 — HTTP route parity for the six embedded-only tool
+// families (category, conversation, procedure, task, temporal, trigger) + the
+// #82 `correct` gap.
+//
+// Strategy = reads-first + honest writes:
+//   * READS are exposed everywhere (they reflect local state, never diverge).
+//   * NODE-LOCAL writes (conversation ring buffer; trigger lifecycle — triggers
+//     are GENERATED per-node by maintenance, so you must ack them on the node
+//     that holds them) are wired WITHOUT `check_writable`: they intentionally
+//     act on the serving node's local state and are not replicated.
+//   * GLOBAL writes (task add/update/delete, category learn/reset, procedure
+//     learn/reinforce, `correct`) have NO replication path yet, so they return a
+//     clear 501 instead of silently diverging. See RFC 032.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Honest 501 for a cluster-global write that has no replicated mutation path
+/// yet (RFC 032). Better than a bare 404 (issue #83's complaint) and never
+/// ships silent divergence.
+fn deferred_over_http(operation: &str) -> AppError {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "error": "not_yet_available_over_http",
+            "operation": operation,
+            "reason": "This is a cluster-global write with no replication path yet; \
+                       exposing it as a direct engine call would silently diverge \
+                       across the cluster. Available in embedded (single-node) mode; \
+                       replicated HTTP support is tracked in RFC 032.",
+            "deferred": true,
+        })),
+    )
+}
+
+/// Max rows a single parity read may request (review F5 — an unbounded LIMIT
+/// lets one request force a huge scan + allocation). Mirrors the spirit of
+/// recall's `hard_top_k_cap`.
+const MAX_READ_LIMIT: usize = 1000;
+/// Max lookback/lookahead window for temporal reads (~10 years).
+const MAX_TEMPORAL_DAYS: f64 = 3650.0;
+
+fn q_f64(params: &std::collections::HashMap<String, String>, k: &str, default: f64) -> f64 {
+    params
+        .get(k)
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(default)
+}
+/// Parse a `usize` query param, defaulting when absent/unparseable, and hard-cap
+/// it at [`MAX_READ_LIMIT`] so an attacker-supplied `?limit=1e9` can't force a
+/// giant scan (review F5).
+fn q_limit(params: &std::collections::HashMap<String, String>, k: &str, default: usize) -> usize {
+    params
+        .get(k)
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(default)
+        .min(MAX_READ_LIMIT)
+}
+/// Optional client-supplied `query_embedding` (BYO-embedding / server-pool
+/// deployments — review F3), so the embed-backed reads work where the engine
+/// has no runtime embedder.
+fn parse_query_embedding(body: &Value) -> Option<Vec<f32>> {
+    body.get("query_embedding")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_f64().map(|f| f as f32))
+                .collect()
+        })
+}
+/// RFC 009 hard top_k cap, mapped to an AppError — the parity recall-equivalent
+/// endpoints (`temporal.as_of`, `procedure.surface`) run HNSW like `/v1/recall`
+/// and must take the same admission (review F2).
+fn check_recall_top_k(state: &AppState, top_k: usize) -> Result<(), AppError> {
+    crate::admission::check_top_k(top_k, state.admission.cfg.hard_top_k_cap).map_err(|reason| {
+        let status = StatusCode::from_u16(reason.http_status()).unwrap_or(StatusCode::BAD_REQUEST);
+        (
+            status,
+            Json(json!({
+                "error": reason.message(),
+                "reason": reason.metric_label(),
+                "hard_top_k_cap": state.admission.cfg.hard_top_k_cap,
+            })),
+        )
+    })
+}
+fn engine_err(e: impl std::fmt::Display) -> AppError {
+    app_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+fn read_engine(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<EngineHandle, AppError> {
+    let (_, engine) = resolve_engine(
+        state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )?;
+    Ok(engine)
+}
+
+// ── temporal (all reads) ──────────────────────────────────────────────────
+
+async fn temporal_stale(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("temporal_stale");
+    let engine = read_engine(&state, &headers)?;
+    let ns = params.get("namespace").map(|s| s.as_str());
+    let rows = engine
+        .stale(
+            q_f64(&params, "days", 30.0).clamp(0.0, MAX_TEMPORAL_DAYS),
+            q_limit(&params, "limit", 20),
+            ns,
+        )
+        .map_err(engine_err)?;
+    Ok(Json(json!({ "memories": rows, "count": rows.len() })))
+}
+
+async fn temporal_upcoming(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("temporal_upcoming");
+    let engine = read_engine(&state, &headers)?;
+    let ns = params.get("namespace").map(|s| s.as_str());
+    let rows = engine
+        .upcoming(
+            q_f64(&params, "days", 7.0).clamp(0.0, MAX_TEMPORAL_DAYS),
+            q_limit(&params, "limit", 20),
+            ns,
+        )
+        .map_err(engine_err)?;
+    Ok(Json(json!({ "memories": rows, "count": rows.len() })))
+}
+
+/// POST because it embeds a query. `as_of` is a unix-seconds float. Bitemporal
+/// recall (engine ≥ 0.12; we pin 0.13.1 so it is always present).
+async fn temporal_as_of(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("temporal_as_of");
+    let query = body["query"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'query'"))?
+        .to_string();
+    let as_of = body["as_of"]
+        .as_f64()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'as_of' (unix seconds)"))?;
+    let top_k = body.get("top_k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    // Recall-equivalent: same RFC 009 admission as /v1/recall (F2).
+    check_recall_top_k(&state, top_k)?;
+    let _permits = state
+        .admission
+        .acquire_recall_permits(false)
+        .await
+        .map_err(|reason| {
+            let status = StatusCode::from_u16(reason.http_status())
+                .unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+            (
+                status,
+                Json(json!({ "error": reason.message(), "reason": reason.metric_label() })),
+            )
+        })?;
+    let ns = body
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let mt = body
+        .get("memory_type")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let engine = read_engine(&state, &headers)?;
+    let emb = resolve_read_embedding(&state, &engine, &query, parse_query_embedding(&body)).await?;
+    // HNSW on a blocking pool, never the reactor (F1).
+    let engine2 = engine.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        engine2.recall_as_of(&emb, top_k, as_of, ns.as_deref(), mt.as_deref())
+    })
+    .await
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("recall_as_of task panicked: {e}"),
+        )
+    })?
+    .map_err(engine_err)?;
+    Ok(Json(
+        json!({ "results": rows, "count": rows.len(), "as_of": as_of }),
+    ))
+}
+
+/// Embedding resolution for the recall-equivalent parity reads (F3): prefer a
+/// client-supplied vector, then the server-pool embedder, then the engine's own
+/// embedder — so these work in BYO-embedding and server-pool deployments, not
+/// only where the engine carries a runtime embedder. All embedder work runs on
+/// a blocking pool (F1).
+async fn resolve_read_embedding(
+    state: &AppState,
+    engine: &EngineHandle,
+    query: &str,
+    client_supplied: Option<Vec<f32>>,
+) -> Result<Vec<f32>, AppError> {
+    if let Some(v) = resolve_embedding(state, query, client_supplied).await? {
+        return Ok(v);
+    }
+    // No client vector and no server-pool embedder — fall back to the engine's.
+    let engine2 = engine.clone();
+    let q = query.to_string();
+    tokio::task::spawn_blocking(move || engine2.embed(&q))
+        .await
+        .map_err(|e| {
+            app_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("embed task panicked: {e}"),
+            )
+        })?
+        .map_err(|e| {
+            app_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("no embedder available (supply 'query_embedding'): {e}"),
+            )
+        })
+}
+
+// ── category (reads; learn/reset deferred) ────────────────────────────────
+
+async fn category_list(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("category_list");
+    let engine = read_engine(&state, &headers)?;
+    let cats = engine.substitution_categories().map_err(engine_err)?;
+    Ok(Json(json!({ "categories": cats, "count": cats.len() })))
+}
+
+async fn category_members(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("category_members");
+    let engine = read_engine(&state, &headers)?;
+    let members = engine.substitution_members(&name).map_err(engine_err)?;
+    Ok(Json(
+        json!({ "category": name, "members": members, "count": members.len() }),
+    ))
+}
+
+async fn category_learn_deferred() -> AppResult {
+    Err(deferred_over_http("category.learn"))
+}
+async fn category_reset_deferred() -> AppResult {
+    Err(deferred_over_http("category.reset"))
+}
+
+// ── task (reads; add/update/delete deferred) ──────────────────────────────
+
+async fn task_list_h(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("task_list");
+    let engine = read_engine(&state, &headers)?;
+    let ns = params
+        .get("namespace")
+        .map(|s| s.as_str())
+        .unwrap_or("default");
+    let status = params.get("status").map(|s| s.as_str());
+    let tasks = engine.task_list(ns, status).map_err(engine_err)?;
+    Ok(Json(json!({ "tasks": tasks, "count": tasks.len() })))
+}
+
+async fn task_get_h(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("task_get");
+    let engine = read_engine(&state, &headers)?;
+    match engine.task_get(&id).map_err(engine_err)? {
+        Some(task) => Ok(Json(json!({ "task": task }))),
+        None => Err(app_error(
+            StatusCode::NOT_FOUND,
+            format!("task '{id}' not found"),
+        )),
+    }
+}
+
+async fn task_add_deferred() -> AppResult {
+    Err(deferred_over_http("task.add"))
+}
+async fn task_update_deferred() -> AppResult {
+    Err(deferred_over_http("task.update"))
+}
+async fn task_delete_deferred() -> AppResult {
+    Err(deferred_over_http("task.delete"))
+}
+
+// ── procedure (surface read; learn/reinforce deferred) ────────────────────
+
+async fn procedure_surface(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("procedure_surface");
+    let query = body["query"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'query'"))?
+        .to_string();
+    let top_k = body.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    check_recall_top_k(&state, top_k)?; // F2
+    let _permits = state
+        .admission
+        .acquire_recall_permits(false)
+        .await
+        .map_err(|reason| {
+            let status = StatusCode::from_u16(reason.http_status())
+                .unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+            (
+                status,
+                Json(json!({ "error": reason.message(), "reason": reason.metric_label() })),
+            )
+        })?;
+    let domain = body
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let ns = body
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let engine = read_engine(&state, &headers)?;
+    let emb = resolve_read_embedding(&state, &engine, &query, parse_query_embedding(&body)).await?;
+    let engine2 = engine.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        engine2.surface_procedural(&emb, Some(&query), domain.as_deref(), top_k, ns.as_deref())
+    })
+    .await
+    .map_err(|e| {
+        app_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("surface task panicked: {e}"),
+        )
+    })?
+    .map_err(engine_err)?;
+    Ok(Json(json!({ "results": rows, "count": rows.len() })))
+}
+
+async fn procedure_learn_deferred() -> AppResult {
+    Err(deferred_over_http("procedure.learn"))
+}
+async fn procedure_reinforce_deferred() -> AppResult {
+    Err(deferred_over_http("procedure.reinforce"))
+}
+
+// ── conversation (read + NODE-LOCAL writes) ───────────────────────────────
+
+async fn conversation_recent(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(namespace): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("conversation_recent");
+    let engine = read_engine(&state, &headers)?;
+    let turns = engine
+        .recent_turns(&namespace, q_limit(&params, "limit", 10))
+        .map_err(engine_err)?;
+    Ok(Json(
+        json!({ "namespace": namespace, "turns": turns, "count": turns.len() }),
+    ))
+}
+
+/// NODE-LOCAL write — records into the serving node's conversation buffer; not
+/// replicated (ephemeral recent-context). No `check_writable` (works on any node).
+async fn conversation_record(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(namespace): axum::extract::Path<String>,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("conversation_record");
+    let engine = read_engine(&state, &headers)?;
+    let role = body["role"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'role'"))?;
+    let content = body["content"]
+        .as_str()
+        .ok_or_else(|| app_error(StatusCode::BAD_REQUEST, "missing 'content'"))?;
+    let max_turns = body.get("max_turns").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    let id = engine
+        .record_turn(&namespace, role, content, max_turns)
+        .map_err(engine_err)?;
+    Ok(Json(
+        json!({ "turn_id": id, "namespace": namespace, "node_local": true }),
+    ))
+}
+
+/// NODE-LOCAL write — clears the serving node's buffer for this namespace.
+async fn conversation_clear(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(namespace): axum::extract::Path<String>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("conversation_clear");
+    let engine = read_engine(&state, &headers)?;
+    let cleared = engine.clear_turns(&namespace).map_err(engine_err)?;
+    Ok(Json(
+        json!({ "namespace": namespace, "cleared": cleared, "node_local": true }),
+    ))
+}
+
+// ── trigger (reads + NODE-LOCAL lifecycle/prune) ──────────────────────────
+// Triggers are generated per-node by the maintenance tick, so their lifecycle
+// is node-local by nature — you acknowledge a trigger on the node that holds
+// it. No `check_writable`.
+//
+// SAFETY (review F4): `trigger_log` and `conversation_turns` are never shipped
+// between nodes, so these direct writes cannot diverge from a leader-authoritative
+// copy — there is none. Proof: cross-node engine state moves ONLY as replayed
+// `MemoryMutation`s. `yrp::runtime::serve_backfill` returns `Vec<(u64, LogEntry)>`
+// (committed memory mutations from the commit log), and `yrp::engine_sink` applies
+// only `MemoryMutation` — neither table is part of that grammar. If a future change
+// makes these tables replicated, revisit: these handlers would then need
+// `check_writable` + a replicated mutation path (RFC 032).
+
+async fn trigger_pending(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("trigger_pending");
+    let engine = read_engine(&state, &headers)?;
+    let rows = engine
+        .get_pending_triggers(q_limit(&params, "limit", 20))
+        .map_err(engine_err)?;
+    Ok(Json(json!({ "triggers": rows, "count": rows.len() })))
+}
+
+async fn trigger_history(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("trigger_history");
+    let engine = read_engine(&state, &headers)?;
+    let tt = params.get("trigger_type").map(|s| s.as_str());
+    let rows = engine
+        .get_trigger_history(tt, q_limit(&params, "limit", 50))
+        .map_err(engine_err)?;
+    Ok(Json(json!({ "triggers": rows, "count": rows.len() })))
+}
+
+/// One handler for the four boolean lifecycle transitions, dispatched by the
+/// `{action}` path segment. NODE-LOCAL.
+async fn trigger_lifecycle(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path((id, action)): axum::extract::Path<(String, String)>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("trigger_lifecycle");
+    let engine = read_engine(&state, &headers)?;
+    let changed = match action.as_str() {
+        "acknowledge" => engine.acknowledge_trigger(&id),
+        "deliver" => engine.deliver_trigger(&id),
+        "act" => engine.act_on_trigger(&id),
+        "dismiss" => engine.dismiss_trigger(&id),
+        other => {
+            return Err(app_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown trigger action '{other}' (acknowledge|deliver|act|dismiss)"),
+            ))
+        }
+    }
+    .map_err(engine_err)?;
+    if !changed {
+        return Err(app_error(
+            StatusCode::NOT_FOUND,
+            format!("trigger '{id}' not found or not in a state that permits '{action}'"),
+        ));
+    }
+    Ok(Json(
+        json!({ "trigger_id": id, "action": action, "changed": true, "node_local": true }),
+    ))
+}
+
+/// NODE-LOCAL — bounded-backlog eviction on this node's trigger_log.
+async fn trigger_prune(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult {
+    let _t = crate::metrics::HandlerTimer::new("trigger_prune");
+    let engine = read_engine(&state, &headers)?;
+    let dry_run = body
+        .get("dry_run")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let max_pending = body
+        .get("max_pending")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(100) as usize;
+    let report = engine
+        .prune_triggers(dry_run, max_pending)
+        .map_err(engine_err)?;
+    Ok(Json(json!({ "report": report, "node_local": true })))
+}
+
+// ── correct (#82) — deferred (maps to UpdateMemoryPatch = NotYetWired) ─────
+
+async fn correct_deferred() -> AppResult {
+    Err(deferred_over_http("correct"))
+}
+
 /// Build the Axum router.
 pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.admission.cfg.max_request_body_bytes;
@@ -6026,6 +6547,47 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/skills/{skill_id}", get(skill_get))
         .route("/v1/skills/{skill_id}/outcome", post(skill_record_outcome))
         .route("/v1/skills/{skill_id}/forget", post(skill_forget))
+        // Issue #83 / RFC 032 — parity for the six embedded-only families.
+        // temporal (all reads)
+        .route("/v1/temporal/stale", get(temporal_stale))
+        .route("/v1/temporal/upcoming", get(temporal_upcoming))
+        .route("/v1/temporal/as_of", post(temporal_as_of))
+        // category (reads; learn/reset are global writes → deferred 501)
+        .route("/v1/categories", get(category_list))
+        .route("/v1/categories/{name}/members", get(category_members))
+        .route("/v1/categories/{name}/learn", post(category_learn_deferred))
+        .route("/v1/categories/{name}/reset", post(category_reset_deferred))
+        // task (reads; add/update/delete are global writes → deferred 501)
+        .route("/v1/tasks", get(task_list_h).post(task_add_deferred))
+        .route(
+            "/v1/tasks/{id}",
+            get(task_get_h)
+                .patch(task_update_deferred)
+                .delete(task_delete_deferred),
+        )
+        // procedure (surface read; learn/reinforce global writes → deferred 501)
+        .route("/v1/procedures/surface", post(procedure_surface))
+        .route("/v1/procedures", post(procedure_learn_deferred))
+        .route(
+            "/v1/procedures/{rid}/reinforce",
+            post(procedure_reinforce_deferred),
+        )
+        // conversation (read + NODE-LOCAL writes)
+        .route(
+            "/v1/conversation/{namespace}/recent",
+            get(conversation_recent),
+        )
+        .route(
+            "/v1/conversation/{namespace}",
+            post(conversation_record).delete(conversation_clear),
+        )
+        // trigger (reads + NODE-LOCAL lifecycle/prune)
+        .route("/v1/triggers", get(trigger_pending))
+        .route("/v1/triggers/history", get(trigger_history))
+        .route("/v1/triggers/prune", post(trigger_prune))
+        .route("/v1/triggers/{id}/{action}", post(trigger_lifecycle))
+        // correct (#82) — global write, no replicated path yet → deferred 501
+        .route("/v1/correct", post(correct_deferred))
         .route("/v1/relate", post(relate))
         .route("/v1/claim", post(ingest_claim))
         .route("/v1/claims", get(get_claims))
@@ -6148,6 +6710,53 @@ pub fn router(state: Arc<AppState>) -> Router {
                 .with_state(state),
         );
     app
+}
+
+#[cfg(test)]
+mod issue83_parity_tests {
+    use super::*;
+
+    // Every deferred global write returns an honest 501 (not a bare 404) with a
+    // stable, machine-readable body. This is the core new contract (RFC 032).
+    #[tokio::test]
+    async fn deferred_writes_return_501() {
+        let cases: Vec<(AppResult, &str)> = vec![
+            (task_add_deferred().await, "task.add"),
+            (task_update_deferred().await, "task.update"),
+            (task_delete_deferred().await, "task.delete"),
+            (category_learn_deferred().await, "category.learn"),
+            (category_reset_deferred().await, "category.reset"),
+            (procedure_learn_deferred().await, "procedure.learn"),
+            (procedure_reinforce_deferred().await, "procedure.reinforce"),
+            (correct_deferred().await, "correct"),
+        ];
+        for (result, op) in cases {
+            let (status, Json(body)) = result.expect_err("deferred write must be Err");
+            assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "op {op}");
+            assert_eq!(body["operation"], json!(op), "op {op}");
+            assert_eq!(body["deferred"], json!(true), "op {op}");
+            assert_eq!(
+                body["error"],
+                json!("not_yet_available_over_http"),
+                "op {op}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_param_helpers_default_and_parse() {
+        let mut p = std::collections::HashMap::new();
+        assert_eq!(q_limit(&p, "limit", 20), 20); // default when absent
+        assert_eq!(q_f64(&p, "days", 30.0), 30.0);
+        p.insert("limit".into(), "5".into());
+        p.insert("days".into(), "1.5".into());
+        assert_eq!(q_limit(&p, "limit", 20), 5);
+        assert_eq!(q_f64(&p, "days", 30.0), 1.5);
+        p.insert("limit".into(), "notanumber".into());
+        assert_eq!(q_limit(&p, "limit", 20), 20); // fall back on parse failure
+        p.insert("limit".into(), "999999999".into());
+        assert_eq!(q_limit(&p, "limit", 20), MAX_READ_LIMIT); // F5 hard cap
+    }
 }
 
 #[cfg(test)]

@@ -5,6 +5,40 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] — 2026-08-10
+
+**HTTP route parity for the six embedded-only tool families (RFC 032, issue
+#83).** `category`, `conversation`, `procedure`, `task`, `temporal`, `trigger`
+were reachable only in embedded mode; HTTP/cluster clients got a bare 404. This
+release wires them — **reads-first + honest writes**, because only *memory*
+operations replicate through YRP consensus, so a non-memory write exposed as a
+direct engine call would silently diverge across the cluster.
+
+### Added
+- **Reads for all six families** (never diverge, safe on any node):
+  `GET /v1/temporal/stale|upcoming`, `POST /v1/temporal/as_of` (bitemporal
+  recall — surfaces the engine's `recall_as_of`); `GET /v1/categories`,
+  `GET /v1/categories/{name}/members`; `GET /v1/tasks`, `GET /v1/tasks/{id}`;
+  `POST /v1/procedures/surface`; `GET /v1/conversation/{ns}/recent`;
+  `GET /v1/triggers`, `GET /v1/triggers/history`.
+- **Node-local writes** (per-node by design, not replicated — documented):
+  `POST`/`DELETE /v1/conversation/{ns}` (ephemeral recent-context ring buffer);
+  `POST /v1/triggers/{id}/{acknowledge|deliver|act|dismiss}` and
+  `POST /v1/triggers/prune` (triggers are generated per-node by maintenance, so
+  their lifecycle is acted on the node that holds them).
+- **Honest `501` for deferred global writes** — `task` add/update/delete,
+  `category` learn/reset, `procedure` learn/reinforce, and `/v1/correct` (#82)
+  return `501 not_yet_available_over_http` with `deferred: true` instead of a
+  bare 404. They need replicated mutation grammar (a follow-up); `correct` maps
+  to `MemoryMutation::UpdateMemoryPatch`, still `NotYetWired`.
+- **Parity documentation** — `docs/operations/http-embedded-parity.md` — the
+  canonical HTTP-vs-embedded status per family, so `mode:"http"` clients never
+  discover a gap via 404 again (the second half of #83's ask).
+
+### Notes
+- No breaking changes; all additions. Engine pin unchanged (0.13.1). Same
+  pre-existing Windows-only `chaos_test` flake; all other tests green.
+
 ## [0.14.3] — 2026-07-30
 
 **Engine bump 0.12.1 → 0.13.1.** A minor bump (0.13.0 + 0.13.1) but verified

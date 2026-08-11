@@ -1,5 +1,7 @@
 # YantrikDB
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fyantrikos%2Fyantrikdb-server.svg)](https://mcptoplist.com/server/glama%2Fyantrikos%2Fyantrikdb-server)
+
 > ⚠ **Correction notice (2026-04-19):** Phase 3 benchmark writeups committed
 > earlier today (`docs/phase3a/`, `docs/phase3b/`, `docs/phase3c/`,
 > `docs/phase3d/`) used a Python simulator for the "structured memory"

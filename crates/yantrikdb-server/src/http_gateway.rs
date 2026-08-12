@@ -948,6 +948,7 @@ async fn remember_with_idempotency(
             &source,
             emotional_state.as_deref(),
             Some(&key),
+            None, // created_at: engine stamps now() (historical import unsurfaced)
         ),
         // No embedder + no client vector: the engine's text path applies
         // its own embedding policy, identical to the unkeyed route.
@@ -964,6 +965,7 @@ async fn remember_with_idempotency(
             &source,
             emotional_state.as_deref(),
             Some(&key),
+            None, // created_at
         ),
     })
     .await
@@ -1314,6 +1316,7 @@ async fn remember_batch_with_idempotency(
             source: m.source,
             emotional_state: m.emotional_state,
             idempotency_key: key,
+            created_at: None, // engine stamps now() (historical import unsurfaced)
         });
     }
     let outcome = tokio::task::spawn_blocking(move || engine.record_batch(&inputs))

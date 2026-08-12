@@ -5,6 +5,33 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] — 2026-08-10
+
+**Engine bump 0.13.1 → 0.14.0.** A minor bump (0.13.2/.3/.4 + 0.14.0) carrying
+**security fixes** for encrypted-at-rest deployments, plus additive engine APIs.
+Required a small server adaptation (the engine's record API gained a
+`created_at` parameter) but no server API/behavior change.
+
+### Security (from the engine)
+- **0.13.2 — the oplog no longer writes plaintext on encrypted databases.** On
+  an encrypted DB the change-log was persisting plaintext; fixed at the engine
+  write path. Forward-looking: it stops new plaintext oplog rows; any pre-existing
+  rows age out via compaction. (The default homelab config runs with encryption
+  disabled, so it was unaffected — but any encrypted deployment should upgrade.)
+- **0.13.3** — the security advisory's own check now reaches the Python layer.
+- **0.13.4** — sealing a row is not erasing it (seal semantics hardened).
+
+### Changed
+- **Engine `yantrikdb` 0.13.1 → 0.14.0.** The engine's `record_with_idempotency`
+  / `record_text_with_idempotency` / `RecordInput` gained a `created_at:
+  Option<f64>` for the new **historical-import** capability; the server passes
+  `None` (engine stamps `now()`), preserving existing behavior. Historical import
+  (caller-supplied timestamps) is **not surfaced** by the server yet — it needs to
+  ride the replicated mutation path to stay cluster-correct (a follow-up, like the
+  deferred RFC 032 writes). Also picks up new engine APIs (caller-supplied
+  consolidation, rid point-read, pack namespace) + an embedder process-global init
+  + download-retry fix.
+
 ## [0.15.0] — 2026-08-10
 
 **HTTP route parity for the six embedded-only tool families (RFC 032, issue

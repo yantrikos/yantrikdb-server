@@ -239,6 +239,7 @@ fn idempotency_same_key_same_payload_returns_original_rid_zero_writes() {
             "user",
             None,
             Some("key-1"),
+            None, // created_at
         )
         .unwrap();
     let rid2 = db
@@ -256,6 +257,7 @@ fn idempotency_same_key_same_payload_returns_original_rid_zero_writes() {
             "user",
             None,
             Some("key-1"),
+            None, // created_at
         )
         .unwrap();
     assert_eq!(rid1, rid2, "retry must return the ORIGINAL rid");
@@ -286,6 +288,7 @@ fn idempotency_same_key_divergent_payload_conflicts_with_existing_rid() {
             "user",
             None,
             Some("key-2"),
+            None, // created_at
         )
         .unwrap();
     let err = db
@@ -303,6 +306,7 @@ fn idempotency_same_key_divergent_payload_conflicts_with_existing_rid() {
             "user",
             None,
             Some("key-2"),
+            None, // created_at
         )
         .unwrap_err();
     match err {
@@ -333,6 +337,7 @@ fn idempotency_batch_per_item_keys_all_or_nothing() {
         source: "user".into(),
         emotional_state: None,
         idempotency_key: key.map(String::from),
+        created_at: None,
     };
     // First batch: two keyed items (the "{caller_key}:{index}" derivation
     // the gateway applies for a batch-level key produces exactly this).
@@ -381,6 +386,7 @@ fn idempotency_invalid_key_is_refused_loudly() {
             "user",
             None,
             Some("   "),
+            None, // created_at
         )
         .unwrap_err();
     assert!(

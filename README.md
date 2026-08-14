@@ -4,9 +4,9 @@
 > earlier today (`docs/phase3a/`, `docs/phase3b/`, `docs/phase3c/`,
 > `docs/phase3d/`) used a Python simulator for the "structured memory"
 > condition — NOT the actual yantrikdb engine. Rerun with real yantrikdb
-> is in [`docs/phase3e/`](docs/phase3e/). Full audit trail in
-> [`CORRECTIONS.md`](CORRECTIONS.md). Full corrected findings post
-> coming 2026-04-20.
+> is in [`docs/phase3e/`](docs/phase3e/). Full audit trail, preliminary
+> corrected numbers, and the exact publication gate for a findings post
+> are in [`CORRECTIONS.md`](CORRECTIONS.md#whats-pending).
 
 **A memory database that forgets, consolidates, and detects contradictions.**
 

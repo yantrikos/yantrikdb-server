@@ -1,5 +1,7 @@
 """YantrikDB REST API — FastAPI server with OpenAPI docs."""
 
+import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -9,10 +11,49 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 log = logging.getLogger("yantrikdb.api")
+
+
+# ── Auth ──
+
+# Paths that stay open even when an API key is configured. /health is a bare
+# liveness probe (no DB access); everything else — including /export and all
+# mutating routes — requires `Authorization: Bearer <YANTRIKDB_API_KEY>`.
+_OPEN_PATHS = frozenset({"/health"})
+
+
+def _configured_api_key() -> str | None:
+    """Return the configured API key, or None when auth is disabled.
+
+    Read at request time (not import time) so the key can be set/rotated
+    per-process and so tests can monkeypatch the environment.
+    """
+    key = os.environ.get("YANTRIKDB_API_KEY", "").strip()
+    return key or None
+
+
+async def require_api_key(request: Request) -> None:
+    """App-level dependency: enforce bearer auth when YANTRIKDB_API_KEY is set.
+
+    No key configured → all routes stay open (backwards compatible for
+    loopback-only local dev; non-loopback binds without a key are refused at
+    startup by _check_bind_security).
+    """
+    expected = _configured_api_key()
+    if expected is None:
+        return
+    if request.url.path in _OPEN_PATHS:
+        return
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not hmac.compare_digest(token.strip(), expected):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 # ── Pydantic Models ──
@@ -107,11 +148,21 @@ app = FastAPI(
     description="A Cognitive Memory Engine for Persistent AI Systems",
     version="0.1.0",
     lifespan=lifespan,
+    dependencies=[Depends(require_api_key)],
 )
 
 
 def _db():
     return app.state.db, app.state.lock
+
+
+# ── Health ──
+
+
+@app.get("/health", tags=["system"])
+async def health():
+    """Bare liveness probe — always open, touches no data."""
+    return {"status": "ok"}
 
 
 # ── Memory Endpoints ──
@@ -284,8 +335,46 @@ async def export_db(include_embeddings: bool = False):
 # ── Entry Point ──
 
 
+def _is_loopback_host(host: str) -> bool:
+    """True only for hosts that provably resolve to loopback."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # Unknown hostname — treat as non-loopback (fail closed).
+        return False
+
+
+def _check_bind_security(host: str) -> None:
+    """Refuse to bind a non-loopback interface without an API key.
+
+    Escape hatch: YANTRIKDB_ALLOW_INSECURE=1 downgrades the refusal to a
+    prominent warning. Loopback binds without a key keep working unchanged.
+    """
+    if _is_loopback_host(host) or _configured_api_key() is not None:
+        return
+    if os.environ.get("YANTRIKDB_ALLOW_INSECURE", "").strip() == "1":
+        log.warning(
+            "SECURITY WARNING: binding to non-loopback host %r with NO API key "
+            "(YANTRIKDB_ALLOW_INSECURE=1). Every endpoint — including GET /export "
+            "(full DB dump) and DELETE /memories/{rid} — is reachable by anyone "
+            "who can reach this interface.",
+            host,
+        )
+        return
+    raise SystemExit(
+        f"Refusing to start: YANTRIKDB_HOST={host!r} is not a loopback address and "
+        "no API key is configured. Anyone who can reach this interface could dump "
+        "the database via GET /export or delete memories. Set YANTRIKDB_API_KEY "
+        "to enable bearer auth, bind to 127.0.0.1, or set YANTRIKDB_ALLOW_INSECURE=1 "
+        "to override (not recommended)."
+    )
+
+
 def main():
     """Entry point for the yantrikdb-server console script."""
     host = os.environ.get("YANTRIKDB_HOST", "127.0.0.1")
     port = int(os.environ.get("YANTRIKDB_PORT", "8321"))
+    _check_bind_security(host)
     uvicorn.run(app, host=host, port=port, log_level="info")

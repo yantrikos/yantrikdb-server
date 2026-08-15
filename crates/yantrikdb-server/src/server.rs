@@ -435,6 +435,8 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
                     source: m.source,
                     emotional_state: m.emotional_state,
                     embedding: m.embedding,
+                    // Not in the wire RememberRequest yet — engine stamps now().
+                    created_at: None,
                 })
                 .collect();
             Ok(Command::RememberBatch { memories })
@@ -455,6 +457,11 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
                 // get the v0.10 default: current-value (superseded excluded).
                 // Exposing it over the wire is a RecallRequest change for later.
                 include_superseded: false,
+                // Same story for the handoff-1b fields: not in RecallRequest
+                // yet, so wire clients get the pre-existing defaults (no
+                // certainty filter, reinforcing recall).
+                certainty_min: None,
+                skip_reinforce: false,
             })
         }
         OpCode::Forget => {
@@ -497,6 +504,10 @@ fn frame_to_command(frame: &Frame) -> anyhow::Result<Command> {
                 run_pattern_mining: req.run_pattern_mining,
                 run_personality: req.run_personality,
                 consolidation_limit: req.consolidation_limit,
+                // Not in ThinkRequest yet — wire clients get engine defaults.
+                consolidation_time_window_days: None,
+                min_active_memories: None,
+                max_triggers: None,
             })
         }
         OpCode::Conflicts => {

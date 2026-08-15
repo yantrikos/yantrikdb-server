@@ -90,8 +90,13 @@ pub fn execute_with_guard(
         Command::RememberBatch { memories } => {
             let mut rids = Vec::with_capacity(memories.len());
             for m in memories {
+                // Handoff 1b fix 4: `*_with_idempotency` with `key: None` is
+                // byte-identical to `record`/`record_text` (those delegate to
+                // it with `None, None`) but carries the caller's optional
+                // event time (`created_at`, epoch seconds) — the engine 0.14
+                // historical-import parameter.
                 let rid = if let Some(emb) = m.embedding {
-                    db.record(
+                    db.record_with_idempotency(
                         &m.text,
                         &m.memory_type,
                         m.importance,
@@ -104,9 +109,11 @@ pub fn execute_with_guard(
                         &m.domain,
                         &m.source,
                         m.emotional_state.as_deref(),
+                        None,
+                        m.created_at,
                     )?
                 } else {
-                    db.record_text(
+                    db.record_text_with_idempotency(
                         &m.text,
                         &m.memory_type,
                         m.importance,
@@ -118,6 +125,8 @@ pub fn execute_with_guard(
                         &m.domain,
                         &m.source,
                         m.emotional_state.as_deref(),
+                        None,
+                        m.created_at,
                     )?
                 };
                 rids.push(rid);
@@ -136,7 +145,15 @@ pub fn execute_with_guard(
             source,
             query_embedding,
             include_superseded,
+            certainty_min,
+            skip_reinforce,
         } => {
+            // Handoff 1b fix 1: EVERY branch goes through the full
+            // `db.recall()` path. The old no-filter branch routed to
+            // `db.recall_text()`, which pins include_consolidated /
+            // expand_entities / include_superseded / skip_reinforce to
+            // hardcoded values — silently discarding fields the HTTP
+            // handler had already parsed (and recorded to metrics).
             let results = if let Some(emb) = query_embedding {
                 db.recall(
                     &emb,
@@ -146,21 +163,15 @@ pub fn execute_with_guard(
                     include_consolidated,
                     expand_entities,
                     Some(&query),
-                    false,
+                    skip_reinforce,
                     namespace.as_deref(),
                     domain.as_deref(),
                     source.as_deref(),
-                    None, // certainty_min — v0.7.20 issue #46; pre-existing behavior = no filter
+                    certainty_min,
                     None, // order — v0.7.20 issue #46; pre-existing behavior = relevance order
                     include_superseded, // v0.10: current-value-by-default unless the caller opts into history
                 )?
-            } else if namespace.is_some()
-                || domain.is_some()
-                || source.is_some()
-                || memory_type.is_some()
-            {
-                // Any filter set — must go through the full recall() path.
-                // recall_text_filtered silently drops namespace/memory_type.
+            } else {
                 let emb = db.embed(&query)?;
                 db.recall(
                     &emb,
@@ -170,16 +181,14 @@ pub fn execute_with_guard(
                     include_consolidated,
                     expand_entities,
                     Some(&query),
-                    false,
+                    skip_reinforce,
                     namespace.as_deref(),
                     domain.as_deref(),
                     source.as_deref(),
-                    None, // certainty_min — v0.7.20 issue #46; pre-existing behavior = no filter
+                    certainty_min,
                     None, // order — v0.7.20 issue #46; pre-existing behavior = relevance order
                     include_superseded, // v0.10: current-value-by-default unless the caller opts into history
                 )?
-            } else {
-                db.recall_text(&query, top_k)?
             };
 
             let result_values: Vec<Value> = results
@@ -270,8 +279,11 @@ pub fn execute_with_guard(
             run_pattern_mining,
             run_personality,
             consolidation_limit,
+            consolidation_time_window_days,
+            min_active_memories,
+            max_triggers,
         } => {
-            let config = ThinkConfig {
+            let mut config = ThinkConfig {
                 run_consolidation,
                 run_conflict_scan,
                 run_pattern_mining,
@@ -279,6 +291,17 @@ pub fn execute_with_guard(
                 consolidation_limit,
                 ..ThinkConfig::default()
             };
+            // Handoff 1b fix 3: the optional knobs override the engine
+            // default only when the caller actually sent them.
+            if let Some(v) = consolidation_time_window_days {
+                config.consolidation_time_window_days = v;
+            }
+            if let Some(v) = min_active_memories {
+                config.min_active_memories = v;
+            }
+            if let Some(v) = max_triggers {
+                config.max_triggers = v;
+            }
             let result = db.think(&config)?;
             let triggers: Vec<Value> = result
                 .triggers

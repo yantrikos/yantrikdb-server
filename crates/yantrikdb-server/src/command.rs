@@ -40,6 +40,16 @@ pub enum Command {
         /// history/archaeology — surfaces stale records stamped with their
         /// superseded status.
         include_superseded: bool,
+        /// Handoff 1b fix 2: minimum certainty filter (engine `recall`
+        /// `certainty_min`, issue #46). `None` = no filter (pre-existing
+        /// behavior).
+        certainty_min: Option<f64>,
+        /// Handoff 1b fix 2: when `true` the recall does NOT reinforce
+        /// (mutate `access_count` / `last_access`) the returned rows.
+        /// Probe/eval recalls send this so measurement doesn't perturb
+        /// the tuning signal — on followers a reinforcing recall is also
+        /// an unreplicated local write.
+        skip_reinforce: bool,
     },
     Forget {
         rid: String,
@@ -74,6 +84,12 @@ pub enum Command {
         run_pattern_mining: bool,
         run_personality: bool,
         consolidation_limit: usize,
+        /// Handoff 1b fix 3: the remaining `ThinkConfig` knobs HTTP clients
+        /// (yantrikdb-mcp `think()`) send. `None` = engine default, so the
+        /// wire-protocol path (which doesn't carry them yet) is unchanged.
+        consolidation_time_window_days: Option<f64>,
+        min_active_memories: Option<i64>,
+        max_triggers: Option<usize>,
     },
 
     // ── Conflicts ─────────────────────────────────────────
@@ -209,4 +225,8 @@ pub struct RememberInput {
     pub source: String,
     pub emotional_state: Option<String>,
     pub embedding: Option<Vec<f32>>,
+    /// Handoff 1b fix 4: caller-supplied EVENT time in epoch seconds
+    /// (engine 0.14 historical-import precondition). `None` = the server
+    /// stamps now() — pre-existing behavior.
+    pub created_at: Option<f64>,
 }

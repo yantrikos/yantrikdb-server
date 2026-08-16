@@ -5,6 +5,69 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-08-16
+
+**The server half of the 2026-08-15 silent-defect sweep, plus engine 0.15.0.**
+Every fix below is a field an HTTP client sends that the server dropped, faked,
+or never read — the MCP client (0.18.0) now forwards these fields, which made
+the server's silence the load-bearing defect.
+
+### Security
+- **The Python REST API (`api.py`) authenticates.** Every route was open,
+  including `GET /export` (full DB dump) and `DELETE /memories/{rid}`, and
+  `YANTRIKDB_HOST` could bind that publicly without a warning. Now:
+  `YANTRIKDB_API_KEY` set → every route requires `Authorization: Bearer`,
+  compared with `hmac.compare_digest` (401 + `WWW-Authenticate` on failure);
+  a **non-loopback bind with no key refuses to start** (escape hatch:
+  `YANTRIKDB_ALLOW_INSECURE=1`, loudly logged). Loopback with no key is
+  unchanged. New bare `GET /health` liveness route, explicitly open.
+- **The provenance gate actually runs at ingress.** The apply path claimed ops
+  "were provenance-gated at origin ingress" — nothing gated there. Unkeyed
+  `/v1/remember`, keyed-yrp propose, and unkeyed batch (all items, before any
+  commit) now gate; `ProvenanceInconsistent` maps to 400, not 500. Known gap,
+  documented in code: warn-mode ingress flags log but cannot tick the engine's
+  crate-private flagged-write counter.
+
+### Fixed
+- **No-filter `/v1/recall` honors what it parses.** It routed to the engine's
+  `recall_text`, which pins `include_consolidated` / `expand_entities` /
+  `include_superseded` / `skip_reinforce` to constants — while the handler
+  parsed those fields and recorded them to metrics. Every branch now embeds
+  and calls full `recall()`.
+- **`certainty_min` and `skip_reinforce` are parsed and plumbed** (they were
+  never parsed; only stale comments mentioned them). Probe recalls stop
+  mutating `access_count` — on followers too. Engine quirk found and reported
+  upstream: `certainty_min` is enforced only in the vector candidate lane;
+  FTS keyword-lane rows bypass it.
+- **`/v1/think` accepts both field spellings** (`run_conflicts`/`run_patterns`
+  aliases for the canonical long names; canonical wins when both arrive) and
+  plumbs the three ThinkConfig limit knobs clients already send.
+
+### Added
+- **Historical import over HTTP** — closes the gap the 0.15.1 entry named:
+  `created_at` (epoch seconds) is accepted on all four write surfaces
+  (unkeyed/keyed single, unkeyed/keyed batch) and rides the replicated
+  mutation path, so backdated corpora stay cluster-correct.
+
+### Changed
+- **Engine `yantrikdb` 0.14.0 → 0.15.0** — the silent-defect campaign: dry-run
+  that is dry (the engine's `MaintenanceCycleConfig` gained `dry_run`; the
+  server's scheduled worker states `false` explicitly), HNSW slot-reuse data
+  loss fixed, compaction keeps records visible AND writers admitted,
+  event-time extraction on every write path, previously-inert tuning knobs now
+  live (re-measure any sweep that recorded "no effect"), retrieval filters
+  honored in every lane. Note: the engine's new-store 256-dim default does not
+  affect existing server databases — stores keep the embedder identity they
+  were written with.
+
+### Tests
+- 10 regression tests against the **production router** in-crate (the
+  `tests/http_integration.rs` harness exercises mock handlers; these fixes
+  would pass there unfixed). Verified to fail on the pre-fix code by hunk
+  revert: 8/10 fail, the 2 exceptions guard the new alias logic itself.
+  Fixture upgraded to a production-shaped commit log (the bare committer
+  appended without applying — write assertions were vacuous).
+
 ## [0.15.1] — 2026-08-10
 
 **Engine bump 0.13.1 → 0.14.0.** A minor bump (0.13.2/.3/.4 + 0.14.0) carrying

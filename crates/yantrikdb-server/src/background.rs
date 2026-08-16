@@ -683,6 +683,11 @@ async fn wal_checkpoint_loop(
 /// heavy corpus-rewriting passes (split, repair) are gated by config.
 pub fn maintenance_cycle_config(m: &MaintenanceSection) -> MaintenanceCycleConfig {
     MaintenanceCycleConfig {
+        // Engine 0.15 added dry_run (a "preview" once ran wet and tombstoned
+        // live records). This worker IS the real scheduled cycle, so false —
+        // stated explicitly because the compiler now forces every Rust
+        // caller to decide, which is the field working as intended.
+        dry_run: false,
         run_think: true,
         burn_down_conflicts: true,
         prune_triggers: true,

@@ -770,11 +770,28 @@ async fn remember(
         // with its op) — the coupling the engine-atomic path provides on
         // single-node. This replaces the historical cluster-mode 501.
         if let Some(yrp) = state.yrp.clone() {
+            // Handoff 1b fix 5: the yrp path applies via `record_with_rid(
+            // WriteAdmission::Admitted)`, which the applier justifies with
+            // "already provenance-gated once at the leader's ORIGIN
+            // ingress". This call IS that origin gate.
+            gate_provenance_at_ingress(&engine, &body)?;
             return remember_with_idempotency_yrp(&state, db_id, yrp, body, text, embedding, key)
                 .await;
         }
+        // Keyed single-node path: `record_with_idempotency` runs the
+        // engine's own origin gate internally — no ingress gate needed.
         return remember_with_idempotency(&state, engine, body, text, embedding, key).await;
     }
+
+    // Handoff 1b fix 5: unkeyed writes bypass the engine's origin gate —
+    // the applier dispatches `record_with_rid(WriteAdmission::Admitted)`
+    // on the consensus-committed apply path, whose contract comment says
+    // the op "was already provenance-gated once at the leader's ORIGIN
+    // ingress before it entered the raft log". Until now nothing actually
+    // gated here, so a `source=inference` record claiming `kind=fact`
+    // laundered straight through HTTP while the same write was refused
+    // embedded. Gate BEFORE the mutation enters the commit log.
+    gate_provenance_at_ingress(&engine, &body)?;
 
     // RFC 010 PR-6.4: route through commit_log instead of calling
     // engine.record() directly. Single-node mode: LocalSqliteSubmitter
@@ -802,10 +819,99 @@ async fn remember(
     })))
 }
 
+/// Handoff 1b fix 5 — the anti-laundering provenance gate at HTTP ORIGIN
+/// ingress, for writes that enter via the commit-log mutation path.
+///
+/// Why here and not in the engine: the applier dispatches those mutations
+/// via `record_with_rid(WriteAdmission::Admitted)`, which by design does
+/// NOT re-gate (re-gating on apply would make followers reject the
+/// leader's committed entry and wedge the cluster). Its contract comment
+/// assumes the op "was already provenance-gated once at the leader's
+/// ORIGIN ingress" — this function is that gate. It mirrors the engine's
+/// `gate_provenance` exactly (same pure `yantrikdb::provenance` matrix,
+/// same free-form-source tolerance, same mode semantics) because the
+/// engine's own copy is `pub(crate)` and unreachable from here.
+///
+/// Mode semantics (from the engine's per-tenant durable setting):
+/// - `Off`     → skip entirely.
+/// - `Warn`    → log and allow. (The engine's warn-nudge counter
+///   `note_flagged_write_committed` is crate-private, so warn-mode flags
+///   on this path are visible in logs but not in that counter — a known
+///   gap until the engine exposes it.)
+/// - `Enforce` → refuse with 400 before any side effect.
+fn gate_provenance_source_metadata(
+    engine: &yantrikdb::YantrikDB,
+    source: &str,
+    metadata: &Value,
+) -> Result<(), String> {
+    use yantrikdb::provenance::{
+        check_provenance_consistency_opt, ClaimKind, ConfidenceBasis, GateMode, Source,
+    };
+    let mode = engine.provenance_gate_mode();
+    if mode == GateMode::Off {
+        return Ok(());
+    }
+    let verdict = (|| -> Result<(), yantrikdb::YantrikDbError> {
+        // Free-form public dimension: an unrecognized source is NOT
+        // refused; the matrix simply does not bind it (see the engine's
+        // gate_provenance rationale — rejecting unknown sources breaks
+        // honest callers labelling records "manager"/"slack"/"paper").
+        let Ok(src) = Source::parse(source) else {
+            return Ok(());
+        };
+        let basis = match metadata.get("confidence_basis").and_then(|v| v.as_str()) {
+            Some(b) => Some(ConfidenceBasis::parse(b)?),
+            None => None,
+        };
+        let kind = ClaimKind::parse(metadata.get("kind").and_then(|v| v.as_str()));
+        let override_kind = metadata
+            .get("override_kind")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        check_provenance_consistency_opt(src, basis.as_ref(), &kind, override_kind)
+    })();
+    match verdict {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if mode == GateMode::Enforce {
+                Err(e.to_string())
+            } else {
+                tracing::warn!(
+                    reason = %e,
+                    "provenance gate (warn, HTTP ingress): flagged an inconsistent write"
+                );
+                Ok(())
+            }
+        }
+    }
+}
+
+/// [`gate_provenance_source_metadata`] over a raw `/v1/remember` body,
+/// using the SAME defaults `upsert_mutation_from_body` will apply — the
+/// gate must judge exactly the bytes that will be committed.
+fn gate_provenance_at_ingress(engine: &yantrikdb::YantrikDB, body: &Value) -> Result<(), AppError> {
+    let source = body
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("user");
+    let metadata = body.get("metadata").cloned().unwrap_or(json!({}));
+    gate_provenance_source_metadata(engine, source, &metadata).map_err(|reason| {
+        app_error(
+            StatusCode::BAD_REQUEST,
+            format!("provenance_inconsistent: {reason}"),
+        )
+    })
+}
+
 /// Build the deterministic `UpsertMemory` mutation for a `/v1/remember`
 /// body. The rid is allocated by the CALLER before this (server-side,
 /// per-mutation — never per-replica) and the server timestamp is
 /// materialized here, so every node applies identical bytes.
+///
+/// Handoff 1b fix 4: an optional caller-supplied `created_at` (event
+/// time, epoch seconds — the engine 0.14 historical-import parameter)
+/// overrides the server's now() stamp. Same materialize-once-at-origin
+/// determinism either way.
 fn upsert_mutation_from_body(
     body: &Value,
     text: String,
@@ -816,6 +922,11 @@ fn upsert_mutation_from_body(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
         .unwrap_or(0);
+    let created_at_unix_micros = body
+        .get("created_at")
+        .and_then(|v| v.as_f64())
+        .map(|secs| (secs * 1_000_000.0) as i64)
+        .unwrap_or(now_micros);
     crate::commit::MemoryMutation::UpsertMemory {
         rid: rid.to_string(),
         text,
@@ -859,7 +970,7 @@ fn upsert_mutation_from_body(
             .map(String::from),
         embedding,
         extracted_entities: vec![],
-        created_at_unix_micros: Some(now_micros),
+        created_at_unix_micros: Some(created_at_unix_micros),
         embedding_model: Some("default".into()),
     }
 }
@@ -932,6 +1043,9 @@ async fn remember_with_idempotency(
         .get("emotional_state")
         .and_then(|v| v.as_str())
         .map(String::from);
+    // Handoff 1b fix 4: optional caller-supplied event time (epoch
+    // seconds) — engine 0.14 historical import. None = engine stamps now().
+    let created_at = body.get("created_at").and_then(|v| v.as_f64());
 
     let outcome = tokio::task::spawn_blocking(move || match embedding {
         Some(emb) => engine.record_with_idempotency(
@@ -948,7 +1062,7 @@ async fn remember_with_idempotency(
             &source,
             emotional_state.as_deref(),
             Some(&key),
-            None, // created_at: engine stamps now() (historical import unsurfaced)
+            created_at,
         ),
         // No embedder + no client vector: the engine's text path applies
         // its own embedding policy, identical to the unkeyed route.
@@ -965,7 +1079,7 @@ async fn remember_with_idempotency(
             &source,
             emotional_state.as_deref(),
             Some(&key),
-            None, // created_at
+            created_at,
         ),
     })
     .await
@@ -988,6 +1102,14 @@ async fn remember_with_idempotency(
         Err(yantrikdb::YantrikDbError::InvalidIdempotencyKey { reason }) => Err(app_error(
             StatusCode::BAD_REQUEST,
             format!("invalid idempotency_key: {reason}"),
+        )),
+        // Handoff 1b fix 5 (sibling surface): the engine's own origin gate
+        // refuses declared provenance contradictions on this path — that's
+        // a caller bug (400), not a server failure (500), and it must read
+        // the same as the ingress gate on the unkeyed path.
+        Err(e @ yantrikdb::YantrikDbError::ProvenanceInconsistent { .. }) => Err(app_error(
+            StatusCode::BAD_REQUEST,
+            format!("provenance_inconsistent: {e}"),
         )),
         Err(e) => Err(app_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1316,7 +1438,9 @@ async fn remember_batch_with_idempotency(
             source: m.source,
             emotional_state: m.emotional_state,
             idempotency_key: key,
-            created_at: None, // engine stamps now() (historical import unsurfaced)
+            // Handoff 1b fix 4: per-item caller-supplied event time
+            // (epoch seconds); None = engine stamps now().
+            created_at: m.created_at,
         });
     }
     let outcome = tokio::task::spawn_blocking(move || engine.record_batch(&inputs))
@@ -1342,6 +1466,13 @@ async fn remember_batch_with_idempotency(
         Err(yantrikdb::YantrikDbError::InvalidIdempotencyKey { reason }) => Err(app_error(
             StatusCode::BAD_REQUEST,
             format!("invalid idempotency_key: {reason}"),
+        )),
+        // Handoff 1b fix 5 (sibling surface): engine `record_batch` runs
+        // the origin gate per item; a declared contradiction is a caller
+        // bug (400), matching the unkeyed ingress gate.
+        Err(e @ yantrikdb::YantrikDbError::ProvenanceInconsistent { .. }) => Err(app_error(
+            StatusCode::BAD_REQUEST,
+            format!("provenance_inconsistent: {e}"),
         )),
         Err(e) => Err(app_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1524,6 +1655,9 @@ async fn remember_batch(
                         .collect()
                 })
             }),
+            // Handoff 1b fix 4: optional per-item event time (epoch
+            // seconds) — engine 0.14 historical import.
+            created_at: m.get("created_at").and_then(|v| v.as_f64()),
         });
     }
 
@@ -1593,6 +1727,21 @@ async fn remember_batch(
         return remember_batch_with_idempotency(&state, engine, memories, item_keys).await;
     }
 
+    // Handoff 1b fix 5 (sibling surface): the unkeyed batch loop below
+    // commits mutations the applier will dispatch with
+    // `WriteAdmission::Admitted` (never re-gated). Gate EVERY item at
+    // origin ingress before ANY item enters the commit log, so an enforce
+    // refusal cannot leave a partially-applied batch behind. (The keyed
+    // path above gates inside the engine's atomic `record_batch`.)
+    for (i, m) in memories.iter().enumerate() {
+        gate_provenance_source_metadata(&engine, &m.source, &m.metadata).map_err(|reason| {
+            app_error(
+                StatusCode::BAD_REQUEST,
+                format!("memories[{i}]: provenance_inconsistent: {reason}"),
+            )
+        })?;
+    }
+
     // RFC 010 PR-6.4: route every batch entry through commit_log. Each
     // entry gets its own (rid, op_id, log_index). On cluster mode this
     // is N round-trips through openraft; on single-node it's N inline
@@ -1606,6 +1755,12 @@ async fn remember_batch(
     let mut last_log_index: u64 = 0;
     for m in memories {
         let rid = uuid7::uuid7().to_string();
+        // Handoff 1b fix 4: per-item caller-supplied event time (epoch
+        // seconds → micros) wins over the server stamp.
+        let created_at_unix_micros = m
+            .created_at
+            .map(|secs| (secs * 1_000_000.0) as i64)
+            .unwrap_or(now_micros);
         let mutation = crate::commit::MemoryMutation::UpsertMemory {
             rid: rid.clone(),
             text: m.text,
@@ -1621,7 +1776,7 @@ async fn remember_batch(
             emotional_state: m.emotional_state,
             embedding: m.embedding,
             extracted_entities: vec![],
-            created_at_unix_micros: Some(now_micros),
+            created_at_unix_micros: Some(created_at_unix_micros),
             embedding_model: Some("default".into()),
         };
         let receipt = state
@@ -1750,6 +1905,15 @@ async fn recall(
         // with `"include_superseded": true` for history/archaeology.
         include_superseded: body
             .get("include_superseded")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        // Handoff 1b fix 2: both were sent by clients and silently dropped.
+        certainty_min: body.get("certainty_min").and_then(|v| v.as_f64()),
+        // Probe/eval recalls send `skip_reinforce: true` so measurement does
+        // not mutate access_count/last_access (on a follower that would also
+        // be an unreplicated local write).
+        skip_reinforce: body
+            .get("skip_reinforce")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
     };
@@ -2049,6 +2213,51 @@ async fn get_claims(
     .await
 }
 
+/// Build the `Command::Think` for a `/v1/think` body. Pulled out of the
+/// handler so the field-name contract is unit-testable.
+///
+/// Handoff 1b fix 3: HTTP clients disagree on two flag spellings —
+/// yantrikdb-mcp's HTTP backend sends `run_conflicts` / `run_patterns`
+/// on the wire while the embedded `ThinkConfig` (and this server's
+/// original parser) uses `run_conflict_scan` / `run_pattern_mining`.
+/// The old parser only read the long spellings, so every restraint flag
+/// an MCP caller passed was silently discarded and a cluster `think()`
+/// always ran the default full pass. Accept BOTH spellings (canonical
+/// long form wins when both are present) and plumb the three
+/// `ThinkConfig` knobs those clients also send.
+fn think_command_from_body(body: &Value) -> Command {
+    let get_bool_aliased = |canonical: &str, alias: &str, default: bool| {
+        body.get(canonical)
+            .or_else(|| body.get(alias))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default)
+    };
+    Command::Think {
+        run_consolidation: body
+            .get("run_consolidation")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        run_conflict_scan: get_bool_aliased("run_conflict_scan", "run_conflicts", true),
+        run_pattern_mining: get_bool_aliased("run_pattern_mining", "run_patterns", false),
+        run_personality: body
+            .get("run_personality")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        consolidation_limit: body
+            .get("consolidation_limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(50) as usize,
+        consolidation_time_window_days: body
+            .get("consolidation_time_window_days")
+            .and_then(|v| v.as_f64()),
+        min_active_memories: body.get("min_active_memories").and_then(|v| v.as_i64()),
+        max_triggers: body
+            .get("max_triggers")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+    }
+}
+
 async fn think(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -2060,28 +2269,7 @@ async fn think(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )?;
-    let cmd = Command::Think {
-        run_consolidation: body
-            .get("run_consolidation")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        run_conflict_scan: body
-            .get("run_conflict_scan")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        run_pattern_mining: body
-            .get("run_pattern_mining")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        run_personality: body
-            .get("run_personality")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        consolidation_limit: body
-            .get("consolidation_limit")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(50) as usize,
-    };
+    let cmd = think_command_from_body(&body);
     execute_cmd(engine, cmd, state.control.clone(), &state.inflight).await
 }
 
@@ -5097,6 +5285,10 @@ async fn skill_search(
             query_embedding: None,
             // Skill recall wants only CURRENT skills, never superseded ones.
             include_superseded: false,
+            certainty_min: None,
+            // Pre-existing behavior preserved: skill search reinforces the
+            // hits it returns (it is a user-facing retrieval, not a probe).
+            skip_reinforce: false,
         },
         state.control.clone(),
         &state.inflight,
@@ -7322,7 +7514,16 @@ pub(crate) mod e2e_test_support {
     /// - no cluster, no openraft, no control runtime — Phase 1 read
     ///   endpoints don't need them and stubs avoid spawning runtimes.
     pub fn build_fixture(tenant_namespace: &str) -> E2eFixture {
-        build_fixture_impl(tenant_namespace, None)
+        build_fixture_impl(tenant_namespace, None, None)
+    }
+
+    /// Build a fixture whose tenant engines open with the given embedding
+    /// dim. Passing `yantrikdb::embedder::BUNDLED_EMBEDDER_DIM` (64) makes
+    /// the engine auto-attach its bundled zero-network embedder, so tests
+    /// can exercise text-query recall (`db.embed`) and `record_text`
+    /// end-to-end without a server-side ONNX model.
+    pub fn build_fixture_with_dim(tenant_namespace: &str, dim: usize) -> E2eFixture {
+        build_fixture_impl(tenant_namespace, None, Some(dim))
     }
 
     /// Build a fixture with a cluster context configured — for testing the
@@ -7334,18 +7535,22 @@ pub(crate) mod e2e_test_support {
         role: crate::config::NodeRole,
         secret: &str,
     ) -> E2eFixture {
-        build_fixture_impl(tenant_namespace, Some((role, secret.to_string())))
+        build_fixture_impl(tenant_namespace, Some((role, secret.to_string())), None)
     }
 
     fn build_fixture_impl(
         tenant_namespace: &str,
         cluster: Option<(crate::config::NodeRole, String)>,
+        embedding_dim: Option<usize>,
     ) -> E2eFixture {
         let tmp = tempfile::tempdir().expect("tempdir");
         let data_dir = tmp.path().to_path_buf();
 
         let mut cfg = crate::config::ServerConfig::default();
         cfg.server.data_dir = data_dir.clone();
+        if let Some(dim) = embedding_dim {
+            cfg.embedding.dim = dim;
+        }
         if let Some((role, ref secret)) = cluster {
             cfg.cluster.node_id = 1;
             cfg.cluster.role = role;
@@ -7372,8 +7577,21 @@ pub(crate) mod e2e_test_support {
             crate::background::WriteAcceptanceGate::standalone(),
         );
         let admission = crate::admission::AdmissionState::new(Default::default());
-        let commit_log: Arc<dyn crate::commit::MutationCommitter> =
+        // Production-shaped single-node commit path (issue #37 lesson: a
+        // bare committer without an Applier durably appends but never
+        // lands rows in engine state, so write e2e tests silently assert
+        // nothing). Same wiring as main.rs `RaftClusterMode::Disabled`.
+        let local_committer =
             Arc::new(crate::commit::LocalSqliteCommitter::open_in_memory().expect("commit log"));
+        let engine_resolver = Arc::new(crate::tenant_pool::TenantPoolEngineResolver::new(
+            pool.clone(),
+            Arc::clone(&control),
+        )) as Arc<dyn crate::commit::EngineResolver>;
+        let applier: Arc<dyn crate::commit::Applier> =
+            Arc::new(crate::commit::EngineApplier::new(engine_resolver));
+        let commit_log: Arc<dyn crate::commit::MutationCommitter> = Arc::new(
+            crate::commit::LocalSqliteSubmitter::new(local_committer, applier),
+        );
         let jobs: Arc<dyn crate::jobs::JobQueue> =
             Arc::new(crate::jobs::LocalSqliteJobQueue::open_in_memory().expect("jobs queue"));
         let cluster_secret = cluster.as_ref().map(|(_, s)| s.clone());
@@ -9138,5 +9356,503 @@ mod contract_fixture_tests {
         let actual = serde_json::json!({"x": null});
         let expected = serde_json::json!({"x": "example"});
         assert_shape_matches(&actual, &expected, "");
+    }
+}
+
+// ── Handoff 1b — regression tests for HTTP fields the server dropped ─
+//
+// Per the issue #34 discipline these run against the PRODUCTION router
+// (`super::router(state)`) — tests/http_integration.rs exercises a mock
+// handler set inside a bin-only crate and cannot regress these paths
+// (each of these tests, ported there, would pass on the broken code).
+//
+// The fixtures open engines at dim 64 = BUNDLED_EMBEDDER_DIM so the
+// engine auto-attaches its zero-network bundled embedder: text-query
+// recall (`db.embed`) and `record_text` work end-to-end.
+#[cfg(test)]
+mod handoff_1b_regressions {
+    use super::e2e_test_support::{build_fixture, build_fixture_with_dim, post_body, E2eFixture};
+    use super::think_command_from_body;
+    use crate::command::Command;
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+
+    /// The tenant's live engine — the same instance the router resolves.
+    fn engine_of(fx: &E2eFixture) -> Arc<yantrikdb::YantrikDB> {
+        let rec = fx
+            .state
+            .control
+            .lock()
+            .get_database(&fx.tenant_namespace)
+            .expect("control lookup")
+            .expect("tenant row exists");
+        fx.state.pool.get_engine(&rec).expect("engine loads")
+    }
+
+    fn record_text(engine: &yantrikdb::YantrikDB, text: &str, certainty: f64) -> String {
+        engine
+            .record_text(
+                text,
+                "semantic",
+                0.9,
+                0.0,
+                168.0,
+                &json!({}),
+                "",
+                certainty,
+                "",
+                "user",
+                None,
+            )
+            .expect("record_text")
+    }
+
+    fn result_rids(body: &[u8]) -> Vec<String> {
+        let v: Value = serde_json::from_slice(body).expect("json body");
+        v["results"]
+            .as_array()
+            .expect("results array")
+            .iter()
+            .map(|r| r["rid"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    fn emb64(seed: f32) -> Vec<f32> {
+        (0..64).map(|i| ((i as f32) * 0.1 + seed).sin()).collect()
+    }
+
+    fn access_count(engine: &yantrikdb::YantrikDB, rid: &str) -> i64 {
+        engine
+            .conn()
+            .query_row(
+                "SELECT access_count FROM memories WHERE rid = ?1",
+                rusqlite::params![rid],
+                |row| row.get(0),
+            )
+            .expect("access_count row")
+    }
+
+    // ── Fix 1: no-filter /v1/recall must route through full recall ──
+
+    #[tokio::test]
+    async fn recall_no_filter_honors_include_superseded() {
+        // Old code: a body with no namespace/domain/source/memory_type and
+        // no query_embedding routed to `db.recall_text`, which pins
+        // include_superseded=false — so this opt-in did nothing exactly on
+        // the plainest request shape.
+        let fx = build_fixture_with_dim("acme", 64);
+        let engine = engine_of(&fx);
+        let old = record_text(&engine, "the deploy target is server alpha", 1.0);
+        let new = record_text(&engine, "the deploy target is server beta", 1.0);
+        engine
+            .link(
+                &new,
+                &yantrikdb::types::RecordLink {
+                    target_rid: old.clone(),
+                    link_type: yantrikdb::types::LinkType::Supersedes,
+                },
+            )
+            .expect("supersedes link");
+
+        // Default (no include_superseded): the superseded original is out.
+        let (status, body) = post_body(
+            fx.state.clone(),
+            "/v1/recall",
+            Some(&fx.raw_token),
+            r#"{"query":"deploy target server","top_k":10}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let rids = result_rids(&body);
+        assert!(
+            !rids.contains(&old),
+            "sanity: superseded record must be excluded by default; got {rids:?}"
+        );
+
+        // Opt-in on the SAME no-filter shape: the original comes back.
+        let (status, body) = post_body(
+            fx.state.clone(),
+            "/v1/recall",
+            Some(&fx.raw_token),
+            r#"{"query":"deploy target server","top_k":10,"include_superseded":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let rids = result_rids(&body);
+        assert!(
+            rids.contains(&old),
+            "include_superseded=true on a no-filter recall must surface the \
+             superseded original (old code dropped it via recall_text); got {rids:?}"
+        );
+    }
+
+    // ── Fix 2: certainty_min + skip_reinforce plumbed to db.recall ──
+
+    #[tokio::test]
+    async fn recall_skip_reinforce_leaves_access_count_untouched() {
+        let fx = build_fixture_with_dim("acme", 64);
+        let engine = engine_of(&fx);
+        let rid = record_text(&engine, "the database password rotation runbook", 1.0);
+        assert_eq!(access_count(&engine, &rid), 0, "fresh row starts cold");
+
+        // Probe recall: must NOT mutate access_count.
+        let (status, body) = post_body(
+            fx.state.clone(),
+            "/v1/recall",
+            Some(&fx.raw_token),
+            r#"{"query":"password rotation runbook","top_k":5,"skip_reinforce":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        assert!(
+            result_rids(&body).contains(&rid),
+            "probe recall must still return the row"
+        );
+        assert_eq!(
+            access_count(&engine, &rid),
+            0,
+            "skip_reinforce=true recall must not reinforce (old code dropped \
+             the field and every probe bumped access_count)"
+        );
+
+        // Control: a normal recall DOES reinforce — proves the observable.
+        let (status, _) = post_body(
+            fx.state.clone(),
+            "/v1/recall",
+            Some(&fx.raw_token),
+            r#"{"query":"password rotation runbook","top_k":5}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert!(
+            access_count(&engine, &rid) > 0,
+            "control recall (no skip_reinforce) must reinforce"
+        );
+    }
+
+    #[tokio::test]
+    async fn recall_certainty_min_filters_low_certainty_rows() {
+        let fx = build_fixture_with_dim("acme", 64);
+        let engine = engine_of(&fx);
+        // NOTE: the engine applies certainty_min in the VECTOR candidate
+        // lane only (recall.rs Issue #46 filter); rows admitted by the
+        // FTS5 keyword lane bypass it. The low-certainty text therefore
+        // shares NO content words with the query, so its only route into
+        // the result set is the vector lane — where the filter runs.
+        let high = record_text(&engine, "the billing provider is stripe", 0.9);
+        let low = record_text(&engine, "adyen could be an alternative someday", 0.2);
+
+        // Sanity: without the filter both rows come back.
+        let (status, body) = post_body(
+            fx.state.clone(),
+            "/v1/recall",
+            Some(&fx.raw_token),
+            r#"{"query":"billing provider stripe","top_k":10}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let rids = result_rids(&body);
+        assert!(rids.contains(&high) && rids.contains(&low), "got {rids:?}");
+
+        let (status, body) = post_body(
+            fx.state.clone(),
+            "/v1/recall",
+            Some(&fx.raw_token),
+            r#"{"query":"billing provider stripe","top_k":10,"certainty_min":0.5}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let rids = result_rids(&body);
+        assert!(
+            rids.contains(&high),
+            "high-certainty row must survive the filter; got {rids:?}"
+        );
+        assert!(
+            !rids.contains(&low),
+            "certainty_min=0.5 must exclude the 0.2-certainty row (old code \
+             dropped the field entirely); got {rids:?}"
+        );
+    }
+
+    // ── Fix 3: /v1/think field-name mismatch + missing knobs ──
+
+    #[test]
+    fn think_body_accepts_client_spellings_and_new_knobs() {
+        // yantrikdb-mcp's HTTP backend sends run_conflicts/run_patterns
+        // (plus the three ThinkConfig knobs). Old code read only
+        // run_conflict_scan/run_pattern_mining and dropped the rest, so
+        // every restraint flag was discarded.
+        let cmd = think_command_from_body(&json!({
+            "run_conflicts": false,
+            "run_patterns": true,
+            "consolidation_time_window_days": 2.5,
+            "min_active_memories": 1,
+            "max_triggers": 3
+        }));
+        match cmd {
+            Command::Think {
+                run_conflict_scan,
+                run_pattern_mining,
+                consolidation_time_window_days,
+                min_active_memories,
+                max_triggers,
+                ..
+            } => {
+                assert!(!run_conflict_scan, "run_conflicts=false must be honored");
+                assert!(run_pattern_mining, "run_patterns=true must be honored");
+                assert_eq!(consolidation_time_window_days, Some(2.5));
+                assert_eq!(min_active_memories, Some(1));
+                assert_eq!(max_triggers, Some(3));
+            }
+            other => panic!("expected Command::Think, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn think_body_canonical_spelling_wins_over_alias() {
+        let cmd = think_command_from_body(&json!({
+            "run_conflict_scan": true,
+            "run_conflicts": false,
+            "run_pattern_mining": false,
+            "run_patterns": true
+        }));
+        match cmd {
+            Command::Think {
+                run_conflict_scan,
+                run_pattern_mining,
+                ..
+            } => {
+                assert!(run_conflict_scan, "canonical long spelling wins");
+                assert!(!run_pattern_mining, "canonical long spelling wins");
+            }
+            other => panic!("expected Command::Think, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn think_endpoint_accepts_alias_spellings() {
+        // End-to-end: the alias body parses, routes, and returns 200.
+        let fx = build_fixture("acme");
+        let (status, body) = post_body(
+            fx.state.clone(),
+            "/v1/think",
+            Some(&fx.raw_token),
+            r#"{"run_consolidation":false,"run_conflicts":false,"run_patterns":false,"run_personality":false,"max_triggers":0}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&body));
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert!(v.get("duration_ms").is_some());
+    }
+
+    // ── Fix 4: created_at (event time) reachable over HTTP ──
+
+    #[tokio::test]
+    async fn remember_created_at_backdates_the_record() {
+        // 2019-01-01T00:00:00Z — the historical-import shape. Old code
+        // ignored the field and stamped now() on every write path.
+        const T: f64 = 1_546_300_800.0;
+        let fx = build_fixture_with_dim("acme", 64);
+        let engine = engine_of(&fx);
+
+        // Unkeyed single write (commit-log mutation path).
+        let body = json!({
+            "text": "employee badge issued",
+            "embedding": emb64(0.3),
+            "created_at": T,
+        });
+        let (status, resp) = post_body(
+            fx.state.clone(),
+            "/v1/remember",
+            Some(&fx.raw_token),
+            &body.to_string(),
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&resp));
+        let v: Value = serde_json::from_slice(&resp).unwrap();
+        let rid = v["rid"].as_str().expect("rid").to_string();
+        let mem = engine.get(&rid).expect("get").expect("row exists");
+        assert!(
+            (mem.created_at - T).abs() < 1.0,
+            "unkeyed /v1/remember must honor created_at; got {}",
+            mem.created_at
+        );
+
+        // Keyed single write (engine-atomic idempotency path).
+        let body = json!({
+            "text": "employee badge issued (keyed)",
+            "embedding": emb64(0.6),
+            "created_at": T,
+            "idempotency_key": "hist-import-1",
+        });
+        let (status, resp) = post_body(
+            fx.state.clone(),
+            "/v1/remember",
+            Some(&fx.raw_token),
+            &body.to_string(),
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&resp));
+        let v: Value = serde_json::from_slice(&resp).unwrap();
+        let rid = v["rid"].as_str().expect("rid").to_string();
+        let mem = engine.get(&rid).expect("get").expect("row exists");
+        assert!(
+            (mem.created_at - T).abs() < 1.0,
+            "keyed /v1/remember must honor created_at; got {}",
+            mem.created_at
+        );
+
+        // Batch write (per-item created_at, unkeyed commit-log loop).
+        let body = json!({
+            "memories": [{
+                "text": "employee badge issued (batch)",
+                "embedding": emb64(0.9),
+                "created_at": T,
+            }]
+        });
+        let (status, resp) = post_body(
+            fx.state.clone(),
+            "/v1/remember/batch",
+            Some(&fx.raw_token),
+            &body.to_string(),
+        )
+        .await;
+        assert_eq!(status, 200, "body: {}", String::from_utf8_lossy(&resp));
+        let v: Value = serde_json::from_slice(&resp).unwrap();
+        let rid = v["rids"][0].as_str().expect("rid").to_string();
+        let mem = engine.get(&rid).expect("get").expect("row exists");
+        assert!(
+            (mem.created_at - T).abs() < 1.0,
+            "batch /v1/remember must honor per-item created_at; got {}",
+            mem.created_at
+        );
+    }
+
+    // ── Fix 5: provenance gate at HTTP ORIGIN ingress ──
+
+    #[tokio::test]
+    async fn unkeyed_remember_refuses_laundered_provenance() {
+        // Fresh installs default the gate to Enforce. source=inference
+        // claiming kind=fact with no confirming basis is the declared
+        // contradiction the matrix exists to refuse. Old code committed it
+        // (the applier applies with WriteAdmission::Admitted, trusting an
+        // origin gate that never ran).
+        let fx = build_fixture_with_dim("acme", 64);
+        let engine = engine_of(&fx);
+        let before = engine.stats(None).expect("stats").active_memories;
+
+        let body = json!({
+            "text": "the outage was caused by the cache layer",
+            "source": "inference",
+            "metadata": {"kind": "fact"},
+            "embedding": emb64(0.2),
+        });
+        let (status, resp) = post_body(
+            fx.state.clone(),
+            "/v1/remember",
+            Some(&fx.raw_token),
+            &body.to_string(),
+        )
+        .await;
+        let text = String::from_utf8_lossy(&resp);
+        assert_eq!(
+            status, 400,
+            "unkeyed inference-claiming-fact write must be refused at ingress; got {status}: {text}"
+        );
+        assert!(
+            text.contains("provenance"),
+            "refusal must name the gate: {text}"
+        );
+        let after = engine.stats(None).expect("stats").active_memories;
+        assert_eq!(before, after, "refused write must not land");
+
+        // A consistent write on the same path still passes.
+        let body = json!({
+            "text": "the outage was caused by the cache layer",
+            "source": "user",
+            "metadata": {"kind": "fact"},
+            "embedding": emb64(0.2),
+        });
+        let (status, resp) = post_body(
+            fx.state.clone(),
+            "/v1/remember",
+            Some(&fx.raw_token),
+            &body.to_string(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            200,
+            "clean provenance must still write: {}",
+            String::from_utf8_lossy(&resp)
+        );
+    }
+
+    #[tokio::test]
+    async fn unkeyed_batch_refuses_laundered_provenance_before_any_commit() {
+        let fx = build_fixture_with_dim("acme", 64);
+        let engine = engine_of(&fx);
+        let before = engine.stats(None).expect("stats").active_memories;
+
+        // Clean item FIRST, laundering item second: the gate must refuse
+        // the whole batch before item 0 enters the commit log.
+        let body = json!({
+            "memories": [
+                {"text": "clean note", "source": "user", "embedding": emb64(0.1)},
+                {
+                    "text": "inferred but claiming fact",
+                    "source": "inference",
+                    "metadata": {"kind": "fact"},
+                    "embedding": emb64(0.4),
+                },
+            ]
+        });
+        let (status, resp) = post_body(
+            fx.state.clone(),
+            "/v1/remember/batch",
+            Some(&fx.raw_token),
+            &body.to_string(),
+        )
+        .await;
+        let text = String::from_utf8_lossy(&resp);
+        assert_eq!(
+            status, 400,
+            "batch with a laundering item must 400; got {status}: {text}"
+        );
+        assert!(
+            text.contains("memories[1]") && text.contains("provenance"),
+            "refusal must name the offending item: {text}"
+        );
+        let after = engine.stats(None).expect("stats").active_memories;
+        assert_eq!(
+            before, after,
+            "gate runs before ANY item commits — the clean sibling must not land"
+        );
+    }
+
+    #[tokio::test]
+    async fn keyed_remember_maps_provenance_refusal_to_400() {
+        // Sibling surface: the keyed path always gated inside the engine,
+        // but the handler surfaced the refusal as a 500 "engine error".
+        // A declared contradiction is a caller bug — 400, same shape as
+        // the ingress gate.
+        let fx = build_fixture_with_dim("acme", 64);
+        let body = json!({
+            "text": "inferred but claiming fact",
+            "source": "inference",
+            "metadata": {"kind": "fact"},
+            "embedding": emb64(0.7),
+            "idempotency_key": "launder-1",
+        });
+        let (status, resp) = post_body(
+            fx.state.clone(),
+            "/v1/remember",
+            Some(&fx.raw_token),
+            &body.to_string(),
+        )
+        .await;
+        let text = String::from_utf8_lossy(&resp);
+        assert_eq!(status, 400, "got {status}: {text}");
+        assert!(text.contains("provenance"), "must name the gate: {text}");
     }
 }

@@ -2,6 +2,7 @@
 
 import math
 import threading
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,9 +24,13 @@ class _MockEmbedder:
         return _vec(seed)
 
 
-@pytest.fixture
-def client():
-    """Create a test client with in-memory YantrikDB, bypassing lifespan."""
+@contextmanager
+def _make_client():
+    """Build a test client with in-memory YantrikDB, bypassing lifespan.
+
+    Routes are copied from the real app, so the app-level auth dependency
+    (baked into each APIRoute at registration) is exercised as in production.
+    """
     from contextlib import asynccontextmanager
 
     from fastapi import FastAPI as _FastAPI
@@ -53,6 +58,25 @@ def client():
         test_app.routes.append(route)
 
     with TestClient(test_app, raise_server_exceptions=True) as c:
+        yield c
+
+
+@pytest.fixture
+def client(monkeypatch):
+    """Test client with no API key configured — all routes open (legacy behavior)."""
+    monkeypatch.delenv("YANTRIKDB_API_KEY", raising=False)
+    with _make_client() as c:
+        yield c
+
+
+API_KEY = "test-secret-key"
+
+
+@pytest.fixture
+def auth_client(monkeypatch):
+    """Test client with YANTRIKDB_API_KEY configured — bearer auth enforced."""
+    monkeypatch.setenv("YANTRIKDB_API_KEY", API_KEY)
+    with _make_client() as c:
         yield c
 
 
@@ -186,3 +210,123 @@ class TestSystemEndpoints:
         assert "/memories" in schema["paths"]
         assert "/memories/recall" in schema["paths"]
         assert "/stats" in schema["paths"]
+
+    def test_health(self, client):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+
+class TestAuth:
+    """Bearer auth when YANTRIKDB_API_KEY is configured."""
+
+    AUTH = {"Authorization": f"Bearer {API_KEY}"}
+
+    def test_export_requires_auth(self, auth_client):
+        resp = auth_client.get("/export")
+        assert resp.status_code == 401
+        assert resp.headers.get("WWW-Authenticate") == "Bearer"
+
+    def test_wrong_key_rejected(self, auth_client):
+        resp = auth_client.get("/export", headers={"Authorization": "Bearer wrong-key"})
+        assert resp.status_code == 401
+
+    def test_wrong_scheme_rejected(self, auth_client):
+        resp = auth_client.get("/export", headers={"Authorization": f"Basic {API_KEY}"})
+        assert resp.status_code == 401
+
+    def test_right_key_accepted(self, auth_client):
+        resp = auth_client.get("/export", headers=self.AUTH)
+        assert resp.status_code == 200
+        assert resp.json()["version"] == "yantrikdb-export-v1"
+
+    def test_mutating_routes_gated(self, auth_client):
+        assert auth_client.post("/memories", json={"text": "x"}).status_code == 401
+        assert auth_client.delete("/memories/some-rid").status_code == 401
+        assert auth_client.post(
+            "/memories/some-rid/correct", json={"new_text": "y"}
+        ).status_code == 401
+        assert auth_client.post(
+            "/entities/relate", json={"src": "A", "dst": "B"}
+        ).status_code == 401
+        assert auth_client.post("/think").status_code == 401
+
+    def test_read_routes_gated(self, auth_client):
+        assert auth_client.get("/stats").status_code == 401
+        assert auth_client.post("/memories/recall", json={"query": "q"}).status_code == 401
+        assert auth_client.get("/memories/some-rid").status_code == 401
+
+    def test_authed_roundtrip(self, auth_client):
+        rid = auth_client.post(
+            "/memories", json={"text": "secret"}, headers=self.AUTH
+        ).json()["rid"]
+        resp = auth_client.get(f"/memories/{rid}", headers=self.AUTH)
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "secret"
+        resp = auth_client.delete(f"/memories/{rid}", headers=self.AUTH)
+        assert resp.status_code == 200
+
+    def test_health_stays_open(self, auth_client):
+        resp = auth_client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+    def test_no_key_configured_stays_open(self, client):
+        # Legacy behavior: no YANTRIKDB_API_KEY → no auth required.
+        assert client.get("/export").status_code == 200
+        assert client.post("/memories", json={"text": "x"}).status_code == 200
+
+
+class TestBindGuard:
+    """Startup refusal for non-loopback binds without an API key."""
+
+    def _run_main(self, monkeypatch):
+        import yantrikdb.api as api_mod
+
+        calls = []
+        monkeypatch.setattr(
+            api_mod.uvicorn, "run", lambda *a, **kw: calls.append((a, kw))
+        )
+        api_mod.main()
+        return calls
+
+    def test_non_loopback_without_key_refused(self, monkeypatch):
+        monkeypatch.setenv("YANTRIKDB_HOST", "0.0.0.0")
+        monkeypatch.delenv("YANTRIKDB_API_KEY", raising=False)
+        monkeypatch.delenv("YANTRIKDB_ALLOW_INSECURE", raising=False)
+        with pytest.raises(SystemExit):
+            self._run_main(monkeypatch)
+
+    def test_non_loopback_hostname_without_key_refused(self, monkeypatch):
+        monkeypatch.setenv("YANTRIKDB_HOST", "myserver.lan")
+        monkeypatch.delenv("YANTRIKDB_API_KEY", raising=False)
+        monkeypatch.delenv("YANTRIKDB_ALLOW_INSECURE", raising=False)
+        with pytest.raises(SystemExit):
+            self._run_main(monkeypatch)
+
+    def test_non_loopback_with_key_starts(self, monkeypatch):
+        monkeypatch.setenv("YANTRIKDB_HOST", "0.0.0.0")
+        monkeypatch.setenv("YANTRIKDB_API_KEY", "some-key")
+        assert len(self._run_main(monkeypatch)) == 1
+
+    def test_loopback_without_key_starts(self, monkeypatch):
+        monkeypatch.delenv("YANTRIKDB_HOST", raising=False)
+        monkeypatch.delenv("YANTRIKDB_API_KEY", raising=False)
+        calls = self._run_main(monkeypatch)
+        assert len(calls) == 1
+        assert calls[0][1]["host"] == "127.0.0.1"
+
+    def test_localhost_and_ipv6_loopback_without_key_start(self, monkeypatch):
+        monkeypatch.delenv("YANTRIKDB_API_KEY", raising=False)
+        for host in ("localhost", "::1", "127.0.0.1"):
+            monkeypatch.setenv("YANTRIKDB_HOST", host)
+            assert len(self._run_main(monkeypatch)) == 1
+
+    def test_allow_insecure_escape_hatch(self, monkeypatch, caplog):
+        monkeypatch.setenv("YANTRIKDB_HOST", "0.0.0.0")
+        monkeypatch.delenv("YANTRIKDB_API_KEY", raising=False)
+        monkeypatch.setenv("YANTRIKDB_ALLOW_INSECURE", "1")
+        with caplog.at_level("WARNING", logger="yantrikdb.api"):
+            calls = self._run_main(monkeypatch)
+        assert len(calls) == 1
+        assert any("SECURITY WARNING" in r.message for r in caplog.records)

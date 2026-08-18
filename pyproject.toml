@@ -7,7 +7,7 @@ name = "yantrikdb"
 version = "0.4.2"
 description = "A Cognitive Memory Engine for Persistent AI Systems"
 readme = "README.md"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "Pranab Sarkar", email = "developer@pranab.co.in" },

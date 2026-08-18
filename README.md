@@ -22,7 +22,7 @@ YantrikDB is different. It's a **cognitive memory engine** — embed it, run it 
 [![PyPI](https://img.shields.io/pypi/v/yantrikdb)](https://pypi.org/project/yantrikdb/)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fyantrikos%2Fyantrikdb-blue)](https://github.com/yantrikos/yantrikdb-server/pkgs/container/yantrikdb)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20128887.svg)](https://doi.org/10.5281/zenodo.20128887)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 > 📄 **New paper (May 2026):** [*Skill as Memory, Not Document*](https://doi.org/10.5281/zenodo.20128887) — measuring three failure modes when agent skill catalogs scale to 5,000 skills. Code + raw CSVs reproducible in [`benchmarks/skill_recall/`](benchmarks/skill_recall/).
 
@@ -440,6 +440,6 @@ Code + scripts + raw CSVs are reproducible at [`benchmarks/skill_recall/`](bench
 
 ## License
 
-AGPL-3.0. See [LICENSE](LICENSE) for the full text.
+Apache-2.0. See [LICENSE](LICENSE) for the full text.
 
-The [MCP server](https://github.com/yantrikos/yantrikdb-mcp) is MIT-licensed — using the engine via the MCP server does not trigger AGPL obligations on your code.
+The [MCP server](https://github.com/yantrikos/yantrikdb-mcp) is MIT-licensed.

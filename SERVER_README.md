@@ -416,7 +416,7 @@ cargo test -p yantrikdb-server --test cluster_integration -- --ignored --nocaptu
 
 ## License
 
-- **Server** (`yantrikdb`, `yantrikdb-witness`): AGPL-3.0
+- **Server** (`yantrikdb`, `yantrikdb-witness`): Apache-2.0
 - **Client SDK** (`yql`, Python SDK): MIT
 
 ## Credits

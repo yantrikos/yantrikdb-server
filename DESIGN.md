@@ -438,6 +438,6 @@ yantrikdb-server/
 ---
 
 ## License
-- Server: AGPL-3.0
+- Server: Apache-2.0
 - Client SDKs: MIT / Apache-2.0
 - This protects against cloud strip-mining while keeping SDKs freely embeddable.

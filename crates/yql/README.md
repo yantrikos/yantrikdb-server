@@ -70,4 +70,4 @@ yql --host localhost -p 7438 -t $TOKEN -c 'remember "Hello" importance=0.5'
 
 MIT — `yql` is free for any use, including commercial.
 
-The server (`yantrikdb-server`) is AGPL-3.0.
+The server (`yantrikdb-server`) is Apache-2.0.

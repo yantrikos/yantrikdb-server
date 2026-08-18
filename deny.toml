@@ -14,7 +14,7 @@ no-default-features = false
 ignore = []
 
 [licenses]
-# Allow common permissive licenses. Our own code is AGPL-3.0.
+# Allow common permissive licenses. Our own code is Apache-2.0.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -30,7 +30,6 @@ allow = [
     "OpenSSL",
     "MPL-2.0",             # webpki, ring (Mozilla crates)
     "CDLA-Permissive-2.0", # ONNX model files via fastembed
-    "AGPL-3.0-only",       # our own license
 ]
 # Suppress warnings for licenses that exist in the allow list but
 # aren't encountered in the current dependency graph.

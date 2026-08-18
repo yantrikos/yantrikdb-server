@@ -60,5 +60,5 @@ See the [main README](https://github.com/yantrikos/yantrikdb-server) for full de
 
 ## License
 
-AGPL-3.0-only — server and core engine.
+Apache-2.0 — server and core engine.
 Client SDKs (yql, Python SDK) are MIT-licensed.

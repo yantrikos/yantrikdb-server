@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-witness"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "YantrikDB cluster witness — vote-only daemon for 2-node Raft failover (tiny tiebreaker)"
 license = "Apache-2.0"

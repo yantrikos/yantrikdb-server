@@ -67,14 +67,23 @@ db.think()
 ### 3. It detects contradictions
 
 ```python
-db.record("CEO is Alice")
-db.record("CEO is Bob")  # added later in another conversation
+db.record("Acme is based in Boston.")
+db.record("Acme is based in Denver.")   # added later, in another conversation
 
 db.think()
-# → {"conflicts_found": 1, "conflicts": [{"memory_a": "CEO is Alice",
-#                                         "memory_b": "CEO is Bob",
-#                                         "type": "factual_contradiction"}]}
+# → {"conflicts_found": 1, ...}
+db.get_conflicts()
+# → [{"kind": "identity_fact", ...}]
 ```
+
+Detection runs over the **relations the extractor recognises** — here
+`headquartered_in`, which holds one value at a time — not over arbitrary
+sentences. `"CEO is Alice"` followed by `"CEO is Bob"` is *not* detected: no
+entity is extracted from a bare copular sentence with no named subject, so
+there is nothing for the claim scan to compare. Name the subject
+(`"Acme's CEO is Alice"`) and the same limitation still applies to
+inverse-functional relations — tracked in
+[#95](https://github.com/yantrikos/yantrikdb-server/issues/95).
 
 Plus: temporal decay with configurable half-life, entity graph with relationship edges, personality derivation from memory patterns, session-aware context surfacing, multi-signal scoring (recency × importance × similarity × graph proximity).
 

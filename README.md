@@ -67,14 +67,28 @@ db.think()
 ### 3. It detects contradictions
 
 ```python
-db.record("CEO is Alice")
-db.record("CEO is Bob")  # added later in another conversation
+db.record("Acme is based in Boston.")
+db.record("Acme is based in Denver.")   # added later, in another conversation
 
 db.think()
-# → {"conflicts_found": 1, "conflicts": [{"memory_a": "CEO is Alice",
-#                                         "memory_b": "CEO is Bob",
-#                                         "type": "factual_contradiction"}]}
+# → {"conflicts_found": 1, ...}
+db.get_conflicts()
+# → [{"kind": "identity_fact", ...}]
 ```
+
+Detection runs over the **relations the extractor recognises** — here a
+location relation, single-valued at any moment — not over arbitrary sentences.
+Two limits are worth knowing before you rely on it:
+
+- **Claims are keyed by subject.** `"Alice is the CEO of Acme"` and
+  `"Bob is the CEO of Acme"` have *different* subjects with one value each, so
+  nothing compares. The constraint here is inverse-functional — it lives on the
+  object ("CEO of Acme" admits one filler) — and that direction is not modelled.
+- **Copular attribute claims are off by default.** `"The logo is blue"` →
+  `"The logo is green"` needs `ThinkConfig.extract_attribute_claims`; without
+  it the copular path never runs.
+
+Both are tracked in [#95](https://github.com/yantrikos/yantrikdb-server/issues/95).
 
 Plus: temporal decay with configurable half-life, entity graph with relationship edges, personality derivation from memory patterns, session-aware context surfacing, multi-signal scoring (recency × importance × similarity × graph proximity).
 

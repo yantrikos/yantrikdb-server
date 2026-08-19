@@ -76,14 +76,19 @@ db.get_conflicts()
 # → [{"kind": "identity_fact", ...}]
 ```
 
-Detection runs over the **relations the extractor recognises** — here
-`headquartered_in`, which holds one value at a time — not over arbitrary
-sentences. `"CEO is Alice"` followed by `"CEO is Bob"` is *not* detected: no
-entity is extracted from a bare copular sentence with no named subject, so
-there is nothing for the claim scan to compare. Name the subject
-(`"Acme's CEO is Alice"`) and the same limitation still applies to
-inverse-functional relations — tracked in
-[#95](https://github.com/yantrikos/yantrikdb-server/issues/95).
+Detection runs over the **relations the extractor recognises** — here a
+location relation, single-valued at any moment — not over arbitrary sentences.
+Two limits are worth knowing before you rely on it:
+
+- **Claims are keyed by subject.** `"Alice is the CEO of Acme"` and
+  `"Bob is the CEO of Acme"` have *different* subjects with one value each, so
+  nothing compares. The constraint here is inverse-functional — it lives on the
+  object ("CEO of Acme" admits one filler) — and that direction is not modelled.
+- **Copular attribute claims are off by default.** `"The logo is blue"` →
+  `"The logo is green"` needs `ThinkConfig.extract_attribute_claims`; without
+  it the copular path never runs.
+
+Both are tracked in [#95](https://github.com/yantrikos/yantrikdb-server/issues/95).
 
 Plus: temporal decay with configurable half-life, entity graph with relationship edges, personality derivation from memory patterns, session-aware context surfacing, multi-signal scoring (recency × importance × similarity × graph proximity).
 

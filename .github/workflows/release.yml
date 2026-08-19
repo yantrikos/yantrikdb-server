@@ -129,3 +129,22 @@ jobs:
             artifacts/yantrikdb-witness-windows-amd64.exe/yantrikdb-witness-windows-amd64.exe
             artifacts/yantrikdb-witness-macos-arm64/yantrikdb-witness-macos-arm64
             artifacts/yantrikdb-witness-macos-amd64/yantrikdb-witness-macos-amd64
+
+      # yantrikdb.com renders its "Latest releases" block from the GitHub
+      # Releases API at build time, but it only rebuilds when something tells
+      # it to. This tells it, so the site is current within a minute of a
+      # release instead of waiting for its daily cron.
+      #
+      # NON-FATAL BY CONSTRUCTION. A marketing site that failed to rebuild is
+      # not a release failure: no token, no network, no site — this step still
+      # exits 0, and the site's own daily rebuild picks the release up.
+      - name: Nudge yantrikdb.com to rebuild
+        continue-on-error: true
+        env:
+          SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$SITE_DISPATCH_TOKEN" ]; then
+            echo "::notice::SITE_DISPATCH_TOKEN not set - skipping; yantrikdb.com rebuilds daily anyway"
+            exit 0
+          fi
+          curl -sS -f -X POST             -H "Accept: application/vnd.github+json"             -H "Authorization: Bearer $SITE_DISPATCH_TOKEN"             https://api.github.com/repos/yantrikos/yantrikdb-web/dispatches             -d '{"event_type":"component-released","client_payload":{"component":"server","ref":"${{ github.ref_name }}"}}'             && echo "::notice::yantrikdb.com rebuild requested"             || echo "::warning::dispatch failed - yantrikdb.com will pick this up on its daily rebuild"

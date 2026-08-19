@@ -4704,7 +4704,7 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "rmp-serde",
@@ -4764,7 +4764,7 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb-witness"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bytes",

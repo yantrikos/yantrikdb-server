@@ -1,6 +1,6 @@
 [package]
 name = "yantrikdb-protocol"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Wire protocol codec for YantrikDB — binary frames, opcodes, MessagePack messages, Tokio codec"
 license = "Apache-2.0"

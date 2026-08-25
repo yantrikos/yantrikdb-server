@@ -170,6 +170,8 @@ pub fn execute_with_guard(
                     certainty_min,
                     None, // order — v0.7.20 issue #46; pre-existing behavior = relevance order
                     include_superseded, // v0.10: current-value-by-default unless the caller opts into history
+                    None, // event_after  — engine 0.17 valid-time filter (#149); no bound = unchanged behavior
+                    None, // event_before — ditto; HTTP since/until forwarding is a separate change
                 )?
             } else {
                 let emb = db.embed(&query)?;
@@ -188,6 +190,8 @@ pub fn execute_with_guard(
                     certainty_min,
                     None, // order — v0.7.20 issue #46; pre-existing behavior = relevance order
                     include_superseded, // v0.10: current-value-by-default unless the caller opts into history
+                    None, // event_after  — engine 0.17 valid-time filter (#149); no bound = unchanged behavior
+                    None, // event_before — ditto; HTTP since/until forwarding is a separate change
                 )?
             };
 

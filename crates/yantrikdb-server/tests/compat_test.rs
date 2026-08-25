@@ -88,9 +88,9 @@ fn test_data_dir_survives_reopen() {
                 None,  // certainty_min — v0.7.20 issue #46
                 None,  // order — v0.7.20 issue #46
                 false, // include_superseded — v0.10,
-            None, // event_after  — engine 0.17 valid-time filter; unbounded
-            None, // event_before
-        )
+                None,  // event_after  — engine 0.17 valid-time filter; unbounded
+                None,  // event_before
+            )
             .unwrap();
         assert!(
             results.len() >= 2,

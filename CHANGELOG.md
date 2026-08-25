@@ -5,6 +5,24 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] — 2026-08-25
+
+**Engine 0.17.1** (thread-aware retrieval, reachable event time, convergent
+replication; 0.17.1 restores `import yantrikdb` on Python 3.10).
+
+### Changed
+- Pinned engine moves from git tag `v0.15.4` to `v0.17.1`. The only engine API
+  change that reaches the server is `recall()` gaining `event_after` /
+  `event_before` (valid-time filter, engine #149 phase 2); both handler call
+  sites and the integration/compat fixtures pass `None` — **no behaviour
+  change**. Forwarding the HTTP `since` / `until` window into those parameters
+  is a separate change (in-progress branch).
+
+### Verified
+- All server test targets against engine 0.17.1: unit 931, commit_replay 350,
+  compat 6, cpu_isolation 4, crash_recovery 2, crdt_convergence 2,
+  http_integration 13, wire_format_v1_0 356, protocol 15.
+
 ## [0.16.0] — 2026-08-16
 
 **The server half of the 2026-08-15 silent-defect sweep, plus engine 0.15.0.**

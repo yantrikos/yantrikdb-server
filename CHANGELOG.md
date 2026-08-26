@@ -5,6 +5,23 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] — 2026-08-26
+
+### Fixed
+- **Mounted packs work again.** The server exposes packs (`POST`/`GET /v1/packs/{digest}`,
+  `GET /v1/pack-context`, replicated mount) on top of the embedded engine, and every pack
+  published before engine 0.16 failed to mount with `no such column: synthesis_state` —
+  measured across the whole published line, 40 of 40. Engine 0.18.0 carries the fix
+  (schema-aware projection for a read-only pack database, which can never be migrated);
+  your `.ydbpack` files are unchanged and need no re-sealing.
+
+### Changed
+- Engine pin `0.17.1` → **`0.18.0`**, which also brings the pack substrate: structured
+  per-hit pack provenance, the signed retrieval settings on `mounted_packs()`,
+  `pack_context_for(pack_ids)` and `recall_from_packs_for(pack_ids, …)`.
+
+No server API change. Suite green against 0.18.0: 356 + 350 + 13 + 6 + 4 + 2 + 2 passed.
+
 ## [0.17.0] — 2026-08-25
 
 **Engine 0.17.1** (thread-aware retrieval, reachable event time, convergent

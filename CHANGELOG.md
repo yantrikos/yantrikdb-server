@@ -5,6 +5,30 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-09-07
+
+Engine pin `0.18.0` → **`0.22.0`** (four engine releases; schema v42 → v54, additive, migrates
+on first open — a large store takes seconds and blocks the first request, as before). No server
+API change; `GET /v1/stats` carries the new engine fields as the struct grows.
+
+### Changed
+- **Extraction is precise now.** The relation pass binds each trigger occurrence-locally inside
+  its own segment and never walks back to a convenient capitalized name (engine 0.22.0, #224);
+  what it cannot bind it refuses with a reason into `extraction_refusals`. Entities go through
+  the store's own lexicon (0.21.0) and a chunker that no longer welds sentence-final names or
+  sentence openers (0.21.2, 0.22.0). The engine-side heals `reextract_entities()` and
+  `reextract_claims()` bring an existing store up to date; they are idempotent.
+- **Claims carry a grounding status and a temporal window.** `claims.grounding` (0 legacy,
+  1 cooperative, 2 bound) and `valid_from`/`valid_to` inherited from the memory's event time
+  (0.20.0). The claim-chain eligibility gate opens in `shadow`: results unchanged, counters in
+  stats.
+- **The engine refuses a second SQLite library.** A stdlib `sqlite3` or system libsqlite3
+  opening the store in the same process corrupted it silently (yantrikos/yantrikdb#225); on
+  Linux and macOS the engine now detects the second instance and refuses to write until it is
+  reopened, and on every platform a commit that did not come through the engine queues an
+  integrity check. This server embeds the engine and never opens the store with another
+  library, so it is unaffected by the refusal and protected by it.
+
 ## [0.17.1] — 2026-08-26
 
 ### Fixed

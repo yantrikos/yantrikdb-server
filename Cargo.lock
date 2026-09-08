@@ -4679,8 +4679,8 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "yantrikdb"
-version = "0.18.0"
-source = "git+https://github.com/yantrikos/yantrikdb.git?tag=v0.18.0#6a45f15e29dbb8f8641f91557e3cb8c9304c8639"
+version = "0.22.0"
+source = "git+https://github.com/yantrikos/yantrikdb.git?tag=v0.22.0#6da0066cb85006e01b451b0b86be9c8cdbf4d32e"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -4690,6 +4690,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "js-sys",
+ "libc",
  "model2vec-rs",
  "parking_lot",
  "rand 0.8.6",
@@ -4717,7 +4718,7 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb-server"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "argon2",

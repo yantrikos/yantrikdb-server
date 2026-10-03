@@ -115,7 +115,7 @@ Full cognitive architecture lives in the [standalone engine repo](https://github
 pip install yantrikdb-mcp
 ```
 
-Add this to your MCP client config — typically `~/.claude.json` or `.mcp.json` in your project for Claude Code, and the equivalent `mcp` block in settings for Cursor/Windsurf ([Claude Code](https://docs.claude.com/en/docs/claude-code/mcp) · [Cursor](https://docs.cursor.com/context/model-context-protocol) · [Windsurf](https://docs.windsurf.com/windsurf/mcp)):
+Add this to your MCP client config — typically `~/.claude.json` or `.mcp.json` in your project for Claude Code, and the equivalent `mcp` block in settings for Cursor/Windsurf ([Claude Code](https://docs.claude.com/en/docs/claude-code/mcp) · [Cursor](https://docs.cursor.com/context/model-context-protocol) · [Windsurf](https://docs.windsurf.com/mcp)):
 
 ```json
 {

@@ -1,8 +1,8 @@
 # YantrikDB Server
 
-A cognitive memory database server with native wire protocol, HTTP gateway, built-in embeddings, automatic failover, and Raft-lite replication.
+A cognitive memory database server with native wire protocol, HTTP gateway, built-in embeddings, automatic failover, and openraft-based replication.
 
-> **Status**: v0.3.1 — production-grade replication, multi-node failover, three binaries.
+> **Status**: v0.19.1 — production-grade replication, multi-node failover, three binaries. See [CHANGELOG.md](CHANGELOG.md) for full release history.
 
 ## What it is
 

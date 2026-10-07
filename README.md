@@ -209,31 +209,26 @@ db.think()  # consolidate, detect conflicts, derive personality
 
 ## Performance
 
-Live numbers from a 2-core LXC cluster with 1689 memories:
+The numbers previously published here (1,689 memories, 112ms recall p50, 76 writes/sec) were from an April-2026 snapshot that didn't trace to any benchmark checked into this repo. They've been removed rather than repeated.
 
-| Operation | Latency |
-|---|---|
-| Recall p50 | 112ms (most is query embedding ~100ms) |
-| Recall p99 | 190ms |
-| Batch write | 76 writes/sec |
-| Engine lock acquire | <0.1ms |
-| Deep health probe | <1ms |
+The most recent throughput investigation actually in-repo is a 2-core LXC reliability bench from 2026-05-20 ([`benchmarks/throughput_2core_lxc/results_2026-05-20.md`](benchmarks/throughput_2core_lxc/results_2026-05-20.md)). It found fresh installs wedging permanently after 256 writes over HTTP, and read throughput collapsing under write load. The fix shipped the same day in v0.19.1's ancestor release (then v0.8.18, see [CHANGELOG.md](CHANGELOG.md)):
 
-For pre-computed embeddings (skip query-time embedding), recall p50 drops to ~5ms.
+| Behavior — 2-core LXC, fresh install | Pre-fix | Post-fix (v0.8.18) |
+|---|---|---|
+| Sustained write throughput, HTTP, concurrency 4, pre-computed embeddings | locks at 256 writes | **381/s** |
+| Engine ceiling, direct call (no HTTP), 32 concurrent writers | n/a — compactor wasn't spawned | **1,115/s** |
+
+That's the newest throughput data checked into the repo — it hasn't been re-run since (the server is 20+ releases past it now), and the read-collapses-under-write-load issue that same bench documented is still open. See [`benchmarks/`](benchmarks/) for raw results, harnesses, and caveats across every run; performance work is ongoing.
 
 ---
 
 ## Status
 
-**v0.5.13** — hardened alpha + RFC 006 Phase 0 observability telemetry shipped. The embeddable engine has been used in production by the YantrikOS ecosystem since early 2026. The network server runs live on a 3-node Proxmox cluster with multiple tenants.
+**v0.19.1** — in production use. The embeddable engine has been used in production by the YantrikOS ecosystem since early 2026; the network server runs live on a multi-node Proxmox cluster with multiple tenants.
 
-A 42-task hardening sprint just completed across 8 epics:
-- `parking_lot` mutexes everywhere with runtime deadlock detection (caught a self-deadlock that would have taken hours to find with std::sync)
-- Per-handler Prometheus metrics, structured JSON logging, deep health checks
-- Chaos-tested failover (leader kill, network partition, kill-9 mid-write)
-- Per-tenant quotas, load shedding, control plane replication
-- 1178 core tests + chaos harness + cargo-fuzz + CRDT property tests
-- 5 operational runbooks, watchdog with auto-restart
+Since the early alpha line, the server has moved from a raft-lite prototype to **openraft-based HA clustering** (2-voter + 1-witness), added **mounted read-only memory packs** (`/v1/packs`, `/v1/pack-context`), reached **HTTP route parity** with the embedded engine (RFC 032), and picked up the engine's **claim grounding + temporal validity windows** on recalled claims and its more precise entity/relation extraction. Operational hardening from the original hardening sprint — `parking_lot` mutexes with runtime deadlock detection, per-handler Prometheus metrics, chaos-tested failover, per-tenant quotas — remains in place and has kept pace release-to-release.
+
+Full per-release detail, including engine-pin changes and test-suite results for each version, is in [CHANGELOG.md](CHANGELOG.md).
 
 Read the maturity notes: https://yantrikdb.com/server/quickstart/#maturity
 

@@ -14,7 +14,13 @@ Vector databases store memories. They don't manage them. After 10,000 memories, 
 
 YantrikDB is different. It's a **cognitive memory engine** — embed it, run it as a server, or connect via MCP. It thinks about what it stores.
 
-**Shortest path to try it:** [MCP setup for Claude Code / Cursor / Windsurf →](#get-started-in-60-seconds--claude-code--cursor--windsurf) (one `pip install`, one config block).
+**Shortest path to try it:**
+
+```bash
+pip install yantrikdb-mcp
+```
+
+Add one config block to your MCP client and restart it — full steps in [Get started in 60 seconds →](#get-started-in-60-seconds--claude-code--cursor--windsurf).
 
 > **The bigger picture:** YantrikDB is the memory layer being built on the road to [YantrikOS](https://github.com/yantrikos) — an AI-native operating system where agents are first-class primitives, not apps on top. Memory was the bottleneck, so we're shipping it first.
 

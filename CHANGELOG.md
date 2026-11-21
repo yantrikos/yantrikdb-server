@@ -5,6 +5,30 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1] — 2026-11-21
+
+Engine pin `0.23.2` → **`0.23.5`** (schema unchanged at 54; no migration runs on open). Pinned to the
+commit tag v0.23.5 names (`8821a45`); lockfile regenerated with `cargo update -p yantrikdb`, not hand-edited. Moving the engine's git
+source re-resolved hyper-util, quinn and quinn-udp onto socket2 0.6.3 (within their declared ranges, the
+same move as 0.19.1); no other dependency changed.
+
+### Fixed (from the engine)
+- **`think()` triggers stay inside one namespace** (engine #256, 0.23.4). The redundancy scan paired the
+  most recent active memories across the whole store, so in a database holding several namespaces it could
+  save a `redundancy` / `potential_conflict` trigger whose context quoted text from two namespaces. This
+  server runs `think()` from background maintenance and from the API, and writes records into
+  caller-chosen namespaces, so the fix reaches it. Triggers written before this release are not removed.
+- **Consolidation can't cross a namespace boundary** (engine #272, 0.23.5). `commit_consolidation` now
+  refuses a cluster whose members span namespaces, before any write, instead of storing the merged record
+  in the first member's namespace.
+
+### Not affecting this server
+- Engine 0.23.3's #252 (bundled-embedder cache location) sits behind the `embedder-download` feature,
+  which this server does not enable. #254 (a `pre_compression` record is never a cluster seed) applies only
+  to records this server's API cannot write.
+- Engine 0.23.5's Python changes (GIL release in `think()` / `recall()`, Python-side embedders reaching
+  the window probe) are in the Python binding, which the server does not use.
+
 ## [0.20.0] — 2026-10-14
 
 ### Added

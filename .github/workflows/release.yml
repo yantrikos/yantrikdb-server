@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - 'v*'
+  # Rebuild and attach the binaries for a tag that already exists, without
+  # moving it (for example when a runner image is retired mid-release and the
+  # tag's crate is already on crates.io). Run from main so the fixed workflow
+  # is used; every job checks out the TAG's source, never main's.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and attach, e.g. v0.20.1"
+        required: true
 
 permissions:
   contents: write
@@ -15,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: YRP cluster-mode gate (sim + runtime + chaos)
         run: "cargo test -p yantrikdb-server --bin yantrikdb yrp::"
@@ -35,12 +46,12 @@ jobs:
             ext: ".exe"
             os_label: windows-amd64
             target_dir: target/release
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             ext: ""
             os_label: macos-arm64
             target_dir: target/aarch64-apple-darwin/release
-          - os: macos-14  # Apple Silicon runner cross-compiling for Intel
+          - os: macos-15  # Apple Silicon runner cross-compiling for Intel
             target: x86_64-apple-darwin
             ext: ""
             os_label: macos-amd64
@@ -50,6 +61,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -106,6 +119,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -115,6 +130,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           generate_release_notes: true
           files: |
             artifacts/yantrikdb-linux-amd64/yantrikdb-linux-amd64
@@ -147,4 +163,4 @@ jobs:
             echo "::notice::SITE_DISPATCH_TOKEN not set - skipping; yantrikdb.com rebuilds daily anyway"
             exit 0
           fi
-          curl -sS -f -X POST             -H "Accept: application/vnd.github+json"             -H "Authorization: Bearer $SITE_DISPATCH_TOKEN"             https://api.github.com/repos/yantrikos/yantrikdb-web/dispatches             -d '{"event_type":"component-released","client_payload":{"component":"server","ref":"${{ github.ref_name }}"}}'             && echo "::notice::yantrikdb.com rebuild requested"             || echo "::warning::dispatch failed - yantrikdb.com will pick this up on its daily rebuild"
+          curl -sS -f -X POST             -H "Accept: application/vnd.github+json"             -H "Authorization: Bearer $SITE_DISPATCH_TOKEN"             https://api.github.com/repos/yantrikos/yantrikdb-web/dispatches             -d '{"event_type":"component-released","client_payload":{"component":"server","ref":"${{ inputs.tag || github.ref_name }}"}}'             && echo "::notice::yantrikdb.com rebuild requested"             || echo "::warning::dispatch failed - yantrikdb.com will pick this up on its daily rebuild"

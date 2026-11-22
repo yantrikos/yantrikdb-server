@@ -4710,8 +4710,8 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb"
-version = "0.23.5"
-source = "git+https://github.com/yantrikos/yantrikdb.git?rev=8821a4598c85577a6a51f21133d3313a1dcc6c6f#8821a4598c85577a6a51f21133d3313a1dcc6c6f"
+version = "0.23.6"
+source = "git+https://github.com/yantrikos/yantrikdb.git?rev=9e5a107365fc98170c65063129451715b9e3b8d8#9e5a107365fc98170c65063129451715b9e3b8d8"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -4755,7 +4755,7 @@ dependencies = [
 
 [[package]]
 name = "yantrikdb-server"
-version = "0.20.1"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "argon2",

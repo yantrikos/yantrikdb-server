@@ -46,10 +46,16 @@ RUN groupadd -r yantrikdb && useradd -r -g yantrikdb -m -d /var/lib/yantrikdb ya
 
 COPY --from=builder /build/target/release/yantrikdb /usr/local/bin/yantrikdb
 
-# Default config: uses `strategy = "bundled"` so the container starts
-# without needing network access on first run (issue #35 part 1).
-# Users can override by mounting their own config to the same path.
+# Default config: `strategy = "auto"` (v0.21.0). It never requires network
+# access on first run (issue #35 part 1): a fresh volume tries to download
+# potion-base-8M once and falls back to the bundled potion-base-2M if it
+# cannot. Users can override by mounting their own config to the same path.
 COPY docker/yantrikdb.toml /etc/yantrikdb/yantrikdb.toml
+
+# Downloaded models are cached inside the data volume, so a recreated
+# container reuses the model instead of fetching it again. Set explicitly
+# rather than relying on $HOME: `docker run -u 1000:1000` has no home.
+ENV XDG_CACHE_HOME=/var/lib/yantrikdb/.cache
 
 # Entrypoint script: chowns the data dir to the `yantrikdb` user before
 # dropping privileges via gosu. Fixes the volume-mount permission failure

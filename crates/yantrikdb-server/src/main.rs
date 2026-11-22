@@ -11,6 +11,7 @@ mod config;
 mod control;
 mod debug;
 mod embedder;
+mod embedder_auto;
 mod forget;
 mod handler;
 mod http_gateway;
@@ -1484,7 +1485,7 @@ fn render_version_gauges(out: &mut String) {
     }
 }
 
-async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
+async fn run_server(mut cfg: ServerConfig) -> anyhow::Result<()> {
     // Ensure data directory exists
     std::fs::create_dir_all(&cfg.server.data_dir)?;
 
@@ -1553,6 +1554,24 @@ async fn run_server(cfg: ServerConfig) -> anyhow::Result<()> {
             Some(embedder::ServerEmbedder::Bundled(
                 yantrikdb::embedder::BundledEmbedder::new(),
             ))
+        }
+        config::EmbeddingStrategy::Auto => {
+            // Decided from the data directory, before any tenant engine
+            // opens: every tenant opens at one dimension, so it has to be
+            // the one the existing databases were built at.
+            let (emb, dim) = embedder_auto::resolve(cfg.data_dir(), &control.list_databases()?)?;
+            if cfg.embedding.dim != dim {
+                tracing::info!(
+                    configured_dim = cfg.embedding.dim,
+                    resolved_dim = dim,
+                    "embedding strategy auto: `dim` is decided by the resolved embedder"
+                );
+            }
+            cfg.embedding.dim = dim;
+            let name = yantrikdb::types::Embedder::name(&*emb.boxed()).unwrap_or_default();
+            tracing::info!("embedding strategy: auto -> {name} (dim={dim})");
+            eprintln!("[yantrikdb] embedding: auto -> {name} (dim={dim})");
+            Some(emb)
         }
         config::EmbeddingStrategy::ClientOnly => {
             tracing::info!("embedding strategy: client_only (no server-side embeddings)");

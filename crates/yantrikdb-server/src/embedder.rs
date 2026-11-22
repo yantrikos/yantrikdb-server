@@ -267,6 +267,47 @@ impl yantrikdb::types::Embedder for FastEmbedder {
 pub enum ServerEmbedder {
     Fast(FastEmbedder),
     Bundled(yantrikdb::embedder::BundledEmbedder),
+    /// A registry model the engine downloaded and verified (v0.21.0,
+    /// `strategy = "auto"`). Shared, because the engine's loader is not
+    /// `Clone` and one loaded model serves every tenant.
+    Downloaded(SharedDownloaded),
+}
+
+/// `Arc` handle to a [`yantrikdb::embedder::DownloadedEmbedder`] that
+/// forwards EVERY trait method, `fingerprint()` and `name()` included.
+/// Those two are how a store records which model built its vectors; a
+/// wrapper that left them at the trait default (`None`) would write
+/// vectors with no provable identity, and the store could then never be
+/// matched to its embedder again (packs refuse, `auto` refuses).
+#[derive(Clone)]
+pub struct SharedDownloaded(pub Arc<yantrikdb::embedder::DownloadedEmbedder>);
+
+impl yantrikdb::types::Embedder for SharedDownloaded {
+    fn embed(
+        &self,
+        text: &str,
+    ) -> std::result::Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
+        self.0.embed(text)
+    }
+
+    fn embed_batch(
+        &self,
+        texts: &[&str],
+    ) -> std::result::Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+        self.0.embed_batch(texts)
+    }
+
+    fn dim(&self) -> usize {
+        self.0.dim()
+    }
+
+    fn fingerprint(&self) -> Option<String> {
+        self.0.fingerprint()
+    }
+
+    fn name(&self) -> Option<String> {
+        self.0.name()
+    }
 }
 
 impl ServerEmbedder {
@@ -276,6 +317,7 @@ impl ServerEmbedder {
         match self {
             ServerEmbedder::Fast(f) => f.boxed(),
             ServerEmbedder::Bundled(b) => Box::new(b.clone()),
+            ServerEmbedder::Downloaded(d) => Box::new(d.clone()),
         }
     }
 }
@@ -288,6 +330,7 @@ impl yantrikdb::types::Embedder for ServerEmbedder {
         match self {
             ServerEmbedder::Fast(f) => f.embed(text),
             ServerEmbedder::Bundled(b) => b.embed(text),
+            ServerEmbedder::Downloaded(d) => d.embed(text),
         }
     }
 
@@ -298,6 +341,7 @@ impl yantrikdb::types::Embedder for ServerEmbedder {
         match self {
             ServerEmbedder::Fast(f) => f.embed_batch(texts),
             ServerEmbedder::Bundled(b) => b.embed_batch(texts),
+            ServerEmbedder::Downloaded(d) => d.embed_batch(texts),
         }
     }
 
@@ -305,6 +349,7 @@ impl yantrikdb::types::Embedder for ServerEmbedder {
         match self {
             ServerEmbedder::Fast(f) => f.dim(),
             ServerEmbedder::Bundled(_) => yantrikdb::embedder::BUNDLED_EMBEDDER_DIM,
+            ServerEmbedder::Downloaded(d) => d.dim(),
         }
     }
 }

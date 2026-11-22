@@ -5,6 +5,31 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed — Docker image default embedder
+
+- New `[embedding] strategy = "auto"`, now the Docker image default (`docker/yantrikdb.toml`). It decides
+  the embedder from the data volume at startup, before any tenant opens:
+  - a **fresh volume** gets `potion-base-8M` (256-dim), downloaded once from the engine's pinned model
+    registry and cached in the volume (`XDG_CACHE_HOME=/var/lib/yantrikdb/.cache`). If it cannot be
+    downloaded (air-gapped host), it falls back to the bundled `potion-base-2M` (64-dim) with a warning on
+    stderr, so first start still never requires the network (issue #35);
+  - a volume created by an earlier image (`potion-base-2M`, 64-dim) **keeps** `potion-base-2M`, so
+    upgrading the image never strands data;
+  - a volume built by `potion-base-8M` keeps it, and refuses to start rather than fall back if the model
+    cannot be loaded (the bundled model cannot read those vectors);
+  - anything else (MiniLM data, memories with no recorded embedder, or a mix of embedders) refuses to start
+    and names the explicit `strategy`/`dim` to set.
+- Why: on a 9,151-record agent-memory corpus, through the full recall path, `potion-base-8M` beat
+  `potion-base-2M` on paraphrased questions (MRR@10 0.742 vs 0.696; 17 probes better, 2 worse) and on
+  content deep in long records (0.900 vs 0.858; 37 better, 3 worse), at the same ~1 ms per record.
+- The evidence is each database's recorded embedder identity in its `meta` table (plaintext, so this works
+  on encrypted stores). Non-Docker defaults are unchanged (`builtin`, 384-dim).
+- The engine dependency now enables its `embedder-download` feature (ureq, sha2, tar, flate2, dirs).
+  Side effect for `client_only` deployments configured at dim 256: the engine may now auto-attach
+  `potion-base-8M` when a tenant opens (one download, then cached).
+
 ## [0.20.1] — 2026-11-21
 
 Engine pin `0.23.2` → **`0.23.5`** (schema unchanged at 54; no migration runs on open). Pinned to the

@@ -5,7 +5,11 @@ All notable changes to `yantrikdb-server` are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.0] — 2026-11-22
+
+Engine pin `0.23.5` → **`0.23.6`** (schema unchanged at 54; no migration runs on open), pinned to the commit tag
+v0.23.6 names (`9e5a107`). The engine release makes `stats()` release the Python GIL; nothing in it changes
+the server's behaviour. The headline change is the Docker image's embedder:
 
 ### Changed — Docker image default embedder
 

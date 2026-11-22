@@ -12,17 +12,26 @@
 data_dir = "/var/lib/yantrikdb"
 
 [embedding]
-# `bundled` uses the engine's potion-base-2M static embedder
-# (~7 MB baked into the binary, dim=64, zero-network on first run).
-# Quality is ~89% of MiniLM at the recall@5 cost.
+# `auto` (default since v0.21.0) picks the embedder from the data volume:
+#   - a fresh volume gets potion-base-8M (256-dim), downloaded once into
+#     /var/lib/yantrikdb/.cache. If the download fails (air-gapped host) it
+#     falls back to the bundled potion-base-2M (64-dim) and says so loudly,
+#     so first start never requires the network;
+#   - a volume created by an earlier image (potion-base-2M, 64-dim) keeps
+#     potion-base-2M, so upgrading the image never strands data;
+#   - anything else refuses to start and names the strategy to set.
+# `dim` is decided by the resolved embedder under `auto`.
 #
-# To use the original fastembed/MiniLM behavior instead — requires
-# HuggingFace reachable on first start — set:
+# To pin the zero-network bundled embedder on a fresh volume instead:
+#
+#     strategy = "bundled"
+#     dim = 64
+#
+# To use fastembed/MiniLM (requires HuggingFace on first start):
 #
 #     strategy = "builtin"
 #     dim = 384
-strategy = "bundled"
-dim = 64
+strategy = "auto"
 
 # RFC 027 / v0.8.24 — the sleep cycle. The server drives the engine's
 # autonomous maintenance (conflict burn-down, trigger prune, importance

@@ -194,6 +194,26 @@ pub enum EmbeddingStrategy {
     /// Default for the Docker image since `yantrikdb-server v0.8.16`
     /// (issue #35).
     Bundled,
+    /// Pick the embedder from the data directory instead of from `dim`.
+    /// Default for the Docker image since `yantrikdb-server v0.21.0`.
+    ///
+    /// - A data directory whose databases were built by `potion-base-2M`
+    ///   (64-dim) keeps it, so an upgraded image never strands a volume.
+    /// - One built by `potion-base-8M` (256-dim) keeps that.
+    /// - A fresh data directory gets `potion-base-8M`, downloaded once into
+    ///   the model cache. Through the full recall path on a 9k-record
+    ///   agent-memory corpus it beat `potion-base-2M` on paraphrased
+    ///   questions (MRR@10 0.742 vs 0.696) and on content deep in long
+    ///   records (0.900 vs 0.858), at the same ~1 ms per record.
+    ///   If the download fails (air-gapped host), it falls back to the
+    ///   bundled `potion-base-2M` with a loud warning, so first start never
+    ///   needs the network.
+    /// - Anything else (MiniLM stores, databases with memories but no
+    ///   recorded embedder, or a mix) refuses to start and names the
+    ///   explicit strategy to set.
+    ///
+    /// `dim` is ignored under `auto`; the resolved embedder decides it.
+    Auto,
     /// No server-side embedder; clients must compute embeddings and
     /// supply them on every `record` / `recall` call.
     ClientOnly,
@@ -705,6 +725,15 @@ dim = 384
             .and_then(|v: toml::Value| v["embedding"].clone().try_into())
             .unwrap();
         assert!(matches!(cfg.strategy, EmbeddingStrategy::ClientOnly));
+
+        // `auto` (new in v0.21.0, the Docker default). `dim` may be omitted.
+        let toml = r#"[embedding]
+strategy = "auto"
+"#;
+        let cfg: EmbeddingSection = toml::from_str(toml)
+            .and_then(|v: toml::Value| v["embedding"].clone().try_into())
+            .unwrap();
+        assert!(matches!(cfg.strategy, EmbeddingStrategy::Auto));
 
         // Default = builtin + dim=384 (backwards compat for configs with
         // no [embedding] section).
